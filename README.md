@@ -269,7 +269,7 @@ That's it! You have a working AI agent in 2 minutes.
 
 ## 💬 Chat Apps
 
-Connect nanobot to your favorite chat platform. Want to build your own? See the [Channel Plugin Guide](./docs/CHANNEL_PLUGIN_GUIDE.md).
+Connect nanobot to your favorite chat platform. Want to build your own? See the [Channel Plugin Guide](./docs/CHANNEL_PLUGIN_GUIDE.md). For non-channel runtime extensions, see the [Runtime Plugin Guide](./docs/RUNTIME_PLUGIN_GUIDE.md) and the [Smart Router Guide](./docs/SMART_ROUTER_GUIDE.md).
 
 | Channel | What you need |
 |---------|---------------|
@@ -1981,7 +1981,7 @@ class AuditHook(AgentHook):
 result = await bot.run("Hello", hooks=[AuditHook()])
 ```
 
-See [docs/PYTHON_SDK.md](docs/PYTHON_SDK.md) for the full SDK reference.
+See [docs/PYTHON_SDK.md](docs/PYTHON_SDK.md) for the full SDK reference. If you are extending runtime behavior from source, also see [docs/RUNTIME_PLUGIN_GUIDE.md](docs/RUNTIME_PLUGIN_GUIDE.md).
 
 ## 🔌 OpenAI-Compatible API
 
@@ -2211,6 +2211,7 @@ nanobot/
 │   └── tools/      #    Built-in tools (incl. spawn)
 ├── skills/         # 🎯 Bundled skills (github, weather, tmux...)
 ├── channels/       # 📱 Chat channel integrations (supports plugins)
+├── custom-plugins/ # 🔌 In-repo runtime plugins (e.g. smart router)
 ├── bus/            # 🚌 Message routing
 ├── cron/           # ⏰ Scheduled tasks
 ├── heartbeat/      # 💓 Proactive wake-up
