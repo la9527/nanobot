@@ -12,6 +12,7 @@ from nanobot.bus.events import OutboundMessage
 from nanobot.cli.commands import _make_provider, app
 from nanobot.config.schema import Config
 from nanobot.cron.types import CronJob, CronPayload
+from nanobot.plugins.types import RuntimePlugin
 from nanobot.providers.openai_codex_provider import _strip_model_prefix
 from nanobot.providers.registry import find_by_name
 
@@ -217,6 +218,33 @@ def test_config_dump_excludes_oauth_provider_blocks():
 
     assert "openaiCodex" not in providers
     assert "githubCopilot" not in providers
+
+
+def test_plugins_list_shows_runtime_plugins(monkeypatch):
+    monkeypatch.setattr("nanobot.channels.registry.discover_channel_names", lambda: [])
+    monkeypatch.setattr("nanobot.channels.registry.discover_all", lambda: {})
+    monkeypatch.setattr(
+        "nanobot.plugins.discover_runtime_plugins",
+        lambda: {
+            "sample": RuntimePlugin(
+                name="sample",
+                description="Sample runtime plugin",
+                source="custom",
+            )
+        },
+    )
+
+    with patch("nanobot.config.loader.load_config", return_value=Config.model_validate({
+        "plugins": {"sample": {"enabled": True}},
+    })):
+        result = runner.invoke(app, ["plugins", "list"])
+
+    assert result.exit_code == 0
+    stripped_output = _strip_ansi(result.stdout)
+    assert "Plugins" in stripped_output
+    assert "sample" in stripped_output
+    assert "runtime" in stripped_output
+    assert "custom" in stripped_output
 
 
 def test_config_matches_explicit_ollama_prefix_without_api_key():

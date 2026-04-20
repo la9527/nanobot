@@ -24,4 +24,8 @@ class RuntimePlugin:
 
     name: str
     description: str = ""
+    source: str = ""
+    module_name: str = ""
     build_provider: Callable[[RuntimePluginContext], Any] | None = None
+    build_hooks: Callable[[RuntimePluginContext], list[Any]] | None = None
+    is_enabled: Callable[[Any], bool] | None = None

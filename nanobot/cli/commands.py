@@ -417,6 +417,16 @@ def _make_provider(config: Config):
         raise typer.Exit(1)
 
 
+def _make_runtime_plugin_hooks(config: Config):
+    from nanobot.nanobot import _make_base_provider as _sdk_make_base_provider
+    from nanobot.plugins import build_runtime_plugin_hooks
+
+    return build_runtime_plugin_hooks(
+        config,
+        make_base_provider=_sdk_make_base_provider,
+    )
+
+
 def _load_runtime_config(config: str | None = None, workspace: str | None = None) -> Config:
     """Load config and optionally override the active workspace."""
     from nanobot.config.loader import load_config, resolve_config_env_vars, set_config_path
@@ -512,6 +522,7 @@ def serve(
     sync_workspace_templates(runtime_config.workspace_path)
     bus = MessageBus()
     provider = _make_provider(runtime_config)
+    runtime_hooks = _make_runtime_plugin_hooks(runtime_config)
     session_manager = SessionManager(runtime_config.workspace_path)
     agent_loop = AgentLoop(
         bus=bus,
@@ -533,6 +544,7 @@ def serve(
         unified_session=runtime_config.agents.defaults.unified_session,
         disabled_skills=runtime_config.agents.defaults.disabled_skills,
         session_ttl_minutes=runtime_config.agents.defaults.session_ttl_minutes,
+        hooks=runtime_hooks,
         tools_config=runtime_config.tools,
     )
 
@@ -596,6 +608,7 @@ def gateway(
     sync_workspace_templates(config.workspace_path)
     bus = MessageBus()
     provider = _make_provider(config)
+    runtime_hooks = _make_runtime_plugin_hooks(config)
     session_manager = SessionManager(config.workspace_path)
 
     # Preserve existing single-workspace installs, but keep custom workspaces clean.
@@ -628,6 +641,7 @@ def gateway(
         unified_session=config.agents.defaults.unified_session,
         disabled_skills=config.agents.defaults.disabled_skills,
         session_ttl_minutes=config.agents.defaults.session_ttl_minutes,
+        hooks=runtime_hooks,
         tools_config=config.tools,
     )
 
@@ -873,6 +887,7 @@ def agent(
 
     bus = MessageBus()
     provider = _make_provider(config)
+    runtime_hooks = _make_runtime_plugin_hooks(config)
 
     # Preserve existing single-workspace installs, but keep custom workspaces clean.
     if is_default_workspace(config.workspace_path):
@@ -907,6 +922,7 @@ def agent(
         unified_session=config.agents.defaults.unified_session,
         disabled_skills=config.agents.defaults.disabled_skills,
         session_ttl_minutes=config.agents.defaults.session_ttl_minutes,
+        hooks=runtime_hooks,
         tools_config=config.tools,
     )
     restart_notice = consume_restart_notice_from_env()
@@ -1230,22 +1246,26 @@ def channels_login(
 # Plugin Commands
 # ============================================================================
 
-plugins_app = typer.Typer(help="Manage channel plugins")
+plugins_app = typer.Typer(help="Manage channel and runtime plugins")
 app.add_typer(plugins_app, name="plugins")
 
 
 @plugins_app.command("list")
 def plugins_list():
-    """List all discovered channels (built-in and plugins)."""
+    """List all discovered channel and runtime plugins."""
     from nanobot.channels.registry import discover_all, discover_channel_names
     from nanobot.config.loader import load_config
+    from nanobot.plugins import discover_runtime_plugins
+    from nanobot.plugins.registry import is_runtime_plugin_enabled
 
     config = load_config()
     builtin_names = set(discover_channel_names())
     all_channels = discover_all()
+    runtime_plugins = discover_runtime_plugins()
 
-    table = Table(title="Channel Plugins")
+    table = Table(title="Plugins")
     table.add_column("Name", style="cyan")
+    table.add_column("Kind", style="green")
     table.add_column("Source", style="magenta")
     table.add_column("Enabled")
 
@@ -1261,8 +1281,18 @@ def plugins_list():
             enabled = getattr(section, "enabled", False)
         table.add_row(
             cls.display_name,
+            "channel",
             source,
             "[green]yes[/green]" if enabled else "[dim]no[/dim]",
+        )
+
+    for name in sorted(runtime_plugins):
+        plugin = runtime_plugins[name]
+        table.add_row(
+            plugin.name,
+            "runtime",
+            plugin.source or "runtime",
+            "[green]yes[/green]" if is_runtime_plugin_enabled(config, plugin) else "[dim]no[/dim]",
         )
 
     console.print(table)

@@ -41,7 +41,11 @@ def register_plugin() -> RuntimePlugin:
 	return RuntimePlugin(
 		name="smartrouter",
 		description="Rule-based local/mini/full provider router for Nanobot runtime",
+		source="custom",
 		build_provider=_build_provider,
+		is_enabled=lambda config: bool(
+			getattr(config, "smart_router", None) and config.smart_router.enabled
+		),
 	)
 
 

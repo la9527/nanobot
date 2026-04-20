@@ -49,6 +49,7 @@ class Nanobot:
         """
         from nanobot.config.loader import load_config, resolve_config_env_vars
         from nanobot.config.schema import Config
+        from nanobot.plugins import build_runtime_plugin_hooks
 
         resolved: Path | None = None
         if config_path is not None:
@@ -63,6 +64,10 @@ class Nanobot:
             )
 
         provider = _make_provider(config)
+        runtime_hooks = build_runtime_plugin_hooks(
+            config,
+            make_base_provider=_make_base_provider,
+        )
         bus = MessageBus()
         defaults = config.agents.defaults
 
@@ -84,6 +89,7 @@ class Nanobot:
             unified_session=defaults.unified_session,
             disabled_skills=defaults.disabled_skills,
             session_ttl_minutes=defaults.session_ttl_minutes,
+            hooks=runtime_hooks,
             tools_config=config.tools,
         )
         return cls(loop)

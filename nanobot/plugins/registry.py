@@ -6,6 +6,7 @@ import importlib
 import sys
 from importlib.metadata import entry_points
 from pathlib import Path
+from typing import Any
 
 from loguru import logger
 
@@ -47,6 +48,10 @@ def _load_runtime_plugin_from_module(module_name: str) -> RuntimePlugin | None:
     if not isinstance(plugin, RuntimePlugin):
         logger.warning("Runtime plugin '{}' returned invalid plugin object", module_name)
         return None
+    if not plugin.source:
+        plugin.source = "custom"
+    if not plugin.module_name:
+        plugin.module_name = module_name
     return plugin
 
 
@@ -70,6 +75,10 @@ def discover_runtime_plugins() -> dict[str, RuntimePlugin]:
             logger.warning("Failed to load runtime plugin entry point '{}': {}", ep.name, exc)
             continue
         if isinstance(plugin, RuntimePlugin):
+            if not plugin.source:
+                plugin.source = "entry-point"
+            if not plugin.module_name:
+                plugin.module_name = ep.name
             discovered.setdefault(plugin.name, plugin)
         else:
             logger.warning("Runtime plugin entry point '{}' returned invalid plugin object", ep.name)
@@ -84,3 +93,39 @@ def load_runtime_plugin(name: str) -> RuntimePlugin:
     if plugin is None:
         raise LookupError(f"Runtime plugin not found: {name}")
     return plugin
+
+
+def is_runtime_plugin_enabled(config: Any, plugin: RuntimePlugin) -> bool:
+    """Return whether a runtime plugin is enabled for the current config."""
+    if plugin.is_enabled is not None:
+        return bool(plugin.is_enabled(config))
+
+    section = getattr(getattr(config, "plugins", None), plugin.name, None)
+    if isinstance(section, dict):
+        return bool(section.get("enabled", False))
+    return bool(getattr(section, "enabled", False))
+
+
+def build_runtime_plugin_hooks(
+    config: Any,
+    *,
+    make_base_provider: Any,
+) -> list[Any]:
+    """Build all enabled runtime plugin hooks for the current config."""
+    hooks: list[Any] = []
+    context = None
+    for plugin in discover_runtime_plugins().values():
+        if not is_runtime_plugin_enabled(config, plugin):
+            continue
+        if plugin.build_hooks is None:
+            continue
+        if context is None:
+            from .types import RuntimePluginContext
+
+            context = RuntimePluginContext(
+                config=config,
+                make_base_provider=make_base_provider,
+            )
+        built_hooks = plugin.build_hooks(context) or []
+        hooks.extend(built_hooks)
+    return hooks

@@ -31,6 +31,15 @@ class ChannelsConfig(Base):
     transcription_provider: str = "groq"  # Voice transcription backend: "groq" or "openai"
 
 
+class PluginsConfig(Base):
+    """Configuration for general runtime plugins.
+
+    Plugin-specific settings are stored as extra dict fields keyed by plugin name.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+
 class DreamConfig(Base):
     """Dream memory consolidation configuration."""
 
@@ -322,6 +331,7 @@ class Config(BaseSettings):
 
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
+    plugins: PluginsConfig = Field(default_factory=PluginsConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     smart_router: SmartRouterConfig = Field(
         default_factory=SmartRouterConfig,
