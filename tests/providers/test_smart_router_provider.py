@@ -7,7 +7,7 @@ import pytest
 
 from nanobot.providers.base import GenerationSettings, LLMProvider, LLMResponse
 
-CUSTOM_PLUGINS = Path(__file__).resolve().parents[3] / "custom-plugins"
+CUSTOM_PLUGINS = Path(__file__).resolve().parents[2] / "custom-plugins"
 if str(CUSTOM_PLUGINS) not in sys.path:
     sys.path.insert(0, str(CUSTOM_PLUGINS))
 

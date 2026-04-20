@@ -126,7 +126,7 @@ def _make_provider(config: Any) -> Any:
 
 
 def _ensure_custom_plugins_path() -> None:
-    custom_plugins = Path(__file__).resolve().parents[2] / "custom-plugins"
+    custom_plugins = Path(__file__).resolve().parents[1] / "custom-plugins"
     custom_plugins_str = str(custom_plugins)
     if custom_plugins.exists() and custom_plugins_str not in sys.path:
         sys.path.insert(0, custom_plugins_str)
