@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-import sys
 from typing import Any
 
 from nanobot.agent.hook import AgentHook
@@ -125,13 +124,6 @@ def _make_provider(config: Any) -> Any:
     return _make_base_provider(config)
 
 
-def _ensure_custom_plugins_path() -> None:
-    custom_plugins = Path(__file__).resolve().parents[1] / "custom-plugins"
-    custom_plugins_str = str(custom_plugins)
-    if custom_plugins.exists() and custom_plugins_str not in sys.path:
-        sys.path.insert(0, custom_plugins_str)
-
-
 def _resolve_provider_config(config: Any, provider_name: str | None) -> Any:
     if not provider_name:
         return None
@@ -233,37 +225,14 @@ def _make_base_provider(
 
 def _make_smart_router_provider(config: Any) -> Any:
     """Create the smart-router wrapper provider."""
-    _ensure_custom_plugins_path()
+    from nanobot.plugins import RuntimePluginContext, load_runtime_plugin
 
-    from smartrouter import SmartRouterProvider, load_router_config
-
-    defaults = config.agents.defaults
-    router_config = load_router_config(
-        config.smart_router,
-        default_model=defaults.model,
-        default_provider=None if defaults.provider == "auto" else defaults.provider,
+    plugin = load_runtime_plugin("smartrouter")
+    if plugin.build_provider is None:
+        raise ValueError("smartrouter plugin does not expose a provider builder")
+    return plugin.build_provider(
+        RuntimePluginContext(
+            config=config,
+            make_base_provider=_make_base_provider,
+        )
     )
-    tier_providers = {
-        "local": _make_base_provider(
-            config,
-            model=router_config.local.model,
-            provider_name=router_config.local.provider,
-        ),
-        "mini": _make_base_provider(
-            config,
-            model=router_config.mini.model,
-            provider_name=router_config.mini.provider,
-        ),
-        "full": _make_base_provider(
-            config,
-            model=router_config.full.model,
-            provider_name=router_config.full.provider,
-        ),
-    }
-    provider = SmartRouterProvider(
-        router_config=router_config,
-        tier_providers=tier_providers,
-        default_model=defaults.model,
-    )
-    provider.generation = tier_providers["local"].generation
-    return provider
