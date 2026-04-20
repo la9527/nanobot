@@ -49,7 +49,7 @@ class Nanobot:
         """
         from nanobot.config.loader import load_config, resolve_config_env_vars
         from nanobot.config.schema import Config
-        from nanobot.plugins import build_runtime_plugin_hooks
+        from nanobot.plugins import build_runtime_plugin_hooks, initialize_runtime_plugins
 
         resolved: Path | None = None
         if config_path is not None:
@@ -92,6 +92,11 @@ class Nanobot:
             hooks=runtime_hooks,
             tools_config=config.tools,
         )
+        initialize_runtime_plugins(
+            config,
+            loop=loop,
+            make_base_provider=_make_base_provider,
+        )
         return cls(loop)
 
     async def run(
@@ -125,7 +130,11 @@ class Nanobot:
 
 def _make_provider(config: Any) -> Any:
     """Create the LLM provider from config (extracted from CLI)."""
-    if getattr(config, "smart_router", None) and config.smart_router.enabled:
+    from nanobot.plugins import load_runtime_plugin
+    from nanobot.plugins.registry import is_runtime_plugin_enabled
+
+    plugin = load_runtime_plugin("smartrouter")
+    if is_runtime_plugin_enabled(config, plugin):
         return _make_smart_router_provider(config)
     return _make_base_provider(config)
 

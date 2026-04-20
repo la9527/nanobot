@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 from pydantic.alias_generators import to_camel
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -29,15 +29,6 @@ class ChannelsConfig(Base):
     send_tool_hints: bool = False  # stream tool-call hints (e.g. read_file("…"))
     send_max_retries: int = Field(default=3, ge=0, le=10)  # Max delivery attempts (initial send included)
     transcription_provider: str = "groq"  # Voice transcription backend: "groq" or "openai"
-
-
-class PluginsConfig(Base):
-    """Configuration for general runtime plugins.
-
-    Plugin-specific settings are stored as extra dict fields keyed by plugin name.
-    """
-
-    model_config = ConfigDict(extra="allow")
 
 
 class DreamConfig(Base):
@@ -201,6 +192,21 @@ class SmartRouterConfig(Base):
     logging: SmartRouterLoggingConfig = Field(default_factory=SmartRouterLoggingConfig)
 
 
+class PluginsConfig(Base):
+    """Configuration for general runtime plugins.
+
+    Plugin-specific settings are stored as extra dict fields keyed by plugin name.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    smartrouter: SmartRouterConfig = Field(
+        default_factory=SmartRouterConfig,
+        validation_alias=AliasChoices("smartrouter", "smartRouter"),
+        serialization_alias="smartrouter",
+    )
+
+
 class ProviderConfig(Base):
     """LLM provider configuration."""
 
@@ -337,10 +343,30 @@ class Config(BaseSettings):
         default_factory=SmartRouterConfig,
         validation_alias=AliasChoices("smartRouter", "smart_router"),
         serialization_alias="smartRouter",
+        exclude=True,
     )
     api: ApiConfig = Field(default_factory=ApiConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
+
+    @staticmethod
+    def _router_has_values(value: SmartRouterConfig | None) -> bool:
+        if value is None:
+            return False
+        return bool(value.model_dump(mode="json", exclude_defaults=True))
+
+    @model_validator(mode="after")
+    def _sync_runtime_plugin_configs(self) -> "Config":
+        plugin_router = self.plugins.smartrouter
+        legacy_router = self.smart_router
+
+        if self._router_has_values(plugin_router):
+            self.smart_router = plugin_router.model_copy(deep=True)
+        elif self._router_has_values(legacy_router):
+            self.plugins.smartrouter = legacy_router.model_copy(deep=True)
+        else:
+            self.smart_router = plugin_router.model_copy(deep=True)
+        return self
 
     @property
     def workspace_path(self) -> Path:

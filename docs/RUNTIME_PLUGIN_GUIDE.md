@@ -20,15 +20,18 @@ The current in-repo reference plugin is `custom-plugins/smartrouter/`.
 
 ## Current Status
 
-The runtime plugin system is intentionally minimal.
+The runtime plugin system is still intentionally small, but it is no longer provider-only.
 
 Today a runtime plugin can contribute:
 
 - A provider builder (`build_provider`)
 - Agent loop hooks (`build_hooks`)
+- Runtime tools (`build_tools`)
+- Loop initialization (`initialize`)
+- CLI/runtime status rows (`describe_status`)
 - A custom enablement check (`is_enabled`)
 
-This keeps the first implementation narrow while still supporting real runtime integration.
+This is enough to support provider wrappers such as `smartrouter`, runtime-only helper tools, and operational visibility without reopening core integration points every time.
 
 ## Directory Layout
 
@@ -80,7 +83,14 @@ Available fields today:
 | `module_name` | Import module name, filled automatically when omitted |
 | `build_provider` | Optional factory for a custom provider or provider wrapper |
 | `build_hooks` | Optional factory returning `AgentHook` instances |
+| `build_tools` | Optional factory returning `Tool` instances to register on the loop |
+| `initialize` | Optional runtime callback invoked after the loop and tools are ready |
+| `describe_status` | Optional callback returning CLI-visible plugin status |
 | `is_enabled` | Optional callback to decide enablement from config |
+
+For provider and hook builders, Nanobot passes `RuntimePluginContext(config, make_base_provider)`.
+
+For tool and init builders, Nanobot passes `RuntimePluginRuntimeContext(config, make_base_provider, loop)`.
 
 ## Provider Plugins
 
@@ -150,6 +160,57 @@ Hook plugins are a good fit for:
 - Response post-processing
 - Turn-level policy checks
 
+## Tool and Init Plugins
+
+Runtime plugins can now register tools directly onto `AgentLoop.tools` and run one-time initialization logic after the loop is constructed.
+
+```python
+from nanobot.agent.tools.base import Tool
+from nanobot.plugins import RuntimePlugin, RuntimePluginRuntimeContext
+
+
+class EchoTool(Tool):
+    @property
+    def name(self) -> str:
+        return "echo_runtime"
+
+    @property
+    def description(self) -> str:
+        return "Echo text for runtime plugin validation"
+
+    @property
+    def parameters(self) -> dict:
+        return {
+            "type": "object",
+            "properties": {"text": {"type": "string"}},
+            "required": ["text"],
+        }
+
+    async def execute(self, text: str):
+        return text
+
+
+def _build_tools(context: RuntimePluginRuntimeContext):
+    return [EchoTool()]
+
+
+def _initialize(context: RuntimePluginRuntimeContext) -> None:
+    context.loop._runtime_vars["echo_runtime_loaded"] = True
+
+
+def register_plugin() -> RuntimePlugin:
+    return RuntimePlugin(
+        name="echo-runtime",
+        description="Example runtime tool plugin",
+        build_tools=_build_tools,
+        initialize=_initialize,
+    )
+```
+
+Use `build_tools` when the extension is really a runtime concern rather than a channel concern or MCP server.
+
+Use `initialize` for lightweight runtime wiring only. Do not hide expensive network bootstrap or long-running background jobs there.
+
 ## Configuration
 
 Nanobot now exposes a generic `plugins` section in the root config:
@@ -167,7 +228,31 @@ Nanobot now exposes a generic `plugins` section in the root config:
 
 This section is intentionally permissive. Plugin-specific keys are stored as raw dict values so each runtime plugin can evolve its own settings shape.
 
-Important: some plugins may still use legacy or dedicated config sections during the transition period. `smartRouter` is one of those cases today.
+`smartrouter` now uses `plugins.smartrouter` as the primary config path. Nanobot still accepts legacy root `smartRouter` / `smart_router` input for compatibility, but it is mirrored into `plugins.smartrouter` and saved back under `plugins`.
+
+Recommended shape:
+
+```json
+{
+    "plugins": {
+        "smartrouter": {
+            "enabled": true,
+            "local": {
+                "provider": "vllm",
+                "model": "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0"
+            },
+            "mini": {
+                "provider": "openrouter",
+                "model": "openai/gpt-5.4-mini"
+            },
+            "full": {
+                "provider": "openrouter",
+                "model": "openai/gpt-5.4"
+            }
+        }
+    }
+}
+```
 
 ## Discovery and CLI
 
@@ -175,6 +260,8 @@ List both channel plugins and runtime plugins with:
 
 ```bash
 nanobot plugins list
+nanobot plugins list --config ~/.nanobot/config.api.json
+nanobot plugins status --config ~/.nanobot/config.api.json
 ```
 
 The command now shows:
@@ -182,7 +269,11 @@ The command now shows:
 - plugin name
 - kind (`channel` or `runtime`)
 - source (`builtin`, `plugin`, `custom`, `entry-point`)
+- config path used for that plugin
 - whether the plugin is currently enabled
+- a short runtime status detail string
+
+`plugins status` focuses on runtime plugins and is more useful when you are validating a specific instance config.
 
 ## Recommended Implementation Plan
 
@@ -203,8 +294,8 @@ Known limitations:
 - No formal plugin packaging template for `nanobot.plugins` entry points yet.
 - No automatic plugin config schema merge into root config docs or onboarding UI.
 - No plugin install/uninstall CLI for runtime plugins yet.
-- No dedicated tool registration API yet.
-- Existing plugins may still use legacy dedicated config sections.
+- Status reporting is diagnostic only; it does not attempt health probing by itself.
+- Existing plugins may still accept legacy dedicated config sections for compatibility.
 
 ## Suggested Next Steps
 

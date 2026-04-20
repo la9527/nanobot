@@ -29,4 +29,22 @@ def test_smart_router_config_dumps_camel_case() -> None:
     )
 
     data = config.model_dump(mode="json", by_alias=True)
-    assert data["smartRouter"]["mini"]["model"] == "openai/gpt-5.4-mini"
+    assert data["plugins"]["smartrouter"]["mini"]["model"] == "openai/gpt-5.4-mini"
+
+
+def test_smart_router_config_accepts_plugin_scoped_config() -> None:
+    config = Config.model_validate(
+        {
+            "plugins": {
+                "smartrouter": {
+                    "enabled": True,
+                    "mini": {"provider": "openrouter", "model": "openai/gpt-5.4-mini"},
+                    "full": {"provider": "openrouter", "model": "openai/gpt-5.4"},
+                }
+            }
+        }
+    )
+
+    assert config.plugins.smartrouter.enabled is True
+    assert config.smart_router.enabled is True
+    assert config.smart_router.full.model == "openai/gpt-5.4"

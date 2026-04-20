@@ -12,7 +12,7 @@ from nanobot.bus.events import OutboundMessage
 from nanobot.cli.commands import _make_provider, app
 from nanobot.config.schema import Config
 from nanobot.cron.types import CronJob, CronPayload
-from nanobot.plugins.types import RuntimePlugin
+from nanobot.plugins.types import RuntimePlugin, RuntimePluginStatus
 from nanobot.providers.openai_codex_provider import _strip_model_prefix
 from nanobot.providers.registry import find_by_name
 
@@ -224,14 +224,18 @@ def test_plugins_list_shows_runtime_plugins(monkeypatch):
     monkeypatch.setattr("nanobot.channels.registry.discover_channel_names", lambda: [])
     monkeypatch.setattr("nanobot.channels.registry.discover_all", lambda: {})
     monkeypatch.setattr(
-        "nanobot.plugins.discover_runtime_plugins",
-        lambda: {
-            "sample": RuntimePlugin(
+        "nanobot.plugins.describe_runtime_plugin_statuses",
+        lambda config: [
+            RuntimePluginStatus(
                 name="sample",
+                enabled=True,
                 description="Sample runtime plugin",
                 source="custom",
+                module_name="sample",
+                config_path="plugins.sample",
+                reason="initialized",
             )
-        },
+        ],
     )
 
     with patch("nanobot.config.loader.load_config", return_value=Config.model_validate({
@@ -245,6 +249,33 @@ def test_plugins_list_shows_runtime_plugins(monkeypatch):
     assert "sample" in stripped_output
     assert "runtime" in stripped_output
     assert "custom" in stripped_output
+    assert "plugins.sample" in stripped_output
+
+
+def test_plugins_status_shows_runtime_plugin_details(monkeypatch):
+    monkeypatch.setattr(
+        "nanobot.plugins.describe_runtime_plugin_statuses",
+        lambda config: [
+            RuntimePluginStatus(
+                name="sample",
+                enabled=True,
+                config_path="plugins.sample",
+                reason="initialized",
+                description="Sample runtime plugin",
+                source="custom",
+                module_name="sample",
+            )
+        ],
+    )
+
+    with patch("nanobot.config.loader.load_config", return_value=Config()):
+        result = runner.invoke(app, ["plugins", "status"])
+
+    assert result.exit_code == 0
+    stripped_output = _strip_ansi(result.stdout)
+    assert "Runtime Plugin Status" in stripped_output
+    assert "sample" in stripped_output
+    assert "plugins.sample" in stripped_output
 
 
 def test_config_matches_explicit_ollama_prefix_without_api_key():

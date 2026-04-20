@@ -45,6 +45,31 @@ class RouterConfig:
     policy: PolicySettings
     health: HealthSettings
     logging: LoggingSettings
+    config_source: str = "plugins.smartrouter"
+
+
+def _router_section_has_values(value: Any) -> bool:
+    if value is None:
+        return False
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        return bool(model_dump(mode="json", exclude_defaults=True))
+    if isinstance(value, dict):
+        return bool(value)
+    return True
+
+
+def resolve_router_section(config: Any) -> tuple[Any, str]:
+    plugins = getattr(config, "plugins", None)
+    plugin_value = getattr(plugins, "smartrouter", None) if plugins is not None else None
+    if _router_section_has_values(plugin_value):
+        return plugin_value, "plugins.smartrouter"
+
+    legacy_value = getattr(config, "smart_router", None)
+    if _router_section_has_values(legacy_value):
+        return legacy_value, "smartRouter"
+
+    return plugin_value or legacy_value, "plugins.smartrouter"
 
 
 def _tier_target(
@@ -66,6 +91,7 @@ def load_router_config(
     *,
     default_model: str,
     default_provider: str | None,
+    config_source: str = "plugins.smartrouter",
 ) -> RouterConfig:
     local = _tier_target(
         "local",
@@ -81,6 +107,7 @@ def load_router_config(
     return RouterConfig(
         enabled=bool(getattr(value, "enabled", False)),
         allow_local_tools=bool(getattr(value, "allow_local_tools", False)),
+        config_source=config_source,
         local=local,
         mini=mini,
         full=full,
@@ -107,4 +134,16 @@ def load_router_config(
             enabled=bool(logging_value.enabled),
             path=logging_value.path,
         ),
+    )
+
+
+def load_router_config_from_config(config: Any, *, default_model: str, default_provider: str | None) -> RouterConfig:
+    section, source = resolve_router_section(config)
+    if section is None:
+        raise ValueError("smartrouter configuration is missing")
+    return load_router_config(
+        section,
+        default_model=default_model,
+        default_provider=default_provider,
+        config_source=source,
     )

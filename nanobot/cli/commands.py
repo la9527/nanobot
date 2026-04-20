@@ -427,6 +427,17 @@ def _make_runtime_plugin_hooks(config: Config):
     )
 
 
+def _initialize_runtime_plugins(config: Config, agent_loop):
+    from nanobot.nanobot import _make_base_provider as _sdk_make_base_provider
+    from nanobot.plugins import initialize_runtime_plugins
+
+    return initialize_runtime_plugins(
+        config,
+        loop=agent_loop,
+        make_base_provider=_sdk_make_base_provider,
+    )
+
+
 def _load_runtime_config(config: str | None = None, workspace: str | None = None) -> Config:
     """Load config and optionally override the active workspace."""
     from nanobot.config.loader import load_config, resolve_config_env_vars, set_config_path
@@ -547,6 +558,7 @@ def serve(
         hooks=runtime_hooks,
         tools_config=runtime_config.tools,
     )
+    _initialize_runtime_plugins(runtime_config, agent_loop)
 
     model_name = runtime_config.agents.defaults.model
     console.print(f"{__logo__} Starting OpenAI-compatible API server")
@@ -644,6 +656,7 @@ def gateway(
         hooks=runtime_hooks,
         tools_config=config.tools,
     )
+    _initialize_runtime_plugins(config, agent)
 
     # Set cron callback (needs agent)
     async def on_cron_job(job: CronJob) -> str | None:
@@ -925,6 +938,7 @@ def agent(
         hooks=runtime_hooks,
         tools_config=config.tools,
     )
+    _initialize_runtime_plugins(config, agent_loop)
     restart_notice = consume_restart_notice_from_env()
     if restart_notice and should_show_cli_restart_notice(restart_notice, session_id):
         _print_agent_response(
@@ -1251,28 +1265,30 @@ app.add_typer(plugins_app, name="plugins")
 
 
 @plugins_app.command("list")
-def plugins_list():
+def plugins_list(
+    config: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
+):
     """List all discovered channel and runtime plugins."""
     from nanobot.channels.registry import discover_all, discover_channel_names
-    from nanobot.config.loader import load_config
-    from nanobot.plugins import discover_runtime_plugins
-    from nanobot.plugins.registry import is_runtime_plugin_enabled
+    from nanobot.plugins import describe_runtime_plugin_statuses
 
-    config = load_config()
+    runtime_config = _load_runtime_config(config)
     builtin_names = set(discover_channel_names())
     all_channels = discover_all()
-    runtime_plugins = discover_runtime_plugins()
+    runtime_statuses = describe_runtime_plugin_statuses(runtime_config)
 
     table = Table(title="Plugins")
     table.add_column("Name", style="cyan")
     table.add_column("Kind", style="green")
     table.add_column("Source", style="magenta")
+    table.add_column("Config")
     table.add_column("Enabled")
+    table.add_column("Status")
 
     for name in sorted(all_channels):
         cls = all_channels[name]
         source = "builtin" if name in builtin_names else "plugin"
-        section = getattr(config.channels, name, None)
+        section = getattr(runtime_config.channels, name, None)
         if section is None:
             enabled = False
         elif isinstance(section, dict):
@@ -1283,16 +1299,51 @@ def plugins_list():
             cls.display_name,
             "channel",
             source,
+            f"channels.{name}",
             "[green]yes[/green]" if enabled else "[dim]no[/dim]",
+            "configured" if enabled else "disabled",
         )
 
-    for name in sorted(runtime_plugins):
-        plugin = runtime_plugins[name]
+    for status in sorted(runtime_statuses, key=lambda item: item.name):
         table.add_row(
-            plugin.name,
+            status.name,
             "runtime",
-            plugin.source or "runtime",
-            "[green]yes[/green]" if is_runtime_plugin_enabled(config, plugin) else "[dim]no[/dim]",
+            status.source or "runtime",
+            status.config_path or f"plugins.{status.name}",
+            "[green]yes[/green]" if status.enabled else "[dim]no[/dim]",
+            status.reason or "configured",
+        )
+
+    console.print(table)
+
+
+@plugins_app.command("status")
+def plugins_status(
+    config: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
+):
+    """Show detailed runtime plugin status."""
+    from nanobot.plugins import describe_runtime_plugin_statuses
+
+    runtime_config = _load_runtime_config(config)
+    runtime_statuses = describe_runtime_plugin_statuses(runtime_config)
+
+    table = Table(title="Runtime Plugin Status")
+    table.add_column("Name", style="cyan")
+    table.add_column("Enabled")
+    table.add_column("Source", style="magenta")
+    table.add_column("Module")
+    table.add_column("Config")
+    table.add_column("Details")
+
+    for status in sorted(runtime_statuses, key=lambda item: item.name):
+        details = status.reason or status.description or "configured"
+        table.add_row(
+            status.name,
+            "[green]yes[/green]" if status.enabled else "[dim]no[/dim]",
+            status.source or "runtime",
+            status.module_name or "-",
+            status.config_path or f"plugins.{status.name}",
+            details,
         )
 
     console.print(table)

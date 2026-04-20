@@ -10,7 +10,7 @@ from typing import Any
 
 from loguru import logger
 
-from .types import RuntimePlugin
+from .types import RuntimePlugin, RuntimePluginContext, RuntimePluginRuntimeContext, RuntimePluginStatus
 
 
 def custom_plugins_dir() -> Path:
@@ -106,6 +106,49 @@ def is_runtime_plugin_enabled(config: Any, plugin: RuntimePlugin) -> bool:
     return bool(getattr(section, "enabled", False))
 
 
+def describe_runtime_plugin_status(config: Any, plugin: RuntimePlugin) -> RuntimePluginStatus:
+    """Return a human-readable runtime plugin status object."""
+    context = RuntimePluginContext(
+        config=config,
+        make_base_provider=lambda *args, **kwargs: None,
+    )
+    if plugin.describe_status is not None:
+        try:
+            status = plugin.describe_status(context)
+        except Exception as exc:
+            return RuntimePluginStatus(
+                name=plugin.name,
+                description=plugin.description,
+                enabled=False,
+                source=plugin.source,
+                module_name=plugin.module_name,
+                reason=f"status error: {exc}",
+            )
+        status.name = status.name or plugin.name
+        status.description = status.description or plugin.description
+        status.source = status.source or plugin.source
+        status.module_name = status.module_name or plugin.module_name
+        return status
+
+    return RuntimePluginStatus(
+        name=plugin.name,
+        description=plugin.description,
+        enabled=is_runtime_plugin_enabled(config, plugin),
+        source=plugin.source,
+        module_name=plugin.module_name,
+        config_path=f"plugins.{plugin.name}",
+        reason="configured" if is_runtime_plugin_enabled(config, plugin) else "disabled",
+    )
+
+
+def describe_runtime_plugin_statuses(config: Any) -> list[RuntimePluginStatus]:
+    """Return status rows for all discovered runtime plugins."""
+    return [
+        describe_runtime_plugin_status(config, plugin)
+        for plugin in discover_runtime_plugins().values()
+    ]
+
+
 def build_runtime_plugin_hooks(
     config: Any,
     *,
@@ -129,3 +172,38 @@ def build_runtime_plugin_hooks(
         built_hooks = plugin.build_hooks(context) or []
         hooks.extend(built_hooks)
     return hooks
+
+
+def initialize_runtime_plugins(
+    config: Any,
+    *,
+    loop: Any,
+    make_base_provider: Any,
+) -> list[RuntimePluginStatus]:
+    """Register tools and run initialization for enabled runtime plugins."""
+    statuses: list[RuntimePluginStatus] = []
+    for plugin in discover_runtime_plugins().values():
+        enabled = is_runtime_plugin_enabled(config, plugin)
+        status = describe_runtime_plugin_status(config, plugin)
+        if not enabled:
+            statuses.append(status)
+            continue
+
+        runtime_context = RuntimePluginRuntimeContext(
+            config=config,
+            make_base_provider=make_base_provider,
+            loop=loop,
+        )
+        try:
+            if plugin.build_tools is not None:
+                for tool in plugin.build_tools(runtime_context) or []:
+                    loop.tools.register(tool)
+                    status.registered_tools.append(tool.name)
+            if plugin.initialize is not None:
+                plugin.initialize(runtime_context)
+            if not status.reason:
+                status.reason = "initialized"
+        except Exception as exc:
+            status.reason = f"init error: {exc}"
+        statuses.append(status)
+    return statuses

@@ -16,11 +16,13 @@ The smart router is not a channel plugin. It is a runtime plugin that contribute
 
 Current flow:
 
-1. `Config.smartRouter.enabled` turns the feature on.
+1. `Config.plugins.smartrouter.enabled` turns the feature on.
 2. `nanobot.nanobot._make_provider()` loads the `smartrouter` runtime plugin.
 3. The plugin builds a `SmartRouterProvider`.
 4. The router chooses `local`, `mini`, or `full` per request.
 5. If needed, it falls back to another tier using health-aware retry rules.
+
+Legacy root `smartRouter` / `smart_router` config is still accepted, but Nanobot now treats `plugins.smartrouter` as the primary path.
 
 Implementation lives in:
 
@@ -82,24 +84,26 @@ This is a deliberate first version. The priority is deterministic behavior and e
       "apiKey": "sk-or-..."
     }
   },
-  "smartRouter": {
-    "enabled": true,
-    "allowLocalTools": false,
-    "local": {
-      "provider": "vllm",
-      "model": "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0"
-    },
-    "mini": {
-      "provider": "openrouter",
-      "model": "openai/gpt-5.4-mini"
-    },
-    "full": {
-      "provider": "openrouter",
-      "model": "openai/gpt-5.4"
-    },
-    "logging": {
+  "plugins": {
+    "smartrouter": {
       "enabled": true,
-      "path": "~/.nanobot/logs/smart-router.jsonl"
+      "allowLocalTools": false,
+      "local": {
+        "provider": "vllm",
+        "model": "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0"
+      },
+      "mini": {
+        "provider": "openrouter",
+        "model": "openai/gpt-5.4-mini"
+      },
+      "full": {
+        "provider": "openrouter",
+        "model": "openai/gpt-5.4"
+      },
+      "logging": {
+        "enabled": true,
+        "path": "~/.nanobot/logs/smart-router.jsonl"
+      }
     }
   }
 }
@@ -138,6 +142,79 @@ These logs are meant for:
 - fallback analysis
 - comparing local vs remote behavior over time
 
+The current JSONL payload includes:
+
+- `requestModel`
+- `requestedTier`
+- `finalTier`
+- `score`
+- `reasonCodes`
+- `features`
+- `attempts`
+
+Each `attempts` entry captures the tier, model, provider, status, and error text if a fallback happened.
+
+## Operational Validation Workflow
+
+Use this sequence when validating a source checkout against a real Nanobot instance config.
+
+### 1. Confirm the plugin is visible
+
+```bash
+PYTHONPATH=/path/to/nanobot/source \
+  /path/to/nanobot/source/.venv/bin/python -m nanobot.cli.commands \
+  plugins list --config ~/.nanobot/config.api.json
+
+PYTHONPATH=/path/to/nanobot/source \
+  /path/to/nanobot/source/.venv/bin/python -m nanobot.cli.commands \
+  plugins status --config ~/.nanobot/config.api.json
+```
+
+You should see `smartrouter` reported as a `runtime` plugin with config path `plugins.smartrouter`.
+
+### 2. Start the API server from the source tree
+
+If you run the source venv from outside the source checkout, set `PYTHONPATH` explicitly so the CLI imports the edited source tree and not another installation.
+
+```bash
+set -a && source ~/.nanobot/nanobot.env && set +a
+PYTHONPATH=/path/to/nanobot/source \
+  /path/to/nanobot/source/.venv/bin/python -m nanobot.cli.commands serve \
+  --config ~/.nanobot/config.api.json \
+  --host 127.0.0.1 \
+  --port 8911
+```
+
+### 3. Check health and a real completion
+
+```bash
+curl -s http://127.0.0.1:8911/health
+
+curl -s http://127.0.0.1:8911/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0",
+    "messages": [
+      {"role": "user", "content": "Reply with exactly SMART_ROUTER_PLUGIN_OK"}
+    ]
+  }'
+```
+
+### 4. Inspect the JSONL log
+
+```bash
+tail -n 5 ~/.nanobot/logs/smart-router.jsonl
+```
+
+Example fields to confirm:
+
+- `requestedTier`
+- `finalTier`
+- `reasonCodes`
+- `attempts[].status`
+
+In the validated source-tree run used during implementation, the router emitted a JSONL row with both `requestedTier` and `finalTier` populated and the API completion returned the exact expected string.
+
 ## Validation Checklist
 
 Recommended validation flow:
@@ -151,18 +228,20 @@ python -m pytest tests/providers/test_smart_router_provider.py \
 
 For runtime path validation, use the installed `nanobot` path and not only a source-local venv shortcut.
 
+If you are invoking the source venv from outside the source directory, prefer an explicit `PYTHONPATH=/path/to/source` prefix.
+
 ## Current Limitations
 
 The smart router is working, but several constraints are still deliberate:
 
-- It still uses the dedicated `smartRouter` config block rather than generic `plugins.smartrouter` settings.
 - Routing policy is rule-based only.
 - No UI/editor flow exists yet for tuning smart-router thresholds.
 - No packaging example exists yet for shipping it as an external `nanobot.plugins` package.
+- Full `local -> mini -> full` operational validation still depends on remote credentials being available in the target instance.
 
 ## Recommended Next Steps
 
-1. Add a migration path from `smartRouter` to a future generic `plugins.smartrouter` config shape.
-2. Add richer observability around route decisions and fallback reasons.
-3. Add a packaging example for external runtime plugins.
-4. Add long-session and real-traffic regression coverage for route stability.
+1. Add richer observability around route decisions and fallback reasons.
+2. Add a packaging example for external runtime plugins.
+3. Add long-session and real-traffic regression coverage for route stability.
+4. Add a dedicated fallback validation runbook for environments with real remote credentials.
