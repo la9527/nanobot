@@ -266,7 +266,11 @@ class OpenAICompatProvider(LLMProvider):
 
     def _sanitize_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Strip non-standard keys, normalize tool_call IDs."""
-        sanitized = LLMProvider._sanitize_request_messages(messages, _ALLOWED_MSG_KEYS)
+        source_messages = messages
+        if self._should_flatten_local_tool_history():
+            source_messages = self._flatten_local_tool_history(messages)
+
+        sanitized = LLMProvider._sanitize_request_messages(source_messages, _ALLOWED_MSG_KEYS)
         id_map: dict[str, str] = {}
 
         def map_id(value: Any) -> Any:
@@ -301,7 +305,121 @@ class OpenAICompatProvider(LLMProvider):
                     clean["content"] = None
             if "tool_call_id" in clean and clean["tool_call_id"]:
                 clean["tool_call_id"] = map_id(clean["tool_call_id"])
-        return self._enforce_role_alternation(sanitized)
+
+        trailing_pending_tool_call = (
+            dict(sanitized[-1])
+            if (
+                self._should_flatten_local_tool_history()
+                and sanitized
+                and sanitized[-1].get("role") == "assistant"
+                and sanitized[-1].get("tool_calls")
+            )
+            else None
+        )
+        alternation_source = sanitized[:-1] if trailing_pending_tool_call else sanitized
+        alternated = self._enforce_role_alternation(alternation_source)
+        if trailing_pending_tool_call is not None:
+            alternated.append(trailing_pending_tool_call)
+        return alternated
+
+    def _should_flatten_local_tool_history(self) -> bool:
+        spec = self._spec
+        if spec and spec.is_local:
+            return True
+
+        base = (self._effective_base or self.api_base or "").strip().lower()
+        if not base or _is_direct_openai_base(base):
+            return False
+        return "127.0.0.1" in base or "localhost" in base
+
+    @staticmethod
+    def _stringify_local_message_content(value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value
+        try:
+            return json.dumps(value, ensure_ascii=False)
+        except Exception:
+            return str(value)
+
+    @classmethod
+    def _render_local_tool_call_message(
+        cls,
+        message: dict[str, Any],
+    ) -> str:
+        parts: list[str] = []
+        content = cls._stringify_local_message_content(message.get("content")).strip()
+        if content:
+            parts.append(content)
+
+        rendered_calls: list[str] = []
+        for tool_call in message.get("tool_calls") or []:
+            if not isinstance(tool_call, dict):
+                continue
+            function = tool_call.get("function")
+            if not isinstance(function, dict):
+                continue
+            name = str(function.get("name") or "tool")
+            arguments = cls._stringify_local_message_content(function.get("arguments")).strip() or "{}"
+            rendered_calls.append(f"[Tool request] {name} {arguments}")
+
+        if rendered_calls:
+            parts.extend(rendered_calls)
+
+        return "\n".join(parts) if parts else "[Tool request]"
+
+    @classmethod
+    def _render_local_tool_result_message(cls, message: dict[str, Any]) -> str:
+        tool_name = str(message.get("name") or "tool")
+        content = cls._stringify_local_message_content(message.get("content")).strip()
+        if not content:
+            content = "(empty)"
+        return f"[Tool result: {tool_name}]\n{content}"
+
+    @classmethod
+    def _flatten_local_tool_history(
+        cls,
+        messages: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        completed_ids = {
+            str(msg.get("tool_call_id"))
+            for msg in messages
+            if msg.get("role") == "tool" and msg.get("tool_call_id")
+        }
+        if not completed_ids:
+            return messages
+
+        flattened: list[dict[str, Any]] = []
+        changed = False
+        for msg in messages:
+            role = msg.get("role")
+            if role == "assistant" and isinstance(msg.get("tool_calls"), list) and msg["tool_calls"]:
+                tool_calls = msg["tool_calls"]
+                tool_ids = [
+                    str(tc.get("id"))
+                    for tc in tool_calls
+                    if isinstance(tc, dict) and tc.get("id")
+                ]
+                if tool_ids and all(tool_id in completed_ids for tool_id in tool_ids):
+                    flattened.append({
+                        "role": "assistant",
+                        "content": cls._render_local_tool_call_message(msg),
+                    })
+                    changed = True
+                    continue
+
+            if role == "tool":
+                flattened.append({
+                    "role": "user",
+                    "content": cls._render_local_tool_result_message(msg),
+                })
+                changed = True
+                continue
+
+            flattened.append(dict(msg))
+
+        return flattened if changed else messages
 
     # ------------------------------------------------------------------
     # Build kwargs

@@ -656,6 +656,60 @@ def test_openai_compat_defaults_missing_tool_arguments_to_empty_object() -> None
     assert sanitized[1]["tool_calls"][0]["function"]["arguments"] == "{}"
 
 
+def test_openai_compat_flattens_completed_tool_history_for_local_providers() -> None:
+    spec = find_by_name("vllm")
+    with patch("nanobot.providers.openai_compat_provider.AsyncOpenAI"):
+        provider = OpenAICompatProvider(spec=spec, api_base="http://127.0.0.1:1242/v1")
+
+    sanitized = provider._sanitize_messages([
+        {"role": "user", "content": "run a health check"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "ping", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "name": "ping", "content": "pong"},
+        {"role": "user", "content": "continue"},
+    ])
+
+    assert sanitized[1]["role"] == "assistant"
+    assert sanitized[1].get("tool_calls") is None
+    assert "[Tool request] ping {}" in sanitized[1]["content"]
+    assert sanitized[2]["role"] == "user"
+    assert "[Tool result: ping]" in sanitized[2]["content"]
+    assert "continue" in sanitized[2]["content"]
+
+
+def test_openai_compat_keeps_pending_tool_calls_for_local_providers() -> None:
+    spec = find_by_name("vllm")
+    with patch("nanobot.providers.openai_compat_provider.AsyncOpenAI"):
+        provider = OpenAICompatProvider(spec=spec, api_base="http://127.0.0.1:1242/v1")
+
+    sanitized = provider._sanitize_messages([
+        {"role": "user", "content": "run a health check"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "ping", "arguments": "{}"},
+                }
+            ],
+        },
+    ])
+
+    assert sanitized[1]["tool_calls"][0]["function"]["name"] == "ping"
+    assert sanitized[1]["content"] is None
+
+
 @pytest.mark.asyncio
 async def test_openai_compat_stream_watchdog_returns_error_on_stall(monkeypatch) -> None:
     monkeypatch.setenv("NANOBOT_STREAM_IDLE_TIMEOUT_S", "0")

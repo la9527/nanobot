@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from nanobot.cron.types import CronSchedule
 
@@ -96,6 +96,100 @@ class AgentsConfig(Base):
     """Agent configuration."""
 
     defaults: AgentDefaults = Field(default_factory=AgentDefaults)
+
+
+class SmartRouterTierConfig(Base):
+    """Per-tier provider/model selection."""
+
+    provider: str | None = None
+    model: str | None = None
+
+
+class SmartRouterPolicyConfig(Base):
+    """Rule-based routing thresholds and keyword groups."""
+
+    local_score_max: int = Field(default=2, ge=0)
+    full_score_min: int = Field(default=6, ge=1)
+    short_prompt_chars: int = Field(default=120, ge=1)
+    medium_prompt_chars: int = Field(default=800, ge=1)
+    long_prompt_chars: int = Field(default=2000, ge=1)
+    tool_bonus: int = Field(default=2, ge=0)
+    code_bonus: int = Field(default=3, ge=0)
+    reasoning_bonus: int = Field(default=3, ge=0)
+    history_bonus: int = Field(default=2, ge=0)
+    attachment_bonus: int = Field(default=2, ge=0)
+    full_keywords: list[str] = Field(
+        default_factory=lambda: [
+            "architecture",
+            "benchmark",
+            "compare",
+            "debug",
+            "design",
+            "investigate",
+            "migration",
+            "optimize",
+            "plan",
+            "refactor",
+            "strategy",
+            "tradeoff",
+        ]
+    )
+    code_keywords: list[str] = Field(
+        default_factory=lambda: [
+            "bash",
+            "class",
+            "code",
+            "def",
+            "function",
+            "javascript",
+            "python",
+            "regex",
+            "sql",
+            "traceback",
+            "typescript",
+        ]
+    )
+    tool_keywords: list[str] = Field(
+        default_factory=lambda: [
+            "command",
+            "docker",
+            "git",
+            "install",
+            "log",
+            "pytest",
+            "run",
+            "script",
+            "terminal",
+            "test",
+        ]
+    )
+
+
+class SmartRouterHealthConfig(Base):
+    """Failure tracking and cooldown settings."""
+
+    failure_threshold: int = Field(default=2, ge=1)
+    cooldown_seconds: int = Field(default=180, ge=1)
+
+
+class SmartRouterLoggingConfig(Base):
+    """JSONL routing log settings."""
+
+    enabled: bool = True
+    path: str = "~/.nanobot/logs/smart-router.jsonl"
+
+
+class SmartRouterConfig(Base):
+    """Optional local/mini/full smart-router configuration."""
+
+    enabled: bool = False
+    allow_local_tools: bool = False
+    local: SmartRouterTierConfig = Field(default_factory=SmartRouterTierConfig)
+    mini: SmartRouterTierConfig = Field(default_factory=SmartRouterTierConfig)
+    full: SmartRouterTierConfig = Field(default_factory=SmartRouterTierConfig)
+    policy: SmartRouterPolicyConfig = Field(default_factory=SmartRouterPolicyConfig)
+    health: SmartRouterHealthConfig = Field(default_factory=SmartRouterHealthConfig)
+    logging: SmartRouterLoggingConfig = Field(default_factory=SmartRouterLoggingConfig)
 
 
 class ProviderConfig(Base):
@@ -229,6 +323,11 @@ class Config(BaseSettings):
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
+    smart_router: SmartRouterConfig = Field(
+        default_factory=SmartRouterConfig,
+        validation_alias=AliasChoices("smartRouter", "smart_router"),
+        serialization_alias="smartRouter",
+    )
     api: ApiConfig = Field(default_factory=ApiConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
@@ -333,4 +432,9 @@ class Config(BaseSettings):
                 return spec.default_api_base
         return None
 
-    model_config = ConfigDict(env_prefix="NANOBOT_", env_nested_delimiter="__")
+    model_config = SettingsConfigDict(
+        alias_generator=to_camel,
+        populate_by_name=True,
+        env_prefix="NANOBOT_",
+        env_nested_delimiter="__",
+    )

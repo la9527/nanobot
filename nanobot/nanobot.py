@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import sys
 from typing import Any
 
 from nanobot.agent.hook import AgentHook
@@ -119,45 +120,95 @@ class Nanobot:
 
 def _make_provider(config: Any) -> Any:
     """Create the LLM provider from config (extracted from CLI)."""
+    if getattr(config, "smart_router", None) and config.smart_router.enabled:
+        return _make_smart_router_provider(config)
+    return _make_base_provider(config)
+
+
+def _ensure_custom_plugins_path() -> None:
+    custom_plugins = Path(__file__).resolve().parents[2] / "custom-plugins"
+    custom_plugins_str = str(custom_plugins)
+    if custom_plugins.exists() and custom_plugins_str not in sys.path:
+        sys.path.insert(0, custom_plugins_str)
+
+
+def _resolve_provider_config(config: Any, provider_name: str | None) -> Any:
+    if not provider_name:
+        return None
+    normalized = provider_name.replace("-", "_")
+    return getattr(config.providers, normalized, None)
+
+
+def _resolve_api_base(config: Any, provider_name: str | None, model: str) -> str | None:
+    from nanobot.providers.registry import find_by_name
+
+    if provider_name is None:
+        return config.get_api_base(model)
+
+    p = _resolve_provider_config(config, provider_name)
+    if p and p.api_base:
+        return p.api_base
+
+    spec = find_by_name(provider_name)
+    if spec and (spec.is_gateway or spec.is_local) and spec.default_api_base:
+        return spec.default_api_base
+    return None
+
+
+def _make_base_provider(
+    config: Any,
+    *,
+    model: str | None = None,
+    provider_name: str | None = None,
+) -> Any:
+    """Create a concrete provider for a specific provider/model target."""
     from nanobot.providers.base import GenerationSettings
     from nanobot.providers.registry import find_by_name
 
-    model = config.agents.defaults.model
-    provider_name = config.get_provider_name(model)
-    p = config.get_provider(model)
-    spec = find_by_name(provider_name) if provider_name else None
+    selected_model = model or config.agents.defaults.model
+    explicit_provider = provider_name
+    if explicit_provider is None and model is None and config.agents.defaults.provider != "auto":
+        explicit_provider = config.agents.defaults.provider
+
+    resolved_provider_name = explicit_provider or config.get_provider_name(selected_model)
+    p = _resolve_provider_config(config, resolved_provider_name)
+    if p is None and explicit_provider is None:
+        p = config.get_provider(selected_model)
+    spec = find_by_name(resolved_provider_name) if resolved_provider_name else None
     backend = spec.backend if spec else "openai_compat"
 
     if backend == "azure_openai":
         if not p or not p.api_key or not p.api_base:
             raise ValueError("Azure OpenAI requires api_key and api_base in config.")
-    elif backend == "openai_compat" and not model.startswith("bedrock/"):
+    elif backend == "openai_compat" and not selected_model.startswith("bedrock/"):
         needs_key = not (p and p.api_key)
         exempt = spec and (spec.is_oauth or spec.is_local or spec.is_direct)
         if needs_key and not exempt:
-            raise ValueError(f"No API key configured for provider '{provider_name}'.")
+            raise ValueError(
+                f"No API key configured for provider '{resolved_provider_name}'."
+            )
 
     if backend == "openai_codex":
         from nanobot.providers.openai_codex_provider import OpenAICodexProvider
 
-        provider = OpenAICodexProvider(default_model=model)
+        provider = OpenAICodexProvider(default_model=selected_model)
     elif backend == "github_copilot":
         from nanobot.providers.github_copilot_provider import GitHubCopilotProvider
 
-        provider = GitHubCopilotProvider(default_model=model)
+        provider = GitHubCopilotProvider(default_model=selected_model)
     elif backend == "azure_openai":
         from nanobot.providers.azure_openai_provider import AzureOpenAIProvider
 
         provider = AzureOpenAIProvider(
-            api_key=p.api_key, api_base=p.api_base, default_model=model
+            api_key=p.api_key, api_base=p.api_base, default_model=selected_model
         )
     elif backend == "anthropic":
         from nanobot.providers.anthropic_provider import AnthropicProvider
 
         provider = AnthropicProvider(
             api_key=p.api_key if p else None,
-            api_base=config.get_api_base(model),
-            default_model=model,
+            api_base=_resolve_api_base(config, resolved_provider_name, selected_model),
+            default_model=selected_model,
             extra_headers=p.extra_headers if p else None,
         )
     else:
@@ -165,8 +216,8 @@ def _make_provider(config: Any) -> Any:
 
         provider = OpenAICompatProvider(
             api_key=p.api_key if p else None,
-            api_base=config.get_api_base(model),
-            default_model=model,
+            api_base=_resolve_api_base(config, resolved_provider_name, selected_model),
+            default_model=selected_model,
             extra_headers=p.extra_headers if p else None,
             spec=spec,
         )
@@ -177,4 +228,42 @@ def _make_provider(config: Any) -> Any:
         max_tokens=defaults.max_tokens,
         reasoning_effort=defaults.reasoning_effort,
     )
+    return provider
+
+
+def _make_smart_router_provider(config: Any) -> Any:
+    """Create the smart-router wrapper provider."""
+    _ensure_custom_plugins_path()
+
+    from smartrouter import SmartRouterProvider, load_router_config
+
+    defaults = config.agents.defaults
+    router_config = load_router_config(
+        config.smart_router,
+        default_model=defaults.model,
+        default_provider=None if defaults.provider == "auto" else defaults.provider,
+    )
+    tier_providers = {
+        "local": _make_base_provider(
+            config,
+            model=router_config.local.model,
+            provider_name=router_config.local.provider,
+        ),
+        "mini": _make_base_provider(
+            config,
+            model=router_config.mini.model,
+            provider_name=router_config.mini.provider,
+        ),
+        "full": _make_base_provider(
+            config,
+            model=router_config.full.model,
+            provider_name=router_config.full.provider,
+        ),
+    }
+    provider = SmartRouterProvider(
+        router_config=router_config,
+        tier_providers=tier_providers,
+        default_model=defaults.model,
+    )
+    provider.generation = tier_providers["local"].generation
     return provider
