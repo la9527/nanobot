@@ -6,12 +6,14 @@ from nanobot.agent.tools.registry import ToolRegistry
 from nanobot.config.schema import Config
 from nanobot.plugins import discover_runtime_plugins, load_runtime_plugin
 from nanobot.plugins.registry import (
+    build_runtime_plugin_model_targets,
     build_runtime_plugin_hooks,
     describe_runtime_plugin_status,
     initialize_runtime_plugins,
     is_runtime_plugin_enabled,
 )
 from nanobot.plugins.types import RuntimePlugin
+from nanobot.model_targets import ResolvedModelTarget
 
 
 def test_discover_runtime_plugins_includes_smart_router() -> None:
@@ -81,6 +83,35 @@ def test_build_runtime_plugin_hooks_skips_disabled_plugins(monkeypatch) -> None:
     hooks = build_runtime_plugin_hooks(Config(), make_base_provider=lambda *args, **kwargs: None)
 
     assert hooks == []
+
+
+def test_build_runtime_plugin_model_targets_collects_enabled_targets(monkeypatch) -> None:
+    plugin = RuntimePlugin(
+        name="sample",
+        description="Sample runtime plugin",
+        source="custom",
+        build_model_targets=lambda context: {
+            "sample-remote": ResolvedModelTarget(
+                name="sample-remote",
+                kind="provider_model",
+                provider="openrouter",
+                model="openai/gpt-5.4-mini",
+            )
+        },
+    )
+    monkeypatch.setattr(
+        "nanobot.plugins.registry.discover_runtime_plugins",
+        lambda: {"sample": plugin},
+    )
+
+    config = Config.model_validate({"plugins": {"sample": {"enabled": True}}})
+    targets = build_runtime_plugin_model_targets(
+        config,
+        make_base_provider=lambda *args, **kwargs: None,
+    )
+
+    assert list(targets) == ["sample-remote"]
+    assert targets["sample-remote"].provider == "openrouter"
 
 
 def test_describe_runtime_plugin_status_reports_plugin_config_path() -> None:

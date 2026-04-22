@@ -33,10 +33,14 @@ class _FakeUpdater:
     def __init__(self, on_start_polling) -> None:
         self._on_start_polling = on_start_polling
         self.start_polling_kwargs = None
+        self.running = True
 
     async def start_polling(self, **kwargs) -> None:
         self.start_polling_kwargs = kwargs
         self._on_start_polling()
+
+    async def stop(self) -> None:
+        self.running = False
 
 
 class _FakeBot:
@@ -95,6 +99,12 @@ class _FakeApp:
         pass
 
     async def start(self) -> None:
+        pass
+
+    async def stop(self) -> None:
+        pass
+
+    async def shutdown(self) -> None:
         pass
 
 
@@ -180,6 +190,12 @@ async def test_start_creates_separate_pools_with_proxy(monkeypatch) -> None:
 
     await channel.start()
 
+    api_req = _FakeHTTPXRequest.instances[0]
+    poll_req = _FakeHTTPXRequest.instances[1]
+    assert api_req.kwargs["connection_pool_size"] == 32
+    assert api_req.kwargs["pool_timeout"] == config.pool_timeout
+    assert poll_req.kwargs["pool_timeout"] == config.pool_timeout
+
     assert len(_FakeHTTPXRequest.instances) == 2
     api_req, poll_req = _FakeHTTPXRequest.instances
     assert api_req.kwargs["proxy"] == config.proxy
@@ -189,7 +205,9 @@ async def test_start_creates_separate_pools_with_proxy(monkeypatch) -> None:
     assert builder.request_value is api_req
     assert builder.get_updates_request_value is poll_req
     assert callable(app.updater.start_polling_kwargs["error_callback"])
+    assert any(cmd.command == "model" for cmd in app.bot.commands)
     assert any(cmd.command == "status" for cmd in app.bot.commands)
+    assert any(cmd.command == "usage" for cmd in app.bot.commands)
     assert any(cmd.command == "dream" for cmd in app.bot.commands)
     assert any(cmd.command == "dream_log" for cmd in app.bot.commands)
     assert any(cmd.command == "dream_restore" for cmd in app.bot.commands)
@@ -218,11 +236,59 @@ async def test_start_respects_custom_pool_config(monkeypatch) -> None:
 
     await channel.start()
 
-    api_req = _FakeHTTPXRequest.instances[0]
-    poll_req = _FakeHTTPXRequest.instances[1]
-    assert api_req.kwargs["connection_pool_size"] == 32
-    assert api_req.kwargs["pool_timeout"] == 10.0
-    assert poll_req.kwargs["pool_timeout"] == 10.0
+
+@pytest.mark.asyncio
+async def test_stop_ignores_updater_not_running_runtime_error() -> None:
+    channel = TelegramChannel(
+        TelegramConfig(enabled=True, token="123:abc", allow_from=["*"]),
+        MessageBus(),
+    )
+
+    class _NotRunningUpdater:
+        running = True
+
+        async def stop(self) -> None:
+            raise RuntimeError("This Updater is not running!")
+
+    app = _FakeApp(lambda: None)
+    app.updater = _NotRunningUpdater()
+    app.stop = AsyncMock()
+    app.shutdown = AsyncMock()
+    channel._app = app
+
+    await channel.stop()
+
+    app.stop.assert_awaited_once()
+    app.shutdown.assert_awaited_once()
+    assert channel._app is None
+
+
+@pytest.mark.asyncio
+async def test_stop_ignores_application_not_running_runtime_error() -> None:
+    channel = TelegramChannel(
+        TelegramConfig(enabled=True, token="123:abc", allow_from=["*"]),
+        MessageBus(),
+    )
+
+    class _StoppedUpdater:
+        running = False
+
+        async def stop(self) -> None:
+            return None
+
+    app = _FakeApp(lambda: None)
+    app.updater = _StoppedUpdater()
+
+    async def _raise_not_running() -> None:
+        raise RuntimeError("This Application is not running!")
+
+    app.stop = _raise_not_running
+    app.shutdown = _raise_not_running
+    channel._app = app
+
+    await channel.stop()
+
+    assert channel._app is None
 
 
 @pytest.mark.asyncio

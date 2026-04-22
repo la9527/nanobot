@@ -9,6 +9,12 @@ import sys
 from nanobot import __version__
 from nanobot.bus.events import OutboundMessage
 from nanobot.command.router import CommandContext, CommandRouter
+from nanobot.model_targets import DEFAULT_MODEL_TARGET_NAME, describe_model_target
+from nanobot.response_status import (
+    RESPONSE_FOOTER_MODES,
+    build_response_footer,
+    normalize_response_footer_mode,
+)
 from nanobot.utils.helpers import build_status_content
 from nanobot.utils.restart import set_restart_notice_to_env
 
@@ -53,13 +59,7 @@ async def cmd_status(ctx: CommandContext) -> OutboundMessage:
     """Build an outbound status message for a session."""
     loop = ctx.loop
     session = ctx.session or loop.sessions.get_or_create(ctx.key)
-    ctx_est = 0
-    try:
-        ctx_est, _ = loop.consolidator.estimate_session_prompt_tokens(session)
-    except Exception:
-        pass
-    if ctx_est <= 0:
-        ctx_est = loop._last_usage.get("prompt_tokens", 0)
+    status_snapshot = loop.build_response_status(session)
     
     # Fetch web search provider usage (best-effort, never blocks the response)
     search_usage_text: str | None = None
@@ -80,21 +80,176 @@ async def cmd_status(ctx: CommandContext) -> OutboundMessage:
         task_count += loop.subagents.get_running_count_by_session(ctx.key)
     except Exception:
         pass
+    content = build_status_content(
+        version=__version__, model=status_snapshot["model"],
+        start_time=loop._start_time, last_usage=status_snapshot["usage"],
+        context_window_tokens=status_snapshot["context_window_tokens"],
+        session_msg_count=len(session.get_history(max_messages=0)),
+        context_tokens_estimate=status_snapshot["context_tokens_estimate"],
+        search_usage_text=search_usage_text,
+        active_task_count=task_count,
+        max_completion_tokens=getattr(
+            getattr(loop.provider, "generation", None), "max_tokens", 8192
+        ),
+    )
+    content += (
+        f"\nTarget: {status_snapshot['active_target']}"
+        f"\nReply footer: {status_snapshot['footer_mode']}"
+    )
     return OutboundMessage(
         channel=ctx.msg.channel,
         chat_id=ctx.msg.chat_id,
-        content=build_status_content(
-            version=__version__, model=loop.model,
-            start_time=loop._start_time, last_usage=loop._last_usage,
-            context_window_tokens=loop.context_window_tokens,
-            session_msg_count=len(session.get_history(max_messages=0)),
-            context_tokens_estimate=ctx_est,
-            search_usage_text=search_usage_text,
-            active_task_count=task_count,
-            max_completion_tokens=getattr(
-                getattr(loop.provider, "generation", None), "max_tokens", 8192
-            ),
-        ),
+        content=content,
+        metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+    )
+
+
+async def cmd_usage(ctx: CommandContext) -> OutboundMessage:
+    """Show or change per-session response footer mode."""
+    loop = ctx.loop
+    session = ctx.session or loop.sessions.get_or_create(ctx.key)
+    args = ctx.args.strip().lower()
+    current_mode = loop.get_response_footer_mode(session)
+    status_snapshot = loop.build_response_status(session)
+
+    if not args:
+        preview = build_response_footer(
+            mode=current_mode,
+            model=status_snapshot["model"],
+            active_target=status_snapshot["active_target"],
+            usage=status_snapshot["usage"],
+            context_window_tokens=status_snapshot["context_window_tokens"],
+            context_tokens_estimate=status_snapshot["context_tokens_estimate"],
+        )
+        lines = [
+            "## Usage Footer",
+            "",
+            f"Current mode: `{current_mode}`",
+        ]
+        if preview:
+            lines.extend(["", f"Preview:{preview}"])
+        lines.extend([
+            "",
+            "Use `/usage off`, `/usage tokens`, or `/usage full`.",
+        ])
+    else:
+        mode = normalize_response_footer_mode(args.split()[0])
+        if mode not in RESPONSE_FOOTER_MODES or mode != args.split()[0]:
+            lines = [
+                "## Usage Footer",
+                "",
+                f"Unknown mode: `{args.split()[0]}`",
+                "",
+                "Valid modes: `off`, `tokens`, `full`.",
+            ]
+        else:
+            loop.set_response_footer_mode(session, mode)
+            status_snapshot = loop.build_response_status(session)
+            lines = [
+                "## Usage Footer",
+                "",
+                f"Selected `{mode}` for this session.",
+            ]
+            preview = build_response_footer(
+                mode=mode,
+                model=status_snapshot["model"],
+                active_target=status_snapshot["active_target"],
+                usage=status_snapshot["usage"],
+                context_window_tokens=status_snapshot["context_window_tokens"],
+                context_tokens_estimate=status_snapshot["context_tokens_estimate"],
+            )
+            if preview:
+                lines.extend(["", f"Preview:{preview}"])
+            else:
+                lines.extend([
+                    "",
+                    "Future replies in this session will not include a status footer.",
+                ])
+
+    return OutboundMessage(
+        channel=ctx.msg.channel,
+        chat_id=ctx.msg.chat_id,
+        content="\n".join(lines),
+        metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+    )
+
+
+async def cmd_model(ctx: CommandContext) -> OutboundMessage:
+    """Show or change the active named model target for the session."""
+    loop = ctx.loop
+    session = ctx.session or loop.sessions.get_or_create(ctx.key)
+    targets = getattr(loop, "get_available_model_targets", lambda: {})()
+    if not targets:
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content="Model targets are not configured for this runtime.",
+            metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+        )
+
+    args = ctx.args.strip()
+    active_name = loop.get_active_model_target_name(session)
+
+    def _render_targets() -> list[str]:
+        lines: list[str] = []
+        for name, target in targets.items():
+            prefix = "*" if name == active_name else "-"
+            lines.append(f"{prefix} `{name}` — {describe_model_target(target)}")
+        return lines
+
+    if not args or args == "current":
+        current = targets.get(active_name)
+        lines = [
+            "## Model Target",
+            "",
+            f"Current target: `{active_name}`",
+        ]
+        if current is not None:
+            lines.append(f"Detail: {describe_model_target(current)}")
+        lines.extend([
+            "",
+            "Available targets:",
+            *_render_targets(),
+            "",
+            "Use `/model list` to see targets, `/model <name>` to switch, or `/model clear` to return to the startup default.",
+        ])
+    elif args == "list":
+        lines = ["## Model Targets", "", *_render_targets()]
+    elif args == "clear":
+        loop.clear_session_model_target(session)
+        active_name = loop.get_active_model_target_name(session)
+        lines = [
+            "## Model Target",
+            "",
+            f"Cleared the session override. Active target is now `{active_name}`.",
+        ]
+    else:
+        target_name = args.split()[0]
+        if target_name not in targets:
+            lines = [
+                "## Model Target",
+                "",
+                f"Unknown target: `{target_name}`",
+                "",
+                "Available targets:",
+                *_render_targets(),
+            ]
+        else:
+            loop.set_session_model_target(session, target_name)
+            selected = targets[target_name]
+            lines = [
+                "## Model Target",
+                "",
+                f"Selected `{target_name}` for this session.",
+                f"Detail: {describe_model_target(selected)}",
+            ]
+            if target_name == DEFAULT_MODEL_TARGET_NAME:
+                lines.append("This target follows the startup default configuration.")
+
+    return OutboundMessage(
+        channel=ctx.msg.channel,
+        chat_id=ctx.msg.chat_id,
+        content="\n".join(lines),
         metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
     )
 
@@ -330,7 +485,9 @@ def build_help_text() -> str:
         "/new — Start a new conversation",
         "/stop — Stop the current task",
         "/restart — Restart the bot",
+        "/model — Show or change the active model target",
         "/status — Show bot status",
+        "/usage — Show or change the reply footer mode",
         "/dream — Manually trigger Dream consolidation",
         "/dream-log — Show what the last Dream changed",
         "/dream-restore — Revert memory to a previous state",
@@ -345,7 +502,11 @@ def register_builtin_commands(router: CommandRouter) -> None:
     router.priority("/restart", cmd_restart)
     router.priority("/status", cmd_status)
     router.exact("/new", cmd_new)
+    router.exact("/model", cmd_model)
+    router.prefix("/model ", cmd_model)
     router.exact("/status", cmd_status)
+    router.exact("/usage", cmd_usage)
+    router.prefix("/usage ", cmd_usage)
     router.exact("/dream", cmd_dream)
     router.exact("/dream-log", cmd_dream_log)
     router.prefix("/dream-log ", cmd_dream_log)

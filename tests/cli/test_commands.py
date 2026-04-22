@@ -1354,6 +1354,98 @@ def test_gateway_health_endpoint_binds_and_serves_expected_responses(
     assert missing_response.endswith("\r\n\r\nNot Found")
 
 
+def test_gateway_port_conflict_reports_clean_error_and_stops_runtime(
+    monkeypatch, tmp_path: Path
+) -> None:
+    config_file = _write_instance_config(tmp_path)
+    config = Config()
+    config.gateway.port = 18791
+    captured: dict[str, object] = {}
+
+    class _FakeDream:
+        model = None
+        max_batch_size = 0
+        max_iterations = 0
+        annotate_line_ages = False
+
+    class _FakeAgentLoop:
+        def __init__(self, **_kwargs) -> None:
+            self.model = "test-model"
+            self.dream = _FakeDream()
+
+        async def run(self) -> None:
+            captured["agent_run_started"] = True
+            await asyncio.Event().wait()
+
+        async def close_mcp(self) -> None:
+            captured["mcp_closed"] = True
+
+        def stop(self) -> None:
+            captured["agent_stopped"] = True
+
+    class _FakeChannelManager:
+        def __init__(self, _config, _bus) -> None:
+            self.enabled_channels = ["telegram"]
+
+        async def start_all(self) -> None:
+            captured["channels_started"] = True
+            await asyncio.Event().wait()
+
+        async def stop_all(self) -> None:
+            captured["channels_stopped"] = True
+
+    class _FakeCronService:
+        def __init__(self, _store_path: Path) -> None:
+            self.on_job = None
+
+        async def start(self) -> None:
+            captured["cron_started"] = True
+
+        def stop(self) -> None:
+            captured["cron_stopped"] = True
+
+        def status(self) -> dict[str, int]:
+            return {"jobs": 0}
+
+        def register_system_job(self, _job) -> None:
+            return None
+
+    class _FakeHeartbeatService:
+        def __init__(self, **_kwargs) -> None:
+            return None
+
+        async def start(self) -> None:
+            captured["heartbeat_started"] = True
+
+        def stop(self) -> None:
+            captured["heartbeat_stopped"] = True
+
+    async def _fake_start_server(_handler, _host: str, _port: int):
+        raise OSError(48, "address already in use")
+
+    _patch_cli_command_runtime(
+        monkeypatch,
+        config,
+        message_bus=lambda: object(),
+        session_manager=lambda _workspace: object(),
+    )
+    monkeypatch.setattr("nanobot.agent.loop.AgentLoop", _FakeAgentLoop)
+    monkeypatch.setattr("nanobot.channels.manager.ChannelManager", _FakeChannelManager)
+    monkeypatch.setattr("nanobot.cron.service.CronService", _FakeCronService)
+    monkeypatch.setattr("nanobot.heartbeat.service.HeartbeatService", _FakeHeartbeatService)
+    monkeypatch.setattr("asyncio.start_server", _fake_start_server)
+
+    result = runner.invoke(app, ["gateway", "--config", str(config_file)])
+
+    assert result.exit_code == 0
+    assert "Health endpoint port 18791 is already in use" in result.stdout
+    assert captured["agent_stopped"] is True
+    assert captured["channels_stopped"] is True
+    assert captured["heartbeat_stopped"] is True
+    assert captured["cron_stopped"] is True
+    assert captured["mcp_closed"] is True
+
+
 def test_serve_uses_api_config_defaults_and_workspace_override(
     monkeypatch, tmp_path: Path
 ) -> None:

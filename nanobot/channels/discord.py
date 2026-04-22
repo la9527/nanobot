@@ -138,6 +138,7 @@ if DISCORD_AVAILABLE:
                 ("new", "Start a new conversation", "/new"),
                 ("stop", "Stop the current task", "/stop"),
                 ("restart", "Restart the bot", "/restart"),
+                ("model", "Show or change the active model target", "/model"),
                 ("status", "Show bot status", "/status"),
             )
 
@@ -157,6 +158,33 @@ if DISCORD_AVAILABLE:
                     await self._reply_ephemeral(interaction, "You are not allowed to use this bot.")
                     return
                 await self._reply_ephemeral(interaction, build_help_text())
+
+            @self.tree.command(name="usage", description="Show or change the reply footer mode")
+            @app_commands.describe(mode="Footer mode: off, tokens, or full")
+            async def usage_command(
+                interaction: discord.Interaction,
+                mode: str | None = None,
+            ) -> None:
+                sender_id = str(interaction.user.id)
+                channel_id = interaction.channel_id
+                if channel_id is None:
+                    logger.warning("Discord usage command missing channel_id")
+                    return
+                if not self._channel.is_allowed(sender_id):
+                    await self._reply_ephemeral(interaction, "You are not allowed to use this bot.")
+                    return
+                command_text = "/usage" if not mode else f"/usage {mode}"
+                await self._reply_ephemeral(interaction, f"Processing {command_text}...")
+                await self._channel._handle_message(
+                    sender_id=sender_id,
+                    chat_id=str(channel_id),
+                    content=command_text,
+                    metadata={
+                        "interaction_id": str(interaction.id),
+                        "guild_id": str(interaction.guild_id) if interaction.guild_id else None,
+                        "is_slash_command": True,
+                    },
+                )
 
             @self.tree.error
             async def on_app_command_error(

@@ -49,6 +49,7 @@ class RuntimePlugin:
     module_name: str = ""
     build_provider: Callable[[RuntimePluginContext], Any] | None = None
     build_hooks: Callable[[RuntimePluginContext], list[Any]] | None = None
+    build_model_targets: Callable[[RuntimePluginContext], dict[str, Any]] | None = None
     build_tools: Callable[[RuntimePluginRuntimeContext], list[Any]] | None = None
     initialize: Callable[[RuntimePluginRuntimeContext], None] | None = None
     describe_status: Callable[[RuntimePluginContext], RuntimePluginStatus] | None = None

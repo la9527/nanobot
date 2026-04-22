@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -72,12 +73,17 @@ def test_error_json() -> None:
 
 
 def test_chat_completion_response() -> None:
-    result = _chat_completion_response("hello world", "test-model")
+    result = _chat_completion_response(
+        "hello world",
+        "test-model",
+        usage={"prompt_tokens": 10, "completion_tokens": 5},
+    )
     assert result["object"] == "chat.completion"
     assert result["model"] == "test-model"
     assert result["choices"][0]["message"]["content"] == "hello world"
     assert result["choices"][0]["finish_reason"] == "stop"
     assert result["id"].startswith("chatcmpl-")
+    assert result["usage"] == {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
 
 
 @pytest.mark.skipif(not HAS_AIOHTTP, reason="aiohttp not installed")
@@ -425,3 +431,33 @@ async def test_process_direct_accepts_media() -> None:
     assert captured_msg is not None
     assert captured_msg.media == ["/tmp/image.png", "/tmp/report.pdf"]
     assert captured_msg.content == "analyze this"
+
+
+@pytest.mark.asyncio
+async def test_non_streaming_api_uses_response_usage_metadata() -> None:
+    request = MagicMock()
+    request.content_type = "application/json"
+    request.json = AsyncMock(
+        return_value={
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+    )
+    request.app = {
+        "agent_loop": MagicMock(
+            process_direct=AsyncMock(
+                return_value=SimpleNamespace(
+                    content="reply",
+                    metadata={"usage": {"prompt_tokens": 7, "completion_tokens": 3}},
+                )
+            )
+        ),
+        "model_name": "test-model",
+        "request_timeout": 10.0,
+        "session_locks": {},
+    }
+
+    resp = await handle_chat_completions(request)
+
+    assert resp.status == 200
+    body = json.loads(resp.body)
+    assert body["usage"] == {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10}

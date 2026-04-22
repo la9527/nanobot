@@ -11,6 +11,7 @@ import pytest
 
 from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.providers.base import LLMResponse
+from nanobot.response_status import SESSION_RESPONSE_FOOTER_MODE_KEY
 
 
 def _make_loop():
@@ -127,6 +128,7 @@ class TestRestartCommand:
         assert response is not None
         assert "/restart" in response.content
         assert "/status" in response.content
+        assert "/usage" in response.content
         assert response.metadata == {"render_as": "text"}
 
     @pytest.mark.asyncio
@@ -229,3 +231,140 @@ class TestRestartCommand:
 
         assert response is not None
         assert response.metadata == {"render_as": "text"}
+
+    @pytest.mark.asyncio
+    async def test_usage_command_updates_session_footer_mode(self):
+        loop, _bus = _make_loop()
+        session = MagicMock()
+        session.metadata = {}
+        session.get_history.return_value = []
+        loop.sessions.get_or_create.return_value = session
+
+        response = await loop.process_direct("/usage tokens", session_key="cli:test")
+
+        assert response is not None
+        assert "Selected `tokens`" in response.content
+        assert session.metadata[SESSION_RESPONSE_FOOTER_MODE_KEY] == "tokens"
+
+    @pytest.mark.asyncio
+    async def test_process_direct_appends_footer_for_non_streamed_reply(self):
+        loop, _bus = _make_loop()
+        session = MagicMock()
+        session.metadata = {SESSION_RESPONSE_FOOTER_MODE_KEY: "tokens"}
+        session.messages = []
+        session.last_consolidated = 0
+        session.get_history.return_value = []
+        session.add_message = MagicMock()
+        loop.sessions.get_or_create.return_value = session
+        loop.context.build_messages = MagicMock(return_value=[])
+        loop._run_agent_loop = AsyncMock(
+            return_value=("Hello from nanobot", None, [{"role": "assistant", "content": "Hello from nanobot"}], "done", False)
+        )
+        loop._save_turn = MagicMock()
+        loop._clear_pending_user_turn = MagicMock()
+        loop._clear_runtime_checkpoint = MagicMock()
+        loop.sessions.save = MagicMock()
+        loop._schedule_background = MagicMock()
+        loop.consolidator.maybe_consolidate_by_tokens = AsyncMock()
+        loop.consolidator.estimate_session_prompt_tokens = MagicMock(return_value=(1500, "tiktoken"))
+        loop._last_usage = {"prompt_tokens": 120, "completion_tokens": 24, "total_tokens": 144}
+
+        response = await loop.process_direct("hello", session_key="cli:test")
+
+        assert response is not None
+        assert response.content.endswith("Status: model=test-model | tokens=🔵120 in/🟢24 out")
+        assert response.metadata["usage"]["total_tokens"] == 144
+        assert response.metadata["response_footer_mode"] == "tokens"
+
+    @pytest.mark.asyncio
+    async def test_process_direct_skips_footer_for_api_channel(self):
+        loop, _bus = _make_loop()
+        session = MagicMock()
+        session.metadata = {SESSION_RESPONSE_FOOTER_MODE_KEY: "full"}
+        session.messages = []
+        session.last_consolidated = 0
+        session.get_history.return_value = []
+        session.add_message = MagicMock()
+        loop.sessions.get_or_create.return_value = session
+        loop.context.build_messages = MagicMock(return_value=[])
+        loop._run_agent_loop = AsyncMock(
+            return_value=("API reply", None, [{"role": "assistant", "content": "API reply"}], "done", False)
+        )
+        loop._save_turn = MagicMock()
+        loop._clear_pending_user_turn = MagicMock()
+        loop._clear_runtime_checkpoint = MagicMock()
+        loop.sessions.save = MagicMock()
+        loop._schedule_background = MagicMock()
+        loop.consolidator.maybe_consolidate_by_tokens = AsyncMock()
+        loop.consolidator.estimate_session_prompt_tokens = MagicMock(return_value=(2048, "tiktoken"))
+        loop._last_usage = {"prompt_tokens": 200, "completion_tokens": 50, "total_tokens": 250}
+
+        response = await loop.process_direct("hello", session_key="api:test", channel="api")
+
+        assert response is not None
+        assert response.content == "API reply"
+        assert response.metadata["usage"]["total_tokens"] == 250
+
+    @pytest.mark.asyncio
+    async def test_process_direct_streaming_appends_footer_before_stream_end(self):
+        loop, _bus = _make_loop()
+        session = MagicMock()
+        session.metadata = {SESSION_RESPONSE_FOOTER_MODE_KEY: "tokens"}
+        session.messages = []
+        session.last_consolidated = 0
+        session.get_history.return_value = []
+        session.add_message = MagicMock()
+        loop.sessions.get_or_create.return_value = session
+        loop.context.build_messages = MagicMock(return_value=[])
+        loop._save_turn = MagicMock()
+        loop._clear_pending_user_turn = MagicMock()
+        loop._clear_runtime_checkpoint = MagicMock()
+        loop.sessions.save = MagicMock()
+        loop._schedule_background = MagicMock()
+        loop.consolidator.maybe_consolidate_by_tokens = AsyncMock()
+        loop.consolidator.estimate_session_prompt_tokens = MagicMock(return_value=(1500, "tiktoken"))
+        loop._last_usage = {"prompt_tokens": 120, "completion_tokens": 24, "total_tokens": 144}
+
+        async def fake_run_agent_loop(
+            _messages,
+            *,
+            on_stream=None,
+            on_stream_end=None,
+            **_kwargs,
+        ):
+            assert on_stream is not None
+            assert on_stream_end is not None
+            await on_stream("Hello from nanobot")
+            await on_stream_end(resuming=False)
+            return (
+                "Hello from nanobot",
+                None,
+                [{"role": "assistant", "content": "Hello from nanobot"}],
+                "done",
+                False,
+            )
+
+        loop._run_agent_loop = fake_run_agent_loop
+
+        streamed_chunks: list[str] = []
+        stream_end_events: list[bool] = []
+
+        async def on_stream(delta: str) -> None:
+            streamed_chunks.append(delta)
+
+        async def on_stream_end(*, resuming: bool = False) -> None:
+            stream_end_events.append(resuming)
+
+        response = await loop.process_direct(
+            "hello",
+            session_key="telegram:test",
+            channel="telegram",
+            chat_id="123",
+            on_stream=on_stream,
+            on_stream_end=on_stream_end,
+        )
+
+        assert response is not None
+        assert response.metadata.get("_streamed") is True
+        assert streamed_chunks[-1] == "\n\nStatus: model=test-model | tokens=🔵120 in/🟢24 out"
+        assert stream_end_events == [False]

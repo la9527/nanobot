@@ -271,6 +271,8 @@ That's it! You have a working AI agent in 2 minutes.
 
 Connect nanobot to your favorite chat platform. Want to build your own? See the [Channel Plugin Guide](./docs/CHANNEL_PLUGIN_GUIDE.md). For non-channel runtime extensions, see the [Runtime Plugin Guide](./docs/RUNTIME_PLUGIN_GUIDE.md) and the [Smart Router Guide](./docs/SMART_ROUTER_GUIDE.md).
 
+If you want session-level model switching across direct models and smart-router, see [Model Targets](./docs/MODEL_TARGETS.md).
+
 | Channel | What you need |
 |---------|---------------|
 | **Telegram** | Bot token from @BotFather |
@@ -1921,7 +1923,9 @@ These commands work inside chat channels and interactive agent sessions:
 | `/new` | Start a new conversation |
 | `/stop` | Stop the current task |
 | `/restart` | Restart the bot |
+| `/model` | Show or change the active model target for the current session |
 | `/status` | Show bot status |
+| `/usage off\|tokens\|full` | Control the per-session reply footer for non-streaming chat replies |
 | `/dream` | Run Dream memory consolidation now |
 | `/dream-log` | Show the latest Dream memory change |
 | `/dream-log <sha>` | Show a specific Dream memory change |
@@ -2022,6 +2026,8 @@ If `channel` points to a channel that is not enabled in your config, nanobot wil
 - `POST /v1/chat/completions`
 
 ### curl
+
+Non-streaming chat/API sessions keep token usage in the JSON `usage` field. The in-chat `/usage` footer only applies to regular non-streaming chat replies and CLI sessions, not to OpenAI-compatible response text bodies.
 
 ```bash
 curl http://127.0.0.1:8900/v1/chat/completions \

@@ -64,6 +64,26 @@ class DreamConfig(Base):
         return f"every {hours}h"
 
 
+class ModelTargetConfig(Base):
+    """Named target that can resolve to a direct model or smart-router."""
+
+    kind: Literal["provider_model", "smart_router"] = "provider_model"
+    provider: str | None = None
+    model: str | None = None
+    description: str = ""
+
+
+class ModelSelectionConfig(Base):
+    """Configurable model target selection defaults."""
+
+    active_target: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("activeTarget", "active_target"),
+        serialization_alias="activeTarget",
+    )
+    targets: dict[str, ModelTargetConfig] = Field(default_factory=dict)
+
+
 class AgentDefaults(Base):
     """Default agent configuration."""
 
@@ -83,6 +103,11 @@ class AgentDefaults(Base):
     timezone: str = "UTC"  # IANA timezone, e.g. "Asia/Shanghai", "America/New_York"
     unified_session: bool = False  # Share one session across all channels (single-user multi-device)
     disabled_skills: list[str] = Field(default_factory=list)  # Skill names to exclude from loading (e.g. ["summarize", "skill-creator"])
+    model_selection: ModelSelectionConfig = Field(
+        default_factory=ModelSelectionConfig,
+        validation_alias=AliasChoices("modelSelection", "model_selection"),
+        serialization_alias="modelSelection",
+    )
     session_ttl_minutes: int = Field(
         default=0,
         ge=0,

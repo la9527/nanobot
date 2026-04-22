@@ -210,7 +210,9 @@ class TelegramChannel(BaseChannel):
         BotCommand("new", "Start a new conversation"),
         BotCommand("stop", "Stop the current task"),
         BotCommand("restart", "Restart the bot"),
+        BotCommand("model", "Show or change the active model target"),
         BotCommand("status", "Show bot status"),
+        BotCommand("usage", "Show or change the reply footer mode"),
         BotCommand("dream", "Run Dream memory consolidation now"),
         BotCommand("dream_log", "Show the latest Dream memory change"),
         BotCommand("dream_restore", "Restore Dream memory to an earlier version"),
@@ -304,7 +306,7 @@ class TelegramChannel(BaseChannel):
         self._app.add_handler(MessageHandler(filters.Regex(r"^/start(?:@\w+)?$"), self._on_start))
         self._app.add_handler(
             MessageHandler(
-                filters.Regex(r"^/(new|stop|restart|status|dream)(?:@\w+)?(?:\s+.*)?$"),
+                filters.Regex(r"^/(new|stop|restart|model|status|usage|dream)(?:@\w+)?(?:\s+.*)?$"),
                 self._forward_command,
             )
         )
@@ -369,9 +371,30 @@ class TelegramChannel(BaseChannel):
 
         if self._app:
             logger.info("Stopping Telegram bot...")
-            await self._app.updater.stop()
-            await self._app.stop()
-            await self._app.shutdown()
+            updater = getattr(self._app, "updater", None)
+            if updater is not None:
+                try:
+                    if getattr(updater, "running", None) is not False:
+                        await updater.stop()
+                except RuntimeError as e:
+                    if "not running" in str(e).lower():
+                        logger.debug("Telegram updater already stopped")
+                    else:
+                        raise
+            try:
+                await self._app.stop()
+            except RuntimeError as e:
+                if "not running" in str(e).lower():
+                    logger.debug("Telegram application already stopped")
+                else:
+                    raise
+            try:
+                await self._app.shutdown()
+            except RuntimeError as e:
+                if "not running" in str(e).lower():
+                    logger.debug("Telegram application already shut down")
+                else:
+                    raise
             self._app = None
 
     @staticmethod

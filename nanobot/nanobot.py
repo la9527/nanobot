@@ -76,6 +76,8 @@ class Nanobot:
             provider=provider,
             workspace=config.workspace_path,
             model=defaults.model,
+            runtime_config=config,
+            make_provider=_make_provider,
             max_iterations=defaults.max_tool_iterations,
             context_window_tokens=defaults.context_window_tokens,
             context_block_limit=defaults.context_block_limit,

@@ -20,6 +20,7 @@ from aiohttp import web
 from loguru import logger
 
 from nanobot.config.paths import get_media_dir
+from nanobot.response_status import normalize_usage_snapshot
 from nanobot.utils.helpers import safe_filename
 from nanobot.utils.runtime import EMPTY_FINAL_RESPONSE_MESSAGE
 
@@ -47,7 +48,13 @@ def _error_json(status: int, message: str, err_type: str = "invalid_request_erro
     )
 
 
-def _chat_completion_response(content: str, model: str) -> dict[str, Any]:
+def _chat_completion_response(
+    content: str,
+    model: str,
+    *,
+    usage: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    normalized_usage = normalize_usage_snapshot(usage)
     return {
         "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
         "object": "chat.completion",
@@ -60,7 +67,11 @@ def _chat_completion_response(content: str, model: str) -> dict[str, Any]:
                 "finish_reason": "stop",
             }
         ],
-        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        "usage": {
+            "prompt_tokens": normalized_usage["prompt_tokens"],
+            "completion_tokens": normalized_usage["completion_tokens"],
+            "total_tokens": normalized_usage["total_tokens"],
+        },
     }
 
 
@@ -71,6 +82,14 @@ def _response_text(value: Any) -> str:
     if hasattr(value, "content"):
         return str(getattr(value, "content") or "")
     return str(value)
+
+
+def _response_usage(value: Any) -> dict[str, int]:
+    """Extract normalized usage metadata from process_direct output."""
+    metadata = getattr(value, "metadata", None)
+    if isinstance(metadata, dict):
+        return normalize_usage_snapshot(metadata.get("usage"))
+    return normalize_usage_snapshot(None)
 
 # ---------------------------------------------------------------------------
 # SSE helpers
@@ -317,6 +336,7 @@ async def handle_chat_completions(request: web.Request) -> web.Response:
                     timeout=timeout_s,
                 )
                 response_text = _response_text(response)
+                response_usage = _response_usage(response)
 
                 if not response_text or not response_text.strip():
                     logger.warning("Empty response for session {}, retrying", session_key)
@@ -331,9 +351,11 @@ async def handle_chat_completions(request: web.Request) -> web.Response:
                         timeout=timeout_s,
                     )
                     response_text = _response_text(retry_response)
+                    response_usage = _response_usage(retry_response)
                     if not response_text or not response_text.strip():
                         logger.warning("Empty response after retry, using fallback")
                         response_text = _FALLBACK
+                        response_usage = normalize_usage_snapshot(None)
 
             except asyncio.TimeoutError:
                 return _error_json(504, f"Request timed out after {timeout_s}s")
@@ -344,7 +366,9 @@ async def handle_chat_completions(request: web.Request) -> web.Response:
         logger.exception("Unexpected API lock error for session {}", session_key)
         return _error_json(500, "Internal server error", err_type="server_error")
 
-    return web.json_response(_chat_completion_response(response_text, model_name))
+    return web.json_response(
+        _chat_completion_response(response_text, model_name, usage=response_usage)
+    )
 
 
 async def handle_models(request: web.Request) -> web.Response:

@@ -5,6 +5,7 @@ runtime behavior such as provider wrappers, hooks, tools, and runtime status.
 """
 
 from .registry import (
+    build_runtime_plugin_model_targets,
     build_runtime_plugin_hooks,
     describe_runtime_plugin_status,
     describe_runtime_plugin_statuses,
@@ -19,6 +20,7 @@ __all__ = [
     "RuntimePluginContext",
     "RuntimePluginRuntimeContext",
     "RuntimePluginStatus",
+    "build_runtime_plugin_model_targets",
     "build_runtime_plugin_hooks",
     "describe_runtime_plugin_status",
     "describe_runtime_plugin_statuses",

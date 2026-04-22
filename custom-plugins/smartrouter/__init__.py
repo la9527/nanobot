@@ -1,4 +1,5 @@
 from nanobot.plugins import RuntimePlugin, RuntimePluginContext, RuntimePluginStatus
+from nanobot.model_targets import ResolvedModelTarget, SMART_ROUTER_TARGET_NAME
 
 from .config import RouterConfig, load_router_config_from_config, resolve_router_section
 from .smart_router_provider import SmartRouterProvider
@@ -55,11 +56,32 @@ def _describe_status(context: RuntimePluginContext) -> RuntimePluginStatus:
 	)
 
 
+def _build_model_targets(context: RuntimePluginContext) -> dict[str, ResolvedModelTarget]:
+	defaults = context.config.agents.defaults
+	router_config = load_router_config_from_config(
+		context.config,
+		default_model=defaults.model,
+		default_provider=None if defaults.provider == "auto" else defaults.provider,
+	)
+	description = (
+		f"smart-router via {router_config.config_source} "
+		f"(local={router_config.local.model}, mini={router_config.mini.model}, full={router_config.full.model})"
+	)
+	return {
+		SMART_ROUTER_TARGET_NAME: ResolvedModelTarget(
+			name=SMART_ROUTER_TARGET_NAME,
+			kind="smart_router",
+			description=description,
+		)
+	}
+
+
 def register_plugin() -> RuntimePlugin:
 	return RuntimePlugin(
 		name="smartrouter",
 		description="Rule-based local/mini/full provider router for Nanobot runtime",
 		source="custom",
+		build_model_targets=_build_model_targets,
 		build_provider=_build_provider,
 		describe_status=_describe_status,
 		is_enabled=lambda config: bool(

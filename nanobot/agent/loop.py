@@ -34,7 +34,22 @@ from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.command import CommandContext, CommandRouter, register_builtin_commands
 from nanobot.config.schema import AgentDefaults
+from nanobot.model_targets import (
+    DEFAULT_MODEL_TARGET_NAME,
+    SESSION_MODEL_TARGET_KEY,
+    apply_model_target,
+    build_model_targets,
+    get_active_model_target_name,
+    resolve_model_target,
+)
 from nanobot.providers.base import LLMProvider
+from nanobot.response_status import (
+    DEFAULT_RESPONSE_FOOTER_MODE,
+    SESSION_RESPONSE_FOOTER_MODE_KEY,
+    build_response_footer,
+    normalize_response_footer_mode,
+    normalize_usage_snapshot,
+)
 from nanobot.session.manager import Session, SessionManager
 from nanobot.utils.document import extract_documents
 from nanobot.utils.helpers import image_placeholder_text
@@ -143,6 +158,8 @@ class AgentLoop:
         provider: LLMProvider,
         workspace: Path,
         model: str | None = None,
+        runtime_config: Any | None = None,
+        make_provider: Callable[[Any], LLMProvider] | None = None,
         max_iterations: int | None = None,
         context_window_tokens: int | None = None,
         context_block_limit: int | None = None,
@@ -171,6 +188,8 @@ class AgentLoop:
         self.provider = provider
         self.workspace = workspace
         self.model = model or provider.get_default_model()
+        self.runtime_config = runtime_config
+        self._make_provider = make_provider
         self.max_iterations = (
             max_iterations if max_iterations is not None else defaults.max_tool_iterations
         )
@@ -254,6 +273,92 @@ class AgentLoop:
         self._current_iteration: int = 0
         self.commands = CommandRouter()
         register_builtin_commands(self.commands)
+
+    def get_available_model_targets(self) -> dict[str, Any]:
+        """Return configured model targets, including built-in defaults."""
+        if self.runtime_config is None:
+            return {}
+        return build_model_targets(self.runtime_config)
+
+    def get_active_model_target_name(self, session: Session | None) -> str:
+        """Return the active target name for the given session."""
+        if self.runtime_config is None:
+            return DEFAULT_MODEL_TARGET_NAME
+        return get_active_model_target_name(self.runtime_config, session)
+
+    def set_session_model_target(self, session: Session, target_name: str) -> None:
+        """Persist a per-session model target override."""
+        session.metadata[SESSION_MODEL_TARGET_KEY] = target_name
+        self.sessions.save(session)
+
+    def clear_session_model_target(self, session: Session) -> None:
+        """Clear a per-session model target override."""
+        session.metadata.pop(SESSION_MODEL_TARGET_KEY, None)
+        self.sessions.save(session)
+
+    def get_response_footer_mode(self, session: Session | None) -> str:
+        """Return the active per-session response footer mode."""
+        if session is None:
+            return DEFAULT_RESPONSE_FOOTER_MODE
+        return normalize_response_footer_mode(
+            session.metadata.get(SESSION_RESPONSE_FOOTER_MODE_KEY)
+        )
+
+    def set_response_footer_mode(self, session: Session, mode: str) -> None:
+        """Persist a per-session response footer mode override."""
+        normalized = normalize_response_footer_mode(mode)
+        if normalized == DEFAULT_RESPONSE_FOOTER_MODE:
+            session.metadata.pop(SESSION_RESPONSE_FOOTER_MODE_KEY, None)
+        else:
+            session.metadata[SESSION_RESPONSE_FOOTER_MODE_KEY] = normalized
+        self.sessions.save(session)
+
+    def build_response_status(self, session: Session | None) -> dict[str, Any]:
+        """Build a normalized status snapshot for the current session."""
+        status_model = self.model
+        active_target = None
+        if hasattr(self, "_resolve_execution_runtime"):
+            _provider, status_model, active_target = self._resolve_execution_runtime(session)
+            if active_target == "smart-router":
+                status_model = "smart-router"
+
+        ctx_est = 0
+        if session is not None:
+            try:
+                ctx_est, _ = self.consolidator.estimate_session_prompt_tokens(session)
+            except Exception:
+                pass
+
+        usage = normalize_usage_snapshot(self._last_usage)
+        if ctx_est <= 0:
+            ctx_est = usage.get("prompt_tokens", 0)
+
+        return {
+            "model": status_model,
+            "active_target": active_target or self.get_active_model_target_name(session),
+            "usage": usage,
+            "context_tokens_estimate": ctx_est,
+            "context_window_tokens": self.context_window_tokens,
+            "footer_mode": self.get_response_footer_mode(session),
+        }
+
+    def _resolve_execution_runtime(self, session: Session | None) -> tuple[LLMProvider, str, str | None]:
+        """Resolve the provider/model to use for a single turn."""
+        if self.runtime_config is None or self._make_provider is None:
+            return self.provider, self.model, None
+
+        target_name = self.get_active_model_target_name(session)
+        try:
+            target = resolve_model_target(self.runtime_config, target_name)
+        except KeyError:
+            return self.provider, self.model, None
+
+        runtime_config = apply_model_target(self.runtime_config, target)
+        provider = self._make_provider(runtime_config)
+        model = runtime_config.agents.defaults.model
+        if target.kind == "smart_router":
+            model = target.name
+        return provider, model, target.name
 
     def _register_default_tools(self) -> None:
         """Register the default set of tools."""
@@ -358,6 +463,8 @@ class AgentLoop:
         chat_id: str = "direct",
         message_id: str | None = None,
         pending_queue: asyncio.Queue | None = None,
+        provider: LLMProvider | None = None,
+        model: str | None = None,
     ) -> tuple[str | None, list[str], list[dict], str, bool]:
         """Run the agent iteration loop.
 
@@ -380,6 +487,10 @@ class AgentLoop:
         hook: AgentHook = (
             CompositeHook([loop_hook] + self._extra_hooks) if self._extra_hooks else loop_hook
         )
+
+        active_provider = provider or self.provider
+        active_model = model or self.model
+        runner = self.runner if active_provider is self.provider else AgentRunner(active_provider)
 
         async def _checkpoint(payload: dict[str, Any]) -> None:
             if session is None:
@@ -414,10 +525,10 @@ class AgentLoop:
                 items.append({"role": "user", "content": merged})
             return items
 
-        result = await self.runner.run(AgentRunSpec(
+        result = await runner.run(AgentRunSpec(
             initial_messages=initial_messages,
             tools=self.tools,
-            model=self.model,
+            model=active_model,
             max_iterations=self.max_iterations,
             max_tool_result_chars=self.max_tool_result_chars,
             hook=hook,
@@ -660,6 +771,7 @@ class AgentLoop:
             self._set_tool_context(channel, chat_id, msg.metadata.get("message_id"))
             history = session.get_history(max_messages=0)
             current_role = "assistant" if is_subagent else "user"
+            exec_provider, exec_model, _ = self._resolve_execution_runtime(session)
 
             # Subagent content is already in `history` above; passing it again
             # as current_message would double-project it into the prompt.
@@ -674,6 +786,8 @@ class AgentLoop:
             final_content, _, all_msgs, _, _ = await self._run_agent_loop(
                 messages, session=session, channel=channel, chat_id=chat_id,
                 message_id=msg.metadata.get("message_id"),
+                provider=exec_provider,
+                model=exec_model,
             )
             self._save_turn(session, all_msgs, 1 + len(history))
             self._clear_runtime_checkpoint(session)
@@ -717,6 +831,7 @@ class AgentLoop:
                 message_tool.start_turn()
 
         history = session.get_history(max_messages=0)
+        exec_provider, exec_model, _ = self._resolve_execution_runtime(session)
 
         initial_messages = self.context.build_messages(
             history=history,
@@ -765,17 +880,30 @@ class AgentLoop:
             self.sessions.save(session)
             user_persisted_early = True
 
+        pending_final_stream_end = False
+
+        async def _on_stream_end_proxy(*, resuming: bool = False) -> None:
+            nonlocal pending_final_stream_end
+            if on_stream_end is None:
+                return
+            if resuming:
+                await on_stream_end(resuming=True)
+                return
+            pending_final_stream_end = True
+
         final_content, _, all_msgs, stop_reason, had_injections = await self._run_agent_loop(
             initial_messages,
             on_progress=on_progress or _bus_progress,
             on_stream=on_stream,
-            on_stream_end=on_stream_end,
+            on_stream_end=_on_stream_end_proxy if on_stream is not None else on_stream_end,
             on_retry_wait=_on_retry_wait,
             session=session,
             channel=msg.channel,
             chat_id=msg.chat_id,
             message_id=msg.metadata.get("message_id"),
             pending_queue=pending_queue,
+            provider=exec_provider,
+            model=exec_model,
         )
 
         if final_content is None or not final_content.strip():
@@ -788,6 +916,27 @@ class AgentLoop:
         self._clear_runtime_checkpoint(session)
         self.sessions.save(session)
         self._schedule_background(self.consolidator.maybe_consolidate_by_tokens(session))
+
+        status_snapshot = self.build_response_status(session)
+        if (
+            msg.channel != "api"
+            and final_content != EMPTY_FINAL_RESPONSE_MESSAGE
+        ):
+            footer = build_response_footer(
+                mode=status_snapshot["footer_mode"],
+                model=status_snapshot["model"],
+                active_target=status_snapshot["active_target"],
+                usage=status_snapshot["usage"],
+                context_window_tokens=status_snapshot["context_window_tokens"],
+                context_tokens_estimate=status_snapshot["context_tokens_estimate"],
+            )
+            if footer and on_stream is None:
+                final_content = final_content.rstrip() + footer
+            elif footer and on_stream is not None:
+                await on_stream(footer)
+
+        if on_stream is not None and pending_final_stream_end and on_stream_end is not None:
+            await on_stream_end(resuming=False)
 
         # When follow-up messages were injected mid-turn, a later natural
         # language reply may address those follow-ups and should not be
@@ -803,6 +952,11 @@ class AgentLoop:
         logger.info("Response to {}:{}: {}", msg.channel, msg.sender_id, preview)
 
         meta = dict(msg.metadata or {})
+        meta["usage"] = status_snapshot["usage"]
+        meta["response_model"] = status_snapshot["model"]
+        meta["response_footer_mode"] = status_snapshot["footer_mode"]
+        if status_snapshot["active_target"]:
+            meta["active_target"] = status_snapshot["active_target"]
         if on_stream is not None and stop_reason != "error":
             meta["_streamed"] = True
         return OutboundMessage(

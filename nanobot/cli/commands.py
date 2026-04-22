@@ -540,6 +540,8 @@ def serve(
         provider=provider,
         workspace=runtime_config.workspace_path,
         model=runtime_config.agents.defaults.model,
+        runtime_config=runtime_config,
+        make_provider=_make_provider,
         max_iterations=runtime_config.agents.defaults.max_tool_iterations,
         context_window_tokens=runtime_config.agents.defaults.context_window_tokens,
         context_block_limit=runtime_config.agents.defaults.context_block_limit,
@@ -637,6 +639,8 @@ def gateway(
         provider=provider,
         workspace=config.workspace_path,
         model=config.agents.defaults.model,
+        runtime_config=config,
+        make_provider=_make_provider,
         max_iterations=config.agents.defaults.max_tool_iterations,
         context_window_tokens=config.agents.defaults.context_window_tokens,
         web_config=config.tools.web,
@@ -849,27 +853,61 @@ def gateway(
     console.print(f"[green]✓[/green] Dream: {dream_cfg.describe_schedule()}")
 
     async def run():
+        runtime_tasks: list[asyncio.Task] = []
         try:
             await cron.start()
             await heartbeat.start()
-            await asyncio.gather(
-                agent.run(),
-                channels.start_all(),
-                _health_server(config.gateway.host, port),
+            runtime_tasks = [
+                asyncio.create_task(agent.run()),
+                asyncio.create_task(channels.start_all()),
+                asyncio.create_task(_health_server(config.gateway.host, port)),
+            ]
+            done, pending = await asyncio.wait(
+                runtime_tasks,
+                return_when=asyncio.FIRST_EXCEPTION,
             )
+
+            first_error: Exception | None = None
+            for task in done:
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    continue
+                except Exception as exc:
+                    if first_error is None:
+                        first_error = exc
+
+            if first_error is not None:
+                raise first_error
+
+            if pending:
+                await asyncio.gather(*pending)
         except KeyboardInterrupt:
             console.print("\nShutting down...")
+        except OSError as exc:
+            if exc.errno == 48:
+                console.print(
+                    f"\n[red]Error:[/red] Health endpoint port {port} is already in use."
+                )
+            else:
+                console.print("\n[red]Error: Gateway crashed unexpectedly[/red]")
+                console.print(traceback.format_exc())
         except Exception:
             import traceback
 
             console.print("\n[red]Error: Gateway crashed unexpectedly[/red]")
             console.print(traceback.format_exc())
         finally:
-            await agent.close_mcp()
+            agent.stop()
             heartbeat.stop()
             cron.stop()
-            agent.stop()
+            for task in runtime_tasks:
+                if not task.done():
+                    task.cancel()
+            if runtime_tasks:
+                await asyncio.gather(*runtime_tasks, return_exceptions=True)
             await channels.stop_all()
+            await agent.close_mcp()
 
     asyncio.run(run())
 
@@ -920,6 +958,8 @@ def agent(
         provider=provider,
         workspace=config.workspace_path,
         model=config.agents.defaults.model,
+        runtime_config=config,
+        make_provider=_make_provider,
         max_iterations=config.agents.defaults.max_tool_iterations,
         context_window_tokens=config.agents.defaults.context_window_tokens,
         web_config=config.tools.web,

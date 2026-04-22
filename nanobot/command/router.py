@@ -55,25 +55,44 @@ class CommandRouter:
         self._interceptors.append(handler)
 
     def is_priority(self, text: str) -> bool:
-        return text.strip().lower() in self._priority
+        return self._normalize(text) in self._priority
+
+    @staticmethod
+    def _normalize(text: str) -> str:
+        """Normalize slash commands, including '/cmd@botname' forms.
+
+        Telegram group commands can arrive as '/status@mybot'.
+        We strip the bot mention so exact/prefix routing still matches.
+        """
+        raw = text.strip()
+        if not raw.startswith("/"):
+            return raw.lower()
+
+        first, sep, rest = raw.partition(" ")
+        if "@" in first:
+            base, at, mention = first.partition("@")
+            if at and mention and base.startswith("/"):
+                first = base
+        normalized = first if not sep else f"{first}{sep}{rest}"
+        return normalized.lower()
 
     async def dispatch_priority(self, ctx: CommandContext) -> OutboundMessage | None:
         """Dispatch a priority command. Called from run() without the lock."""
-        handler = self._priority.get(ctx.raw.lower())
+        handler = self._priority.get(self._normalize(ctx.raw))
         if handler:
             return await handler(ctx)
         return None
 
     async def dispatch(self, ctx: CommandContext) -> OutboundMessage | None:
         """Try exact, prefix, then interceptors. Returns None if unhandled."""
-        cmd = ctx.raw.lower()
+        cmd = self._normalize(ctx.raw)
 
         if handler := self._exact.get(cmd):
             return await handler(ctx)
 
         for pfx, handler in self._prefix:
             if cmd.startswith(pfx):
-                ctx.args = ctx.raw[len(pfx):]
+                ctx.args = cmd[len(pfx):]
                 return await handler(ctx)
 
         for interceptor in self._interceptors:

@@ -174,6 +174,41 @@ def build_runtime_plugin_hooks(
     return hooks
 
 
+def build_runtime_plugin_model_targets(
+    config: Any,
+    *,
+    make_base_provider: Any,
+) -> dict[str, Any]:
+    """Collect named model targets contributed by enabled runtime plugins."""
+    targets: dict[str, Any] = {}
+    context = None
+    for plugin in discover_runtime_plugins().values():
+        if not is_runtime_plugin_enabled(config, plugin):
+            continue
+        if plugin.build_model_targets is None:
+            continue
+        if context is None:
+            context = RuntimePluginContext(
+                config=config,
+                make_base_provider=make_base_provider,
+            )
+        try:
+            built_targets = plugin.build_model_targets(context) or {}
+        except Exception as exc:
+            logger.warning("Failed to build runtime plugin model targets for '{}': {}", plugin.name, exc)
+            continue
+        if not isinstance(built_targets, dict):
+            logger.warning(
+                "Runtime plugin '{}' returned invalid model target catalog",
+                plugin.name,
+            )
+            continue
+        for name, target in built_targets.items():
+            if name not in targets:
+                targets[name] = target
+    return targets
+
+
 def initialize_runtime_plugins(
     config: Any,
     *,
