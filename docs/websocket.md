@@ -416,7 +416,7 @@ If you want WebUI/WebSocket access from Tailscale peers while keeping general ex
 2. Apply host firewall rules (macOS `pf`) to allow only localhost + Tailscale ranges:
 
 ```bash
-sudo /Volumes/ExtData/Nanobot/infra/scripts/apply-webui-tailscale-pf.sh
+sudo /Volumes/ExtData/Nanobot/source/scripts/apply-webui-tailscale-pf.sh
 ```
 
 3. Verify:
@@ -430,7 +430,7 @@ curl -i "http://${TS_IP}:8765/webui/bootstrap"
 Rollback:
 
 ```bash
-sudo /Volumes/ExtData/Nanobot/infra/scripts/remove-webui-tailscale-pf.sh
+sudo /Volumes/ExtData/Nanobot/source/scripts/remove-webui-tailscale-pf.sh
 ```
 
 Notes:
