@@ -17,6 +17,7 @@ from nanobot.bus.events import OutboundMessage
 from nanobot.channels.websocket import (
     WebSocketChannel,
     WebSocketConfig,
+    _is_trusted_webui_client,
     _is_valid_chat_id,
     _issue_route_secret_matches,
     _normalize_config_path,
@@ -80,6 +81,25 @@ def test_parse_query_extracts_token_and_client_id() -> None:
     query = _parse_query("/?token=secret&client_id=u1")
     assert query.get("token") == ["secret"]
     assert query.get("client_id") == ["u1"]
+
+
+@pytest.mark.parametrize(
+    ("remote", "trusted"),
+    [
+        (("127.0.0.1", 12345), True),
+        (("::1", 12345, 0, 0), True),
+        (("100.101.102.103", 12345), True),
+        (("fd7a:115c:a1e0::1", 12345, 0, 0), True),
+        (("203.0.113.9", 12345), False),
+        (("2001:db8::9", 12345, 0, 0), False),
+    ],
+)
+def test_is_trusted_webui_client(remote: Any, trusted: bool) -> None:
+    class _Conn:
+        def __init__(self, remote_address: Any) -> None:
+            self.remote_address = remote_address
+
+    assert _is_trusted_webui_client(_Conn(remote)) is trusted
 
 
 @pytest.mark.parametrize(

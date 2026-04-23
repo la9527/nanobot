@@ -9,6 +9,7 @@ import email.utils
 import hashlib
 import hmac
 import http
+import ipaddress
 import json
 import mimetypes
 import re
@@ -248,6 +249,13 @@ def _extract_data_url_mime(url: str) -> str | None:
 
 
 _LOCALHOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+_TRUSTED_TAILSCALE_NETWORKS: tuple[
+    ipaddress.IPv4Network | ipaddress.IPv6Network,
+    ...,
+] = (
+    ipaddress.ip_network("100.64.0.0/10"),
+    ipaddress.ip_network("fd7a:115c:a1e0::/48"),
+)
 
 # Matches the legacy chat-id pattern but allows file-system-safe stems too,
 # so the API can address sessions whose keys came from non-WebSocket channels.
@@ -264,16 +272,40 @@ def _decode_api_key(raw_key: str) -> str | None:
 
 def _is_localhost(connection: Any) -> bool:
     """Return True if *connection* originated from the loopback interface."""
+    ip = _remote_ip_address(connection)
+    return ip is not None and ip.is_loopback
+
+
+def _remote_ip_address(connection: Any) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    """Extract and normalize remote peer IP from a websocket connection object."""
     addr = getattr(connection, "remote_address", None)
     if not addr:
-        return False
+        return None
     host = addr[0] if isinstance(addr, tuple) else addr
     if not isinstance(host, str):
-        return False
+        return None
     # ``::ffff:127.0.0.1`` is loopback in IPv6-mapped form.
     if host.startswith("::ffff:"):
         host = host[7:]
-    return host in _LOCALHOSTS
+    # Strip IPv6 zone identifier (e.g. ``fe80::1%lo0``).
+    if "%" in host:
+        host = host.split("%", 1)[0]
+    if host == "localhost":
+        host = "127.0.0.1"
+    try:
+        return ipaddress.ip_address(host)
+    except ValueError:
+        return None
+
+
+def _is_trusted_webui_client(connection: Any) -> bool:
+    """Allow WebUI/WS access only from loopback or Tailscale address space."""
+    ip = _remote_ip_address(connection)
+    if ip is None:
+        return False
+    if ip.is_loopback:
+        return True
+    return any(ip in net for net in _TRUSTED_TAILSCALE_NETWORKS)
 
 
 def _http_response(
@@ -501,6 +533,7 @@ class WebSocketChannel(BaseChannel):
     async def _dispatch_http(self, connection: Any, request: WsRequest) -> Any:
         """Route an inbound HTTP request to a handler or to the WS upgrade path."""
         got, query = _parse_request_path(request.path)
+        trusted_client = _is_trusted_webui_client(connection)
 
         # 1. Token issue endpoint (legacy, optional, gated by configured secret).
         if self.config.token_issue_path:
@@ -513,6 +546,9 @@ class WebSocketChannel(BaseChannel):
             return self._handle_webui_bootstrap(connection)
 
         # 3. REST surface for the embedded UI.
+        if got.startswith("/api/") and not trusted_client:
+            return _http_error(403, "webui api is restricted to localhost/tailscale")
+
         if got == "/api/sessions":
             return self._handle_sessions_list(request)
 
@@ -540,6 +576,8 @@ class WebSocketChannel(BaseChannel):
         # unauthorized WS handshake instead of serving the SPA's index.html.
         expected_ws = self._expected_path()
         if got == expected_ws and _is_websocket_upgrade(request):
+            if not trusted_client:
+                return connection.respond(403, "Forbidden")
             client_id = _query_first(query, "client_id") or ""
             if len(client_id) > 128:
                 client_id = client_id[:128]
@@ -549,6 +587,8 @@ class WebSocketChannel(BaseChannel):
 
         # 5. Static SPA serving (only if a build directory was wired in).
         if self._static_dist_path is not None:
+            if not trusted_client:
+                return _http_error(403, "webui static is restricted to localhost/tailscale")
             response = self._serve_static(got)
             if response is not None:
                 return response
@@ -578,8 +618,8 @@ class WebSocketChannel(BaseChannel):
                 self._api_tokens.pop(token_key, None)
 
     def _handle_webui_bootstrap(self, connection: Any) -> Response:
-        if not _is_localhost(connection):
-            return _http_error(403, "webui bootstrap is localhost-only")
+        if not _is_trusted_webui_client(connection):
+            return _http_error(403, "webui bootstrap is restricted to localhost/tailscale")
         # Cap outstanding tokens to avoid runaway growth from a misbehaving client.
         self._purge_expired_issued_tokens()
         self._purge_expired_api_tokens()
