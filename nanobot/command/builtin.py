@@ -23,15 +23,7 @@ async def cmd_stop(ctx: CommandContext) -> OutboundMessage:
     """Cancel all active tasks and subagents for the session."""
     loop = ctx.loop
     msg = ctx.msg
-    tasks = loop._active_tasks.pop(msg.session_key, [])
-    cancelled = sum(1 for t in tasks if not t.done() and t.cancel())
-    for t in tasks:
-        try:
-            await t
-        except (asyncio.CancelledError, Exception):
-            pass
-    sub_cancelled = await loop.subagents.cancel_by_session(msg.session_key)
-    total = cancelled + sub_cancelled
+    total = await loop._cancel_active_tasks(msg.session_key)
     content = f"Stopped {total} task(s)." if total else "No active task to stop."
     return OutboundMessage(
         channel=msg.channel, chat_id=msg.chat_id, content=content,
@@ -255,8 +247,9 @@ async def cmd_model(ctx: CommandContext) -> OutboundMessage:
 
 
 async def cmd_new(ctx: CommandContext) -> OutboundMessage:
-    """Start a fresh session."""
+    """Stop active task and start a fresh session."""
     loop = ctx.loop
+    await loop._cancel_active_tasks(ctx.key)
     session = ctx.session or loop.sessions.get_or_create(ctx.key)
     snapshot = session.messages[session.last_consolidated:]
     session.clear()
@@ -482,7 +475,7 @@ def build_help_text() -> str:
     """Build canonical help text shared across channels."""
     lines = [
         "🐈 nanobot commands:",
-        "/new — Start a new conversation",
+        "/new — Stop current task and start a new conversation",
         "/stop — Stop the current task",
         "/restart — Restart the bot",
         "/model — Show or change the active model target",
