@@ -1355,6 +1355,8 @@ def test_gateway_health_endpoint_binds_and_serves_expected_responses(
         def __init__(self, **_kwargs) -> None:
             self.model = "test-model"
             self.dream = _FakeDream()
+            self.sessions = type("_Sessions", (), {"flush_all": lambda self: 0})()
+            self.sessions = type("_S", (), {"flush_all": staticmethod(lambda: 0)})()
             self.sessions = _FakeSessionManager()
 
         async def run(self) -> None:
@@ -1501,6 +1503,7 @@ def test_gateway_port_conflict_reports_clean_error_and_stops_runtime(
         def __init__(self, **_kwargs) -> None:
             self.model = "test-model"
             self.dream = _FakeDream()
+            self.sessions = type("_Sessions", (), {"flush_all": lambda self: 0})()
 
         async def run(self) -> None:
             captured["agent_run_started"] = True
@@ -1513,7 +1516,7 @@ def test_gateway_port_conflict_reports_clean_error_and_stops_runtime(
             captured["agent_stopped"] = True
 
     class _FakeChannelManager:
-        def __init__(self, _config, _bus) -> None:
+        def __init__(self, _config, _bus, session_manager=None) -> None:
             self.enabled_channels = ["telegram"]
 
         async def start_all(self) -> None:
