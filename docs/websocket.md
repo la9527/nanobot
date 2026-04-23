@@ -394,3 +394,46 @@ Clients connect with `?token=my-shared-secret&client_id=alice`.
 ```
 
 Clients connect to `ws://127.0.0.1:8765/chat/ws?client_id=...`. Trailing slashes are normalized, so `/chat/ws/` works the same.
+
+## Tailscale-only External Access
+
+If you want WebUI/WebSocket access from Tailscale peers while keeping general external access blocked, use this pattern:
+
+1. Bind websocket to all interfaces in `~/.nanobot/config.json`:
+
+```json
+{
+  "channels": {
+    "websocket": {
+      "enabled": true,
+      "host": "0.0.0.0",
+      "port": 8765
+    }
+  }
+}
+```
+
+2. Apply host firewall rules (macOS `pf`) to allow only localhost + Tailscale ranges:
+
+```bash
+sudo /Volumes/ExtData/Nanobot/infra/scripts/apply-webui-tailscale-pf.sh
+```
+
+3. Verify:
+
+```bash
+curl -i http://127.0.0.1:8765/webui/bootstrap
+TS_IP=$(tailscale ip -4 | head -n 1)
+curl -i "http://${TS_IP}:8765/webui/bootstrap"
+```
+
+Rollback:
+
+```bash
+sudo /Volumes/ExtData/Nanobot/infra/scripts/remove-webui-tailscale-pf.sh
+```
+
+Notes:
+- WebUI HTTP routes and websocket handshake are restricted to localhost/Tailscale clients in current runtime code.
+- `host: "127.0.0.1"` keeps the service local-only.
+- `host: "0.0.0.0"` is required for remote Tailscale clients.
