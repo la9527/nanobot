@@ -270,6 +270,51 @@ async def test_send_delta_emits_delta_and_stream_end() -> None:
 
 
 @pytest.mark.asyncio
+async def test_send_emits_response_model_metadata() -> None:
+    bus = MagicMock()
+    channel = WebSocketChannel({"enabled": True, "allowFrom": ["*"]}, bus)
+    mock_ws = AsyncMock()
+    channel._attach(mock_ws, "chat-1")
+
+    msg = OutboundMessage(
+        channel="websocket",
+        chat_id="chat-1",
+        content="hello",
+        metadata={"response_model": "smart-router", "active_target": "smart-router"},
+    )
+    await channel.send(msg)
+
+    payload = json.loads(mock_ws.send.call_args[0][0])
+    assert payload["event"] == "message"
+    assert payload["response_model"] == "smart-router"
+    assert payload["active_target"] == "smart-router"
+
+
+@pytest.mark.asyncio
+async def test_send_delta_emits_stream_end_response_model_metadata() -> None:
+    bus = MagicMock()
+    channel = WebSocketChannel({"enabled": True, "allowFrom": ["*"], "streaming": True}, bus)
+    mock_ws = AsyncMock()
+    channel._attach(mock_ws, "chat-1")
+
+    await channel.send_delta(
+        "chat-1",
+        "",
+        {
+            "_stream_end": True,
+            "_stream_id": "sid",
+            "response_model": "smart-router",
+            "active_target": "smart-router",
+        },
+    )
+
+    payload = json.loads(mock_ws.send.call_args[0][0])
+    assert payload["event"] == "stream_end"
+    assert payload["response_model"] == "smart-router"
+    assert payload["active_target"] == "smart-router"
+
+
+@pytest.mark.asyncio
 async def test_send_non_connection_closed_exception_is_raised() -> None:
     bus = MagicMock()
     channel = WebSocketChannel({"enabled": True, "allowFrom": ["*"]}, bus)

@@ -734,12 +734,21 @@ class AgentLoop:
                                 metadata=meta,
                             ))
 
-                        async def on_stream_end(*, resuming: bool = False) -> None:
+                        async def on_stream_end(
+                            *,
+                            resuming: bool = False,
+                            response_model: str | None = None,
+                            active_target: str | None = None,
+                        ) -> None:
                             nonlocal stream_segment
                             meta = dict(msg.metadata or {})
                             meta["_stream_end"] = True
                             meta["_resuming"] = resuming
                             meta["_stream_id"] = _current_stream_id()
+                            if isinstance(response_model, str) and response_model:
+                                meta["response_model"] = response_model
+                            if isinstance(active_target, str) and active_target:
+                                meta["active_target"] = active_target
                             await self.bus.publish_outbound(OutboundMessage(
                                 channel=msg.channel, chat_id=msg.chat_id,
                                 content="",
@@ -989,15 +998,29 @@ class AgentLoop:
             user_persisted_early = True
 
         pending_final_stream_end = False
+        pending_stream_end_meta: dict[str, Any] | None = None
 
-        async def _on_stream_end_proxy(*, resuming: bool = False) -> None:
-            nonlocal pending_final_stream_end
+        async def _on_stream_end_proxy(
+            *,
+            resuming: bool = False,
+            response_model: str | None = None,
+            active_target: str | None = None,
+        ) -> None:
+            nonlocal pending_final_stream_end, pending_stream_end_meta
             if on_stream_end is None:
                 return
             if resuming:
-                await on_stream_end(resuming=True)
+                await on_stream_end(
+                    resuming=True,
+                    response_model=response_model,
+                    active_target=active_target,
+                )
                 return
             pending_final_stream_end = True
+            pending_stream_end_meta = {
+                "response_model": response_model,
+                "active_target": active_target,
+            }
 
         final_content, _, all_msgs, stop_reason, had_injections = await self._run_agent_loop(
             initial_messages,
@@ -1044,7 +1067,18 @@ class AgentLoop:
                 await on_stream(footer)
 
         if on_stream is not None and pending_final_stream_end and on_stream_end is not None:
-            await on_stream_end(resuming=False)
+            stream_response_model = status_snapshot["model"]
+            stream_active_target = status_snapshot["active_target"]
+            if pending_stream_end_meta is not None:
+                if isinstance(pending_stream_end_meta.get("response_model"), str):
+                    stream_response_model = pending_stream_end_meta["response_model"]
+                if isinstance(pending_stream_end_meta.get("active_target"), str):
+                    stream_active_target = pending_stream_end_meta["active_target"]
+            await on_stream_end(
+                resuming=False,
+                response_model=stream_response_model,
+                active_target=stream_active_target,
+            )
 
         # When follow-up messages were injected mid-turn, a later natural
         # language reply may address those follow-ups and should not be

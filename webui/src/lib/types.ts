@@ -72,6 +72,8 @@ export type InboundEvent =
       text: string;
       reply_to?: string;
       media?: string[];
+      response_model?: string;
+      active_target?: string;
       /** Present when the frame is an agent breadcrumb (e.g. tool hint,
        * generic progress line) rather than a conversational reply. */
       kind?: "tool_hint" | "progress";
@@ -86,6 +88,8 @@ export type InboundEvent =
       event: "stream_end";
       chat_id: string;
       stream_id?: string;
+      response_model?: string;
+      active_target?: string;
     }
   | { event: "error"; chat_id?: string; detail?: string };
 

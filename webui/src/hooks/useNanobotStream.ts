@@ -49,7 +49,7 @@ export function useNanobotStream(
    * notification or starts a fresh action). */
   dismissStreamError: () => void;
 } {
-  const { client } = useClient();
+  const { client, setModelName } = useClient();
   const [messages, setMessages] = useState<UIMessage[]>(initialMessages);
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamError, setStreamError] = useState<StreamError | null>(null);
@@ -75,6 +75,16 @@ export function useNanobotStream(
 
   useEffect(() => {
     if (!chatId) return;
+
+    const applyModelHint = (ev: {
+      active_target?: string;
+      response_model?: string;
+    }) => {
+      const next = ev.active_target ?? ev.response_model;
+      if (typeof next === "string" && next.trim()) {
+        setModelName(next);
+      }
+    };
 
     const handle = (ev: InboundEvent) => {
       if (ev.event === "delta") {
@@ -103,6 +113,7 @@ export function useNanobotStream(
       }
 
       if (ev.event === "stream_end") {
+        applyModelHint(ev);
         if (!buffer.current) {
           setIsStreaming(false);
           return;
@@ -149,6 +160,8 @@ export function useNanobotStream(
           return;
         }
 
+        applyModelHint(ev);
+
         // A complete (non-streamed) assistant message. If a stream was in
         // flight, drop the placeholder so we don't render the text twice.
         const activeId = buffer.current?.messageId;
@@ -177,7 +190,7 @@ export function useNanobotStream(
       unsub();
       buffer.current = null;
     };
-  }, [chatId, client]);
+  }, [chatId, client, setModelName]);
 
   const send = useCallback(
     (content: string, images?: SendImage[]) => {

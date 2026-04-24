@@ -1192,6 +1192,12 @@ class WebSocketChannel(BaseChannel):
             payload["media"] = msg.media
         if msg.reply_to:
             payload["reply_to"] = msg.reply_to
+        response_model = msg.metadata.get("response_model")
+        if isinstance(response_model, str) and response_model.strip():
+            payload["response_model"] = response_model
+        active_target = msg.metadata.get("active_target")
+        if isinstance(active_target, str) and active_target.strip():
+            payload["active_target"] = active_target
         # Mark intermediate agent breadcrumbs (tool-call hints, generic
         # progress strings) so WS clients can render them as subordinate
         # trace rows rather than conversational replies.
@@ -1221,6 +1227,12 @@ class WebSocketChannel(BaseChannel):
                 "chat_id": chat_id,
                 "text": delta,
             }
+        response_model = meta.get("response_model")
+        if isinstance(response_model, str) and response_model.strip():
+            body["response_model"] = response_model
+        active_target = meta.get("active_target")
+        if isinstance(active_target, str) and active_target.strip():
+            body["active_target"] = active_target
         if meta.get("_stream_id") is not None:
             body["stream_id"] = meta["_stream_id"]
         raw = json.dumps(body, ensure_ascii=False)
