@@ -8,6 +8,7 @@ import { ThreadViewport } from "@/components/thread/ThreadViewport";
 import { useNanobotStream } from "@/hooks/useNanobotStream";
 import { useSessionHistory } from "@/hooks/useSessions";
 import type { ChatSummary, UIMessage } from "@/lib/types";
+import { createUuid } from "@/lib/uuid";
 import { useClient } from "@/providers/ClientProvider";
 
 interface ThreadShellProps {
@@ -24,7 +25,9 @@ function toModelBadgeLabel(modelName: string | null): string | null {
   const trimmed = modelName.trim();
   if (!trimmed) return null;
   const leaf = trimmed.split("/").pop() ?? trimmed;
-  return leaf || trimmed;
+  const label = leaf || trimmed;
+  if (label === "smart_router") return "smart-router";
+  return label;
 }
 
 export function ThreadShell({
@@ -87,7 +90,7 @@ export function ThreadShell({
     setMessages((prev) => [
       ...prev,
       {
-        id: crypto.randomUUID(),
+        id: createUuid(),
         role: "user",
         content: pending,
         createdAt: Date.now(),

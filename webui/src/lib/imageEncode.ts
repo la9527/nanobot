@@ -56,7 +56,10 @@ function bootWorker(): Worker | null {
 
 function newId(): string {
   // ``crypto.randomUUID`` is widely available; fall back to Math.random if not.
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+  if (
+    typeof crypto !== "undefined"
+    && typeof (crypto as Crypto).randomUUID === "function"
+  ) {
     return (crypto as Crypto).randomUUID();
   }
   return `img-${Date.now()}-${Math.random().toString(36).slice(2)}`;

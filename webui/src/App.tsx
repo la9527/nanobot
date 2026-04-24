@@ -64,7 +64,7 @@ export default function App() {
           status: "ready",
           client,
           token: boot.token,
-          modelName: boot.model_name ?? null,
+          modelName: boot.active_target ?? boot.model_name ?? null,
         });
       } catch (e) {
         if (cancelled) return;

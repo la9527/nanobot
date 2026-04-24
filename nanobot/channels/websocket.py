@@ -135,14 +135,65 @@ def _http_json_response(data: dict[str, Any], *, status: int = 200) -> Response:
 
 
 def _read_webui_model_name() -> str | None:
-    """Return the configured default model for readonly webui display."""
+    """Return a stable runtime label for the WebUI model badge."""
     try:
         from nanobot.config.loader import load_config
+        from nanobot.model_targets import (
+            DEFAULT_MODEL_TARGET_NAME,
+            get_active_model_target_name,
+            resolve_model_target,
+        )
 
-        model = load_config().agents.defaults.model.strip()
-        return model or None
+        config = load_config()
+        active_target = get_active_model_target_name(config, None)
+        target_name = active_target.strip() if isinstance(active_target, str) else ""
+        target = None
+        if target_name:
+            try:
+                target = resolve_model_target(config, target_name)
+            except Exception:
+                target = None
+
+        # smart-router mode should show the route alias rather than an unresolved
+        # provider-model placeholder like "${LOCAL_LLM_MODEL}".
+        if target is not None and target.kind == "smart_router":
+            return target.name or "smart-router"
+
+        model = ""
+        if target is not None and isinstance(target.model, str):
+            model = target.model.strip()
+        if not model:
+            model = str(config.agents.defaults.model or "").strip()
+
+        # Some live configs intentionally keep env placeholders. For UI display,
+        # prefer a concrete target alias over raw "${...}" strings.
+        if model and not re.fullmatch(r"\$\{[A-Za-z_][A-Za-z0-9_]*\}", model):
+            return model
+
+        if target_name and target_name != DEFAULT_MODEL_TARGET_NAME:
+            return target_name
+        if config.plugins.smartrouter.enabled:
+            return "smart-router"
+        return None
     except Exception as e:
         logger.debug("webui bootstrap could not load model name: {}", e)
+        return None
+
+
+def _read_webui_active_target() -> str | None:
+    """Return the active model target name for WebUI hints."""
+    try:
+        from nanobot.config.loader import load_config
+        from nanobot.model_targets import get_active_model_target_name
+
+        config = load_config()
+        active_target = get_active_model_target_name(config, None)
+        if isinstance(active_target, str):
+            target = active_target.strip()
+            return target or None
+        return None
+    except Exception as e:
+        logger.debug("webui bootstrap could not load active target: {}", e)
         return None
 
 
@@ -644,6 +695,7 @@ class WebSocketChannel(BaseChannel):
                 "ws_path": self._expected_path(),
                 "expires_in": self.config.token_ttl_s,
                 "model_name": _read_webui_model_name(),
+                "active_target": _read_webui_active_target(),
             }
         )
 

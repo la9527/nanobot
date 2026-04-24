@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useClient } from "@/providers/ClientProvider";
+import { createUuid } from "@/lib/uuid";
 import type { StreamError } from "@/lib/nanobot-client";
 import type {
   InboundEvent,
@@ -77,7 +78,7 @@ export function useNanobotStream(
 
     const handle = (ev: InboundEvent) => {
       if (ev.event === "delta") {
-        const id = buffer.current?.messageId ?? crypto.randomUUID();
+        const id = buffer.current?.messageId ?? createUuid();
         if (!buffer.current) {
           buffer.current = { messageId: id, parts: [] };
           setMessages((prev) => [
@@ -136,7 +137,7 @@ export function useNanobotStream(
             return [
               ...prev,
               {
-                id: crypto.randomUUID(),
+                id: createUuid(),
                 role: "tool",
                 kind: "trace",
                 content: line,
@@ -158,7 +159,7 @@ export function useNanobotStream(
           return [
             ...filtered,
             {
-              id: crypto.randomUUID(),
+              id: createUuid(),
               role: "assistant",
               content: ev.text,
               createdAt: Date.now(),
@@ -190,7 +191,7 @@ export function useNanobotStream(
       setMessages((prev) => [
         ...prev,
         {
-          id: crypto.randomUUID(),
+          id: createUuid(),
           role: "user",
           content,
           createdAt: Date.now(),

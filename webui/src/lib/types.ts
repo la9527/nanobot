@@ -52,6 +52,7 @@ export interface BootstrapResponse {
   ws_path: string;
   expires_in: number;
   model_name?: string | null;
+  active_target?: string | null;
 }
 
 export type ConnectionStatus =
