@@ -65,6 +65,8 @@
       "inputAria": "Message input",
       "sendHint": "Enter to send · Shift+Enter for newline",
       "send": "Send message",
+      "modelMenuAria": "Choose model target",
+      "modelMenuLabel": "Model targets",
       "attachImage": "Attach image",
       "encoding": "Encoding…",
       "remove": "Remove attachment",
@@ -85,7 +87,12 @@
     "assistantTyping": "Assistant is typing",
     "toolSingle": "Using a tool",
     "toolMany": "Used {{count}} tools",
-    "imageAttachment": "Image attachment"
+    "imageAttachment": "Image attachment",
+    "approval": {
+      "title": "Approval required",
+      "approve": "Approve",
+      "block": "Block"
+    }
   },
   "lightbox": {
     "title": "Image preview",

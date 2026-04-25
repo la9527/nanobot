@@ -74,6 +74,7 @@ class AgentRunSpec:
     retry_wait_callback: Any | None = None
     checkpoint_callback: Any | None = None
     injection_callback: Any | None = None
+    tool_approval_callback: Any | None = None
 
 
 @dataclass(slots=True)
@@ -88,6 +89,7 @@ class AgentRunResult:
     error: str | None = None
     tool_events: list[dict[str, str]] = field(default_factory=list)
     had_injections: bool = False
+    response_metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class AgentRunner:
@@ -238,6 +240,7 @@ class AgentRunner:
         length_recovery_count = 0
         had_injections = False
         injection_cycles = 0
+        response_metadata: dict[str, Any] = {}
 
         for iteration in range(spec.max_iterations):
             try:
@@ -268,6 +271,8 @@ class AgentRunner:
             context = AgentHookContext(iteration=iteration, messages=messages)
             await hook.before_iteration(context)
             response = await self._request_model(spec, messages_for_model, hook, context)
+            if isinstance(response.provider_metadata, dict):
+                response_metadata = dict(response.provider_metadata)
             raw_usage = self._usage_dict(response.usage)
             context.response = response
             context.usage = dict(raw_usage)
@@ -394,6 +399,8 @@ class AgentRunner:
                 if hook.wants_streaming():
                     await hook.on_stream_end(context, resuming=False)
                 response = await self._request_finalization_retry(spec, messages_for_model)
+                if isinstance(response.provider_metadata, dict):
+                    response_metadata = dict(response.provider_metadata)
                 retry_usage = self._usage_dict(response.usage)
                 self._accumulate_usage(usage, retry_usage)
                 raw_usage = self._merge_usage(raw_usage, retry_usage)
@@ -539,6 +546,7 @@ class AgentRunner:
             error=error,
             tool_events=tool_events,
             had_injections=had_injections,
+            response_metadata=response_metadata,
         )
 
     def _build_request_kwargs(
@@ -684,6 +692,44 @@ class AgentRunner:
                 "detail": prep_error.split(": ", 1)[-1][:120],
             }
             return prep_error + _HINT, event, RuntimeError(prep_error) if spec.fail_on_tool_error else None
+        approval_prompt = None
+        if tool is not None:
+            try:
+                approval_prompt = tool.approval_prompt(params)
+            except Exception as exc:
+                approval_error = f"Error: approval check failed for {tool_call.name}: {exc}"
+                event = {
+                    "name": tool_call.name,
+                    "status": "error",
+                    "detail": approval_error[:120],
+                }
+                if spec.fail_on_tool_error:
+                    return approval_error, event, RuntimeError(approval_error)
+                return approval_error, event, None
+        if approval_prompt:
+            callback = spec.tool_approval_callback
+            approval_error: str | None = None
+            if callback is None:
+                approval_error = "Error: Tool call requires approval but no approval flow is available"
+            else:
+                try:
+                    approved, denial_reason = await callback(tool_call, tool, params, approval_prompt)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    approved = False
+                    denial_reason = f"Error: Tool approval failed: {exc}"
+                if not approved:
+                    approval_error = denial_reason or "Error: Tool call denied by user approval flow"
+            if approval_error:
+                event = {
+                    "name": tool_call.name,
+                    "status": "error",
+                    "detail": approval_error.replace("\n", " ").strip()[:120],
+                }
+                if spec.fail_on_tool_error:
+                    return approval_error + _HINT, event, RuntimeError(approval_error)
+                return approval_error + _HINT, event, None
         try:
             if tool is not None:
                 result = await tool.execute(**params)

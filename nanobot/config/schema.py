@@ -218,6 +218,12 @@ class SmartRouterConfig(Base):
     logging: SmartRouterLoggingConfig = Field(default_factory=SmartRouterLoggingConfig)
 
 
+class FilesystemToolsConfig(Base):
+    """File tool access configuration."""
+
+    allowed_dirs: list[str] = Field(default_factory=list)  # Empty = unrestricted unless restrictToWorkspace is true
+
+
 class PluginsConfig(Base):
     """Configuration for general runtime plugins.
 
@@ -327,6 +333,37 @@ class ExecToolConfig(Base):
     path_append: str = ""
     sandbox: str = ""  # sandbox backend: "" (none) or "bwrap"
     allowed_env_keys: list[str] = Field(default_factory=list)  # Env var names to pass through to subprocess (e.g. ["GOPATH", "JAVA_HOME"])
+    allowed_dirs: list[str] = Field(default_factory=list)  # Restrict exec working dir and absolute paths to these directories
+    allow_patterns: list[str] = Field(default_factory=list)  # Optional regex allowlist for commands
+    deny_patterns: list[str] = Field(default_factory=list)  # Additional regex denylist for commands
+    approval_patterns: list[str] = Field(default_factory=lambda: [
+        r"(^|[;&|]\s*)rm\b",
+        r"(^|[;&|]\s*)(?:sudo|su)\b",
+        r"(^|[;&|]\s*)(?:kill|pkill|killall)\b",
+    ])  # Commands that require explicit user approval before exec runs
+
+
+class ChannelFilesystemToolsOverride(Base):
+    """Per-channel filesystem tool overrides."""
+
+    allowed_dirs: list[str] | None = None
+
+
+class ChannelExecToolOverride(Base):
+    """Per-channel exec tool overrides."""
+
+    allowed_dirs: list[str] | None = None
+    allow_patterns: list[str] | None = None
+    deny_patterns: list[str] | None = None
+    approval_patterns: list[str] | None = None
+
+
+class ChannelToolsOverride(Base):
+    """Per-channel tool access overrides."""
+
+    restrict_to_workspace: bool | None = None
+    filesystem: ChannelFilesystemToolsOverride = Field(default_factory=ChannelFilesystemToolsOverride)
+    exec: ChannelExecToolOverride = Field(default_factory=ChannelExecToolOverride)
 
 class MCPServerConfig(Base):
     """MCP server connection configuration (stdio or HTTP)."""
@@ -351,6 +388,7 @@ class ToolsConfig(Base):
     """Tools configuration."""
 
     web: WebToolsConfig = Field(default_factory=WebToolsConfig)
+    filesystem: FilesystemToolsConfig = Field(default_factory=FilesystemToolsConfig)
     exec: ExecToolConfig = Field(default_factory=ExecToolConfig)
     my: MyToolConfig = Field(default_factory=MyToolConfig)
     restrict_to_workspace: bool = False  # restrict all tool access to workspace directory

@@ -43,7 +43,9 @@ class ExecTool(Tool):
         working_dir: str | None = None,
         deny_patterns: list[str] | None = None,
         allow_patterns: list[str] | None = None,
+        approval_patterns: list[str] | None = None,
         restrict_to_workspace: bool = False,
+        allowed_dirs: list[str] | None = None,
         sandbox: str = "",
         path_append: str = "",
         allowed_env_keys: list[str] | None = None,
@@ -71,7 +73,9 @@ class ExecTool(Tool):
             r"\bsed\s+-i[^|;&<>]*(?:history\.jsonl|\.dream_cursor)",  # sed -i
         ]
         self.allow_patterns = allow_patterns or []
+        self.approval_patterns = approval_patterns or []
         self.restrict_to_workspace = restrict_to_workspace
+        self.allowed_dirs = list(allowed_dirs or [])
         self.path_append = path_append
         self.allowed_env_keys = allowed_env_keys or []
 
@@ -96,6 +100,27 @@ class ExecTool(Tool):
     def exclusive(self) -> bool:
         return True
 
+    def approval_prompt(self, params: dict[str, Any]) -> str | None:
+        command = params.get("command")
+        if not isinstance(command, str):
+            return None
+        for pattern in self.approval_patterns:
+            try:
+                if re.search(pattern, command, re.IGNORECASE):
+                    compact = " ".join(command.strip().split())
+                    if len(compact) > 240:
+                        compact = compact[:237] + "..."
+                    working_dir = params.get("working_dir") or self.working_dir or os.getcwd()
+                    return (
+                        "Approval required before running this command.\n"
+                        f"Working directory: {working_dir}\n"
+                        f"Command: {compact}\n"
+                        "Reply yes to run it or no to block it."
+                    )
+            except re.error:
+                logger.warning("Ignoring invalid exec approval regex: {}", pattern)
+        return None
+
     async def execute(
         self, command: str, working_dir: str | None = None,
         timeout: int | None = None, **kwargs: Any,
@@ -107,13 +132,12 @@ class ExecTool(Tool):
         # this, a caller can pass working_dir="/etc" and then all absolute
         # paths under /etc would pass the _guard_command check that anchors
         # on cwd.
-        if self.restrict_to_workspace and self.working_dir:
+        if (self.restrict_to_workspace and self.working_dir) or self.allowed_dirs:
             try:
                 requested = Path(cwd).expanduser().resolve()
-                workspace_root = Path(self.working_dir).expanduser().resolve()
             except Exception:
                 return "Error: working_dir could not be resolved"
-            if requested != workspace_root and workspace_root not in requested.parents:
+            if not self._is_path_allowed(requested, include_media=False):
                 return "Error: working_dir is outside the configured workspace"
 
         guard_error = self._guard_command(command, cwd)
@@ -284,11 +308,9 @@ class ExecTool(Tool):
         if contains_internal_url(cmd):
             return "Error: Command blocked by safety guard (internal/private URL detected)"
 
-        if self.restrict_to_workspace:
+        if self.restrict_to_workspace or self.allowed_dirs:
             if "..\\" in cmd or "../" in cmd:
                 return "Error: Command blocked by safety guard (path traversal detected)"
-
-            cwd_path = Path(cwd).resolve()
 
             for raw in self._extract_absolute_paths(cmd):
                 try:
@@ -297,16 +319,30 @@ class ExecTool(Tool):
                 except Exception:
                     continue
 
-                media_path = get_media_dir().resolve()
-                if (p.is_absolute() 
-                    and cwd_path not in p.parents 
-                    and p != cwd_path
-                    and media_path not in p.parents
-                    and p != media_path
-                ):
+                if p.is_absolute() and not self._is_path_allowed(p):
                     return "Error: Command blocked by safety guard (path outside working dir)"
 
         return None
+
+    def _configured_allowed_roots(self, *, include_media: bool) -> list[Path]:
+        roots: list[Path] = []
+        if self.restrict_to_workspace and self.working_dir:
+            roots.append(Path(self.working_dir).expanduser().resolve())
+        for raw in self.allowed_dirs:
+            roots.append(Path(raw).expanduser().resolve())
+        if include_media:
+            roots.append(get_media_dir().resolve())
+        deduped: list[Path] = []
+        for root in roots:
+            if root not in deduped:
+                deduped.append(root)
+        return deduped
+
+    def _is_path_allowed(self, path: Path, *, include_media: bool = True) -> bool:
+        allowed_roots = self._configured_allowed_roots(include_media=include_media)
+        if not allowed_roots:
+            return True
+        return any(path == root or root in path.parents for root in allowed_roots)
 
     @staticmethod
     def _extract_absolute_paths(command: str) -> list[str]:

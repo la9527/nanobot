@@ -90,7 +90,7 @@ describe("App layout", () => {
 
     const main = container.querySelector("main");
     expect(main).toBeInTheDocument();
-    expect(main).not.toHaveAttribute("style");
+    expect(main?.getAttribute("style") ?? "").not.toContain("width:");
 
     const asideClassNames = Array.from(container.querySelectorAll("aside")).map(
       (el) => el.className,
@@ -107,6 +107,7 @@ describe("App layout", () => {
         createdAt: "2026-04-16T10:00:00Z",
         updatedAt: "2026-04-16T10:00:00Z",
         preview: "First chat",
+        activeTarget: "smart-router",
       },
       {
         key: "websocket:chat-b",
@@ -115,6 +116,7 @@ describe("App layout", () => {
         createdAt: "2026-04-16T11:00:00Z",
         updatedAt: "2026-04-16T11:00:00Z",
         preview: "Second chat",
+        activeTarget: null,
       },
     ];
 
@@ -124,6 +126,7 @@ describe("App layout", () => {
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /^First chat$/ })).toBeInTheDocument(),
     );
+    expect(screen.getByText("smart-router")).toBeInTheDocument();
 
     fireEvent.pointerDown(screen.getByLabelText("Chat actions for First chat"), {
       button: 0,

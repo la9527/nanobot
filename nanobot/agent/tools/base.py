@@ -171,6 +171,10 @@ class Tool(ABC):
         """Run the tool; returns a string or list of content blocks."""
         ...
 
+    def approval_prompt(self, params: dict[str, Any]) -> str | None:
+        """Return a user-facing approval prompt when this call must be confirmed."""
+        return None
+
     def _cast_object(self, obj: Any, schema: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(obj, dict):
             return obj

@@ -7,7 +7,8 @@ import { StreamErrorNotice } from "@/components/thread/StreamErrorNotice";
 import { ThreadViewport } from "@/components/thread/ThreadViewport";
 import { useNanobotStream } from "@/hooks/useNanobotStream";
 import { useSessionHistory } from "@/hooks/useSessions";
-import type { ChatSummary, UIMessage } from "@/lib/types";
+import { ApiError, fetchSessionModelTarget, selectSessionModelTarget } from "@/lib/api";
+import type { ChatSummary, ModelTargetOption, SessionModelTargetResponse, UIMessage } from "@/lib/types";
 import { createUuid } from "@/lib/uuid";
 import { useClient } from "@/providers/ClientProvider";
 
@@ -20,7 +21,16 @@ interface ThreadShellProps {
   hideSidebarToggleOnDesktop?: boolean;
 }
 
-function toModelBadgeLabel(modelName: string | null): string | null {
+function toModelBadgeLabel(
+  modelName: string | null,
+  activeTarget: string | null,
+): string | null {
+  if (typeof activeTarget === "string") {
+    const target = activeTarget.trim();
+    if (target && target !== "default") {
+      return target === "smart_router" ? "smart-router" : target;
+    }
+  }
   if (!modelName) return null;
   const trimmed = modelName.trim();
   if (!trimmed) return null;
@@ -28,6 +38,27 @@ function toModelBadgeLabel(modelName: string | null): string | null {
   const label = leaf || trimmed;
   if (label === "smart_router") return "smart-router";
   return label;
+}
+
+function deriveModelNameFromTarget(target: ModelTargetOption | null | undefined): string | null {
+  if (!target) return null;
+  if (target.kind === "smart_router") {
+    return target.name || "smart-router";
+  }
+  if (typeof target.model === "string") {
+    const trimmed = target.model.trim();
+    return trimmed || null;
+  }
+  return null;
+}
+
+function applyModelTargetResponse(
+  response: SessionModelTargetResponse,
+  setActiveTarget: (value: string | null) => void,
+  setModelName: (value: string | null) => void,
+) {
+  setActiveTarget(response.active_target ?? null);
+  setModelName(deriveModelNameFromTarget(response.target));
 }
 
 export function ThreadShell({
@@ -42,8 +73,18 @@ export function ThreadShell({
   const chatId = session?.chatId ?? null;
   const historyKey = session?.key ?? null;
   const { messages: historical, loading } = useSessionHistory(historyKey);
-  const { client, modelName } = useClient();
+  const {
+    client,
+    token,
+    modelName,
+    activeTarget,
+    modelTargets,
+    setModelName,
+    setActiveTarget,
+    resetModelSelection,
+  } = useClient();
   const [booting, setBooting] = useState(false);
+  const [modelTargetPending, setModelTargetPending] = useState(false);
   const pendingFirstRef = useRef<string | null>(null);
   const messageCacheRef = useRef<Map<string, UIMessage[]>>(new Map());
 
@@ -82,6 +123,33 @@ export function ThreadShell({
   }, [chatId, messages]);
 
   useEffect(() => {
+    let cancelled = false;
+    if (!historyKey) {
+      resetModelSelection();
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    (async () => {
+      try {
+        const current = await fetchSessionModelTarget(token, historyKey);
+        if (cancelled) return;
+        applyModelTargetResponse(current, setActiveTarget, setModelName);
+      } catch (error) {
+        if (cancelled) return;
+        if (!(error instanceof ApiError && error.status === 404)) {
+          console.error("Failed to fetch session model target", error);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [historyKey, resetModelSelection, setActiveTarget, setModelName, token]);
+
+  useEffect(() => {
     if (!chatId) return;
     const pending = pendingFirstRef.current;
     if (!pending) return;
@@ -111,6 +179,37 @@ export function ThreadShell({
       }
     },
     [booting, onNewChat],
+  );
+
+  const handleApprovalResponse = useCallback(
+    (messageId: string, decision: "yes" | "no") => {
+      if (!chatId) return;
+      setMessages((prev) => prev.filter((message) => message.id !== messageId));
+      client.sendMessage(chatId, decision);
+    },
+    [chatId, client, setMessages],
+  );
+
+  const handleSelectModelTarget = useCallback(
+    async (targetName: string) => {
+      if (modelTargetPending) return;
+      setModelTargetPending(true);
+      try {
+        let sessionKey = historyKey;
+        if (!sessionKey) {
+          const newId = await onNewChat();
+          if (!newId) return;
+          sessionKey = `websocket:${newId}`;
+        }
+        const response = await selectSessionModelTarget(token, sessionKey, targetName);
+        applyModelTargetResponse(response, setActiveTarget, setModelName);
+      } catch (error) {
+        console.error("Failed to change model target", error);
+      } finally {
+        setModelTargetPending(false);
+      }
+    },
+    [historyKey, modelTargetPending, onNewChat, setActiveTarget, setModelName, token],
   );
 
   const emptyState = loading ? (
@@ -146,6 +245,7 @@ export function ThreadShell({
       <ThreadViewport
         messages={messages}
         isStreaming={isStreaming}
+        onApprovalResponse={handleApprovalResponse}
         emptyState={emptyState}
         composer={
           <>
@@ -164,7 +264,11 @@ export function ThreadShell({
                     ? t("thread.composer.placeholderHero")
                     : t("thread.composer.placeholderThread")
                 }
-                modelLabel={toModelBadgeLabel(modelName)}
+                modelLabel={toModelBadgeLabel(modelName, activeTarget)}
+                activeTarget={activeTarget}
+                modelTargets={modelTargets}
+                modelTargetPending={modelTargetPending}
+                onSelectModelTarget={handleSelectModelTarget}
                 variant={showHeroComposer ? "hero" : "thread"}
               />
             ) : (
@@ -176,7 +280,11 @@ export function ThreadShell({
                     ? t("thread.composer.placeholderOpening")
                     : t("thread.composer.placeholderHero")
                 }
-                modelLabel={toModelBadgeLabel(modelName)}
+                modelLabel={toModelBadgeLabel(modelName, activeTarget)}
+                activeTarget={activeTarget}
+                modelTargets={modelTargets}
+                modelTargetPending={modelTargetPending}
+                onSelectModelTarget={handleSelectModelTarget}
                 variant="hero"
               />
             )}

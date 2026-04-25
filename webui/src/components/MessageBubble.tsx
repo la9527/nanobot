@@ -1,14 +1,16 @@
 import { useState } from "react";
-import { ChevronRight, ImageIcon, Wrench } from "lucide-react";
+import { Check, ChevronRight, ImageIcon, ShieldAlert, Wrench, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { ImageLightbox } from "@/components/ImageLightbox";
 import { MarkdownText } from "@/components/MarkdownText";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { UIImage, UIMessage } from "@/lib/types";
 
 interface MessageBubbleProps {
   message: UIMessage;
+  onApprovalResponse?: (messageId: string, decision: "yes" | "no") => void | Promise<void>;
 }
 
 /**
@@ -20,11 +22,21 @@ interface MessageBubbleProps {
  * Trace rows (tool-call hints, progress breadcrumbs) render as a subdued
  * collapsible group so intermediate steps never masquerade as replies.
  */
-export function MessageBubble({ message }: MessageBubbleProps) {
+export function MessageBubble({ message, onApprovalResponse }: MessageBubbleProps) {
   const baseAnim = "animate-in fade-in-0 slide-in-from-bottom-1 duration-300";
 
   if (message.kind === "trace") {
     return <TraceGroup message={message} animClass={baseAnim} />;
+  }
+
+  if (message.kind === "approval") {
+    return (
+      <ApprovalCard
+        message={message}
+        animClass={baseAnim}
+        onApprovalResponse={onApprovalResponse}
+      />
+    );
   }
 
   if (message.role === "user") {
@@ -43,9 +55,13 @@ export function MessageBubble({ message }: MessageBubbleProps) {
           <p
             className={cn(
               "ml-auto w-fit rounded-[18px] border border-border/60 bg-secondary/70 px-4 py-2",
-              "text-left text-[18px]/[1.8] whitespace-pre-wrap break-words",
+              "text-left whitespace-pre-wrap break-words",
               "shadow-[0_10px_24px_-18px_rgba(0,0,0,0.55)]",
             )}
+            style={{
+              fontSize: "var(--chat-font-size)",
+              lineHeight: "var(--chat-line-height)",
+            }}
           >
             {message.content}
           </p>
@@ -55,16 +71,139 @@ export function MessageBubble({ message }: MessageBubbleProps) {
   }
 
   const empty = message.content.trim().length === 0;
+  const blocks = splitAssistantBlocks(message.content);
   return (
-    <div className={cn("w-full text-sm", baseAnim)} style={{ lineHeight: "var(--cjk-line-height)" }}>
+    <div
+      className={cn("w-full", baseAnim)}
+      style={{
+        fontSize: "var(--chat-font-size)",
+        lineHeight: "var(--chat-line-height, var(--cjk-line-height))",
+      }}
+    >
       {empty && message.isStreaming ? (
         <TypingDots />
       ) : (
         <>
-          <MarkdownText>{message.content}</MarkdownText>
+          {blocks.length > 0 ? (
+            <div className="flex flex-col gap-4">
+              {blocks.map((block, index) =>
+                block.kind === "status" ? (
+                  <StatusFooterCard key={`status-${index}`} content={block.content} />
+                ) : (
+                  <MarkdownText key={`markdown-${index}`}>{block.content}</MarkdownText>
+                ),
+              )}
+            </div>
+          ) : (
+            <MarkdownText>{message.content}</MarkdownText>
+          )}
           {message.isStreaming && <StreamCursor />}
         </>
       )}
+    </div>
+  );
+}
+
+function splitAssistantBlocks(content: string): Array<
+  | { kind: "markdown"; content: string }
+  | { kind: "status"; content: string }
+> {
+  const trimmed = content.trim();
+  if (!trimmed) return [];
+  return trimmed
+    .split(/\n{2,}/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => (
+      part.startsWith("Status: ")
+        ? { kind: "status" as const, content: part.slice("Status: ".length) }
+        : { kind: "markdown" as const, content: part }
+    ));
+}
+
+function StatusFooterCard({ content }: { content: string }) {
+  const segments = content.split(" | ").map((segment) => segment.trim()).filter(Boolean);
+
+  return (
+    <div
+      className={cn(
+        "w-full overflow-x-auto rounded-xl border border-slate-300/45 bg-slate-50/70 px-3 py-2",
+        "shadow-[0_10px_24px_-22px_rgba(15,23,42,0.45)] dark:border-slate-700/60 dark:bg-slate-950/20",
+      )}
+    >
+      <div className="flex min-w-max items-center gap-2 whitespace-nowrap font-mono text-[11px] leading-4 text-slate-600 dark:text-slate-300">
+        {segments.map((segment, index) => (
+          <span key={segment} className="contents">
+            {index > 0 ? (
+              <span className="text-slate-400 dark:text-slate-500">|</span>
+            ) : null}
+            <span>{segment}</span>
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ApprovalCard({
+  message,
+  animClass,
+  onApprovalResponse,
+}: {
+  message: UIMessage;
+  animClass: string;
+  onApprovalResponse?: (messageId: string, decision: "yes" | "no") => void | Promise<void>;
+}) {
+  const { t } = useTranslation();
+  const [submitting, setSubmitting] = useState(false);
+
+  const respond = async (decision: "yes" | "no") => {
+    if (!onApprovalResponse || submitting) return;
+    setSubmitting(true);
+    try {
+      await onApprovalResponse(message.id, decision);
+    } catch {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className={cn("w-full", animClass)}>
+      <div
+        className={cn(
+          "max-w-[min(100%,38rem)] rounded-2xl border border-amber-300/40 bg-amber-50/80 px-4 py-3",
+          "shadow-[0_10px_24px_-18px_rgba(120,53,15,0.45)] dark:border-amber-700/50 dark:bg-amber-950/20",
+        )}
+      >
+        <div className="mb-2 flex items-center gap-2 text-sm font-medium text-amber-900 dark:text-amber-200">
+          <ShieldAlert className="h-4 w-4" aria-hidden />
+          <span>{t("message.approval.title")}</span>
+        </div>
+        <MarkdownText>{message.content}</MarkdownText>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => void respond("yes")}
+            disabled={submitting || !onApprovalResponse}
+            aria-label={t("message.approval.approve")}
+          >
+            <Check className="mr-1.5 h-4 w-4" aria-hidden />
+            {t("message.approval.approve")}
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => void respond("no")}
+            disabled={submitting || !onApprovalResponse}
+            aria-label={t("message.approval.block")}
+          >
+            <X className="mr-1.5 h-4 w-4" aria-hidden />
+            {t("message.approval.block")}
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -275,7 +414,8 @@ function TraceGroup({ message, animClass }: TraceGroupProps) {
           {lines.map((line, i) => (
             <li
               key={i}
-              className="whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed text-muted-foreground/90"
+              className="whitespace-pre-wrap break-words font-mono leading-relaxed text-muted-foreground/90"
+              style={{ fontSize: "calc(var(--chat-font-size) * 0.78)" }}
             >
               {line}
             </li>

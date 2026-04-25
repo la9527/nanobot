@@ -88,6 +88,12 @@ async def cmd_status(ctx: CommandContext) -> OutboundMessage:
         f"\nTarget: {status_snapshot['active_target']}"
         f"\nReply footer: {status_snapshot['footer_mode']}"
     )
+    route_tier = status_snapshot.get("smart_router_tier")
+    route_model = status_snapshot.get("smart_router_model")
+    if isinstance(route_tier, str) and route_tier:
+        content += f"\nSmart-router route: {route_tier}"
+        if isinstance(route_model, str) and route_model:
+            content += f" ({route_model})"
     return OutboundMessage(
         channel=ctx.msg.channel,
         chat_id=ctx.msg.chat_id,
@@ -112,6 +118,8 @@ async def cmd_usage(ctx: CommandContext) -> OutboundMessage:
             usage=status_snapshot["usage"],
             context_window_tokens=status_snapshot["context_window_tokens"],
             context_tokens_estimate=status_snapshot["context_tokens_estimate"],
+            route_tier=status_snapshot.get("smart_router_tier"),
+            route_model=status_snapshot.get("smart_router_model"),
         )
         lines = [
             "## Usage Footer",
@@ -149,6 +157,8 @@ async def cmd_usage(ctx: CommandContext) -> OutboundMessage:
                 usage=status_snapshot["usage"],
                 context_window_tokens=status_snapshot["context_window_tokens"],
                 context_tokens_estimate=status_snapshot["context_tokens_estimate"],
+                route_tier=status_snapshot.get("smart_router_tier"),
+                route_model=status_snapshot.get("smart_router_model"),
             )
             if preview:
                 lines.extend(["", f"Preview:{preview}"])

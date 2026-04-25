@@ -24,7 +24,7 @@ export default function MarkdownTextRenderer({
   return (
     <div
       className={cn(
-        "markdown-content prose prose-lg max-w-none dark:prose-invert",
+        "markdown-content prose max-w-none dark:prose-invert",
         "prose-headings:mt-4 prose-headings:mb-2 prose-headings:font-semibold prose-headings:tracking-tight",
         "prose-h1:text-xl prose-h2:text-lg prose-h3:text-base prose-h4:text-sm",
         "prose-p:my-2",
@@ -38,7 +38,10 @@ export default function MarkdownTextRenderer({
         "prose-table:my-3 prose-th:text-left prose-th:font-medium",
         className,
       )}
-      style={{ lineHeight: "var(--cjk-line-height)" }}
+      style={{
+        fontSize: "var(--chat-font-size)",
+        lineHeight: "var(--chat-line-height, var(--cjk-line-height))",
+      }}
     >
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}

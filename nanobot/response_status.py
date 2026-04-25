@@ -49,6 +49,8 @@ def build_response_footer(
     usage: Mapping[str, Any] | None,
     context_window_tokens: int,
     context_tokens_estimate: int | None = None,
+    route_tier: str | None = None,
+    route_model: str | None = None,
 ) -> str:
     normalized_mode = normalize_response_footer_mode(mode)
     if normalized_mode == DEFAULT_RESPONSE_FOOTER_MODE:
@@ -58,6 +60,12 @@ def build_response_footer(
     segments = [f"model={model}"]
     if active_target and active_target != model and normalized_mode == "full":
         segments.append(f"target={active_target}")
+
+    if active_target in {"smart-router", "smart_router"} and route_tier:
+        route_segment = f"route={route_tier}"
+        if normalized_mode == "full" and route_model:
+            route_segment = f"{route_segment}({route_model})"
+        segments.append(route_segment)
 
     segments.append(
         "tokens="

@@ -65,6 +65,8 @@
       "inputAria": "Entrada de mensaje",
       "sendHint": "Enter para enviar · Shift+Enter para nueva línea",
       "send": "Enviar mensaje",
+      "modelMenuAria": "Elegir destino del modelo",
+      "modelMenuLabel": "Destinos del modelo",
       "attachImage": "Adjuntar imagen",
       "encoding": "Procesando…",
       "remove": "Quitar adjunto",
@@ -85,7 +87,12 @@
     "assistantTyping": "El asistente está escribiendo",
     "toolSingle": "Usando una herramienta",
     "toolMany": "Se usaron {{count}} herramientas",
-    "imageAttachment": "Imagen adjunta"
+    "imageAttachment": "Imagen adjunta",
+    "approval": {
+      "title": "Se requiere aprobación",
+      "approve": "Aprobar",
+      "block": "Bloquear"
+    }
   },
   "lightbox": {
     "title": "Vista previa de imagen",

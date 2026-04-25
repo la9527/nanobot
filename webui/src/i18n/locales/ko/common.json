@@ -65,6 +65,8 @@
       "inputAria": "메시지 입력",
       "sendHint": "Enter로 전송 · Shift+Enter로 줄바꿈",
       "send": "메시지 보내기",
+      "modelMenuAria": "모델 타깃 선택",
+      "modelMenuLabel": "모델 타깃",
       "attachImage": "이미지 첨부",
       "encoding": "처리 중…",
       "remove": "첨부 제거",
@@ -85,7 +87,12 @@
     "assistantTyping": "도우미가 입력 중",
     "toolSingle": "도구 사용 중",
     "toolMany": "도구 {{count}}개 사용됨",
-    "imageAttachment": "이미지 첨부"
+    "imageAttachment": "이미지 첨부",
+    "approval": {
+      "title": "승인이 필요합니다",
+      "approve": "승인",
+      "block": "차단"
+    }
   },
   "lightbox": {
     "title": "이미지 미리보기",

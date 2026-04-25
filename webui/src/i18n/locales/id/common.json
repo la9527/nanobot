@@ -65,6 +65,8 @@
       "inputAria": "Input pesan",
       "sendHint": "Enter untuk kirim · Shift+Enter untuk baris baru",
       "send": "Kirim pesan",
+      "modelMenuAria": "Pilih target model",
+      "modelMenuLabel": "Target model",
       "attachImage": "Lampirkan gambar",
       "encoding": "Memproses…",
       "remove": "Hapus lampiran",
@@ -85,7 +87,12 @@
     "assistantTyping": "Asisten sedang mengetik",
     "toolSingle": "Menggunakan sebuah alat",
     "toolMany": "Menggunakan {{count}} alat",
-    "imageAttachment": "Lampiran gambar"
+    "imageAttachment": "Lampiran gambar",
+    "approval": {
+      "title": "Perlu persetujuan",
+      "approve": "Setujui",
+      "block": "Blokir"
+    }
   },
   "lightbox": {
     "title": "Pratinjau gambar",

@@ -732,6 +732,92 @@ class _DelayTool(Tool):
         return self._name
 
 
+class _ApprovalTool(Tool):
+    def __init__(self):
+        self.executed = 0
+
+    @property
+    def name(self) -> str:
+        return "danger"
+
+    @property
+    def description(self) -> str:
+        return "danger"
+
+    @property
+    def parameters(self) -> dict:
+        return {
+            "type": "object",
+            "properties": {
+                "command": {"type": "string"},
+            },
+            "required": ["command"],
+        }
+
+    def approval_prompt(self, params: dict[str, str]) -> str | None:
+        return f"Approve {params['command']}?"
+
+    async def execute(self, **kwargs):
+        self.executed += 1
+        return "executed"
+
+
+@pytest.mark.asyncio
+async def test_runner_blocks_tool_when_approval_is_denied():
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner
+
+    tools = ToolRegistry()
+    tool = _ApprovalTool()
+    tools.register(tool)
+
+    runner = AgentRunner(MagicMock())
+    results, events, fatal_error = await runner._execute_tools(
+        AgentRunSpec(
+            initial_messages=[],
+            tools=tools,
+            model="test-model",
+            max_iterations=1,
+            max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+            tool_approval_callback=AsyncMock(return_value=(False, "Error: Command execution was denied by the user")),
+        ),
+        [ToolCallRequest(id="danger_1", name="danger", arguments={"command": "rm -rf tmp"})],
+        {},
+    )
+
+    assert tool.executed == 0
+    assert fatal_error is None
+    assert results[0].startswith("Error: Command execution was denied by the user")
+    assert events == [{"name": "danger", "status": "error", "detail": "Error: Command execution was denied by the user"}]
+
+
+@pytest.mark.asyncio
+async def test_runner_executes_tool_after_approval():
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner
+
+    tools = ToolRegistry()
+    tool = _ApprovalTool()
+    tools.register(tool)
+
+    runner = AgentRunner(MagicMock())
+    results, events, fatal_error = await runner._execute_tools(
+        AgentRunSpec(
+            initial_messages=[],
+            tools=tools,
+            model="test-model",
+            max_iterations=1,
+            max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+            tool_approval_callback=AsyncMock(return_value=(True, None)),
+        ),
+        [ToolCallRequest(id="danger_1", name="danger", arguments={"command": "rm -rf tmp"})],
+        {},
+    )
+
+    assert tool.executed == 1
+    assert fatal_error is None
+    assert results == ["executed"]
+    assert events == [{"name": "danger", "status": "ok", "detail": "executed"}]
+
+
 @pytest.mark.asyncio
 async def test_runner_batches_read_only_tools_before_exclusive_work():
     from nanobot.agent.runner import AgentRunSpec, AgentRunner
@@ -865,7 +951,7 @@ async def test_loop_max_iterations_message_stays_stable(tmp_path):
     loop.tools.execute = AsyncMock(return_value="ok")
     loop.max_iterations = 2
 
-    final_content, _, _, _, _ = await loop._run_agent_loop([])
+    final_content, _, _, _, _, _ = await loop._run_agent_loop([])
 
     assert final_content == (
         "I reached the maximum number of tool call iterations (2) "
@@ -892,7 +978,7 @@ async def test_loop_stream_filter_handles_think_only_prefix_without_crashing(tmp
     async def on_stream_end(*, resuming: bool = False) -> None:
         endings.append(resuming)
 
-    final_content, _, _, _, _ = await loop._run_agent_loop(
+    final_content, _, _, _, _, _ = await loop._run_agent_loop(
         [],
         on_stream=on_stream,
         on_stream_end=on_stream_end,
@@ -916,7 +1002,7 @@ async def test_loop_retries_think_only_final_response(tmp_path):
 
     loop.provider.chat_with_retry = chat_with_retry
 
-    final_content, _, _, _, _ = await loop._run_agent_loop([])
+    final_content, _, _, _, _, _ = await loop._run_agent_loop([])
 
     assert final_content == "Recovered answer"
     assert call_count["n"] == 2
@@ -2133,7 +2219,7 @@ async def test_loop_injected_followup_preserves_image_media(tmp_path):
         media=[str(image_path)],
     ))
 
-    final_content, _, _, _, had_injections = await loop._run_agent_loop(
+    final_content, _, _, _, had_injections, _ = await loop._run_agent_loop(
         [{"role": "user", "content": "hello"}],
         channel="cli",
         chat_id="c",
@@ -2371,7 +2457,7 @@ async def test_pending_queue_preserves_overflow_for_next_injection_cycle(tmp_pat
             content=f"follow-up-{idx}",
         ))
 
-    final_content, _, _, _, had_injections = await loop._run_agent_loop(
+    final_content, _, _, _, had_injections, _ = await loop._run_agent_loop(
         [{"role": "user", "content": "hello"}],
         channel="cli",
         chat_id="c",

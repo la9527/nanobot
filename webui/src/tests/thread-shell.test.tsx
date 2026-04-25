@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -251,6 +252,70 @@ describe("ThreadShell", () => {
     const input = screen.getByPlaceholderText("What's on your mind?");
     expect(input.className).toContain("min-h-[96px]");
     expect(screen.queryByText("old answer")).not.toBeInTheDocument();
+  });
+
+  it("loads and changes the active model target for the current session", async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    const onNewChat = vi.fn().mockResolvedValue("chat-a");
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/sessions/websocket%3Achat-a/model-target/default/select")) {
+        return httpJson({
+          key: "websocket:chat-a",
+          active_target: "default",
+          target: { name: "default", kind: "provider_model", model: "openai/gpt-5.4" },
+        });
+      }
+      if (url.includes("/api/sessions/websocket%3Achat-a/model-target")) {
+        return httpJson({
+          key: "websocket:chat-a",
+          active_target: "smart-router",
+          target: { name: "smart-router", kind: "smart_router" },
+        });
+      }
+      return {
+        ok: false,
+        status: 404,
+        json: async () => ({}),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <ClientProvider
+        client={client as unknown as import("@/lib/nanobot-client").NanobotClient}
+        token="tok"
+        modelName="openai/gpt-5.4"
+        activeTarget="default"
+        modelTargets={[
+          { name: "default", kind: "provider_model", model: "openai/gpt-5.4" },
+          { name: "smart-router", kind: "smart_router" },
+        ]}
+      >
+        <ThreadShell
+          session={session("chat-a")}
+          title="Chat chat-a"
+          onToggleSidebar={() => {}}
+          onGoHome={() => {}}
+          onNewChat={onNewChat}
+        />
+      </ClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("smart-router")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: "Choose model target" }));
+    await user.click(screen.getByRole("menuitemradio", { name: /default/i }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/api/sessions/websocket%3Achat-a/model-target/default/select"),
+        expect.any(Object),
+      );
+    });
   });
 
   it("surfaces a dismissible banner when the stream reports message_too_big", async () => {

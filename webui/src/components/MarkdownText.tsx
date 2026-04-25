@@ -28,6 +28,10 @@ export function MarkdownText({ children, className }: MarkdownTextProps) {
             "whitespace-pre-wrap break-words leading-relaxed text-foreground/92",
             className,
           )}
+          style={{
+            fontSize: "var(--chat-font-size)",
+            lineHeight: "var(--chat-line-height)",
+          }}
         >
           {children}
         </div>

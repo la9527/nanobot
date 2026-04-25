@@ -1643,10 +1643,66 @@ MCP tools are automatically discovered and registered on startup. The LLM can us
 | Option | Default | Description |
 |--------|---------|-------------|
 | `tools.restrictToWorkspace` | `false` | When `true`, restricts **all** agent tools (shell, file read/write/edit, list) to the workspace directory. Prevents path traversal and out-of-scope access. |
+| `tools.filesystem.allowedDirs` | `[]` | Optional allowlist of directories for file tools. When set, file reads/writes/edits/searches are limited to these directories (plus media and built-in skills). Relative paths resolve from the workspace. |
 | `tools.exec.sandbox` | `""` | Sandbox backend for shell commands. Set to `"bwrap"` to wrap exec calls in a [bubblewrap](https://github.com/containers/bubblewrap) sandbox — the process can only see the workspace (read-write) and media directory (read-only); config files and API keys are hidden. Automatically enables `restrictToWorkspace` for file tools. **Linux only** — requires `bwrap` installed (`apt install bubblewrap`; pre-installed in the Docker image). Not available on macOS or Windows (bwrap depends on Linux kernel namespaces). |
 | `tools.exec.enable` | `true` | When `false`, the shell `exec` tool is not registered at all. Use this to completely disable shell command execution. |
+| `tools.exec.allowedDirs` | `[]` | Optional allowlist of directories for shell execution. When set, `working_dir` and absolute paths referenced by commands must stay under these directories. Relative paths resolve from the command working directory. |
+| `tools.exec.allowPatterns` | `[]` | Optional regex allowlist for commands. When set, every `exec` command must match at least one pattern. |
+| `tools.exec.denyPatterns` | `[]` | Additional regex denylist for commands. These patterns are checked in addition to the built-in dangerous-command guardrails. |
+| `tools.exec.approvalPatterns` | `rm`, `sudo`, `kill` family | Regex patterns that trigger an interactive approval step before `exec` runs. By default, `rm`, `sudo`/`su`, and `kill`/`pkill`/`killall` require an explicit yes/no reply. |
 | `tools.exec.pathAppend` | `""` | Extra directories to append to `PATH` when running shell commands (e.g. `/usr/sbin` for `ufw`). |
+| `channels.<name>.tools.restrictToWorkspace` | inherit global | Per-channel override for `tools.restrictToWorkspace`. Useful when you want the embedded WebUI (`websocket`) to stay open but keep Telegram restricted to the workspace. |
 | `channels.*.allowFrom` | `[]` (deny all) | Whitelist of user IDs. Empty denies all; use `["*"]` to allow everyone. |
+
+Example: keep WebUI open to the host filesystem, but keep Telegram workspace-restricted.
+
+```json
+{
+  "tools": {
+    "restrictToWorkspace": true,
+    "filesystem": {
+      "allowedDirs": [
+        "~/.nanobot/workspace",
+        "~/Documents"
+      ]
+    },
+    "exec": {
+      "allowedDirs": [
+        "~/.nanobot/workspace",
+        "~/projects"
+      ],
+      "allowPatterns": [
+        "^git\\s+",
+        "^ls(\\s|$)",
+        "^python(3)?\\s+"
+      ],
+      "approvalPatterns": [
+        "(^|[;&|]\\s*)rm\\b",
+        "(^|[;&|]\\s*)(?:sudo|su)\\b",
+        "(^|[;&|]\\s*)(?:kill|pkill|killall)\\b"
+      ],
+      "denyPatterns": [
+        "curl\\s+.*169\\.254\\.169\\.254"
+      ]
+    }
+  },
+  "channels": {
+    "websocket": {
+      "tools": {
+        "restrictToWorkspace": false
+      }
+    },
+    "telegram": {
+      "tools": {
+        "restrictToWorkspace": true
+      }
+    }
+  }
+}
+```
+
+> [!NOTE]
+> `tools.exec.approvalPatterns` now provides a built-in approval flow for matching `exec` commands. The embedded WebUI renders approve/block buttons, and text channels like Telegram can approve by replying `yes` or block by replying `no`. This approval flow currently applies to `exec` only, not every tool.
 
 **Docker security**: The official Docker image runs as a non-root user (`nanobot`, UID 1000) with bubblewrap pre-installed. When using `docker-compose.yml`, the container drops all Linux capabilities except `SYS_ADMIN` (required for bwrap's namespace isolation).
 

@@ -65,6 +65,8 @@
       "inputAria": "メッセージ入力欄",
       "sendHint": "Enter で送信 · Shift+Enter で改行",
       "send": "メッセージを送信",
+      "modelMenuAria": "モデルターゲットを選択",
+      "modelMenuLabel": "モデルターゲット",
       "attachImage": "画像を添付",
       "encoding": "処理中…",
       "remove": "添付を削除",
@@ -85,7 +87,12 @@
     "assistantTyping": "アシスタントが入力中",
     "toolSingle": "ツールを使用中",
     "toolMany": "{{count}} 個のツールを使用",
-    "imageAttachment": "画像の添付"
+    "imageAttachment": "画像の添付",
+    "approval": {
+      "title": "承認が必要です",
+      "approve": "承認",
+      "block": "ブロック"
+    }
   },
   "lightbox": {
     "title": "画像プレビュー",

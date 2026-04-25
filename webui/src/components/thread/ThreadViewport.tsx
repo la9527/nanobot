@@ -12,6 +12,7 @@ interface ThreadViewportProps {
   isStreaming: boolean;
   composer: ReactNode;
   emptyState?: ReactNode;
+  onApprovalResponse?: (messageId: string, decision: "yes" | "no") => void | Promise<void>;
 }
 
 const NEAR_BOTTOM_PX = 48;
@@ -21,10 +22,16 @@ export function ThreadViewport({
   isStreaming,
   composer,
   emptyState,
+  onApprovalResponse,
 }: ThreadViewportProps) {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const composerWrapRef = useRef<HTMLDivElement>(null);
   const [atBottom, setAtBottom] = useState(true);
+  const [composerHeight, setComposerHeight] = useState(112);
+  const initialBottomPinnedRef = useRef(false);
+  const atBottomRef = useRef(true);
   const hasMessages = messages.length > 0;
 
   const scrollToBottom = useCallback((smooth = false) => {
@@ -37,9 +44,50 @@ export function ThreadViewport({
   }, []);
 
   useEffect(() => {
+    atBottomRef.current = atBottom;
+  }, [atBottom]);
+
+  useEffect(() => {
     if (!atBottom) return;
     scrollToBottom(!isStreaming);
   }, [messages, isStreaming, atBottom, scrollToBottom]);
+
+  useEffect(() => {
+    if (messages.length === 0) {
+      initialBottomPinnedRef.current = false;
+      return;
+    }
+    if (initialBottomPinnedRef.current) return;
+    initialBottomPinnedRef.current = true;
+    setAtBottom(true);
+    scrollToBottom(false);
+  }, [messages.length, scrollToBottom]);
+
+  useEffect(() => {
+    const scrollEl = scrollRef.current;
+    const contentEl = contentRef.current;
+    if (!scrollEl || !contentEl || !hasMessages) return;
+
+    const keepPinned = () => {
+      if (!initialBottomPinnedRef.current && !atBottomRef.current) return;
+      scrollToBottom(false);
+      requestAnimationFrame(() => {
+        const distance = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight;
+        const pinned = distance < NEAR_BOTTOM_PX;
+        setAtBottom(pinned);
+        if (pinned) {
+          initialBottomPinnedRef.current = false;
+        }
+      });
+    };
+
+    const observer = new ResizeObserver(() => {
+      keepPinned();
+    });
+    observer.observe(contentEl);
+    keepPinned();
+    return () => observer.disconnect();
+  }, [hasMessages, scrollToBottom]);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -55,6 +103,19 @@ export function ThreadViewport({
     return () => el.removeEventListener("scroll", onScroll);
   }, []);
 
+  useEffect(() => {
+    const el = composerWrapRef.current;
+    if (!el) return;
+    const update = () => {
+      const next = Math.max(72, Math.ceil(el.getBoundingClientRect().height));
+      setComposerHeight(next);
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [composer]);
+
   return (
     <div className="relative flex min-h-0 flex-1 overflow-hidden">
       <div
@@ -68,12 +129,12 @@ export function ThreadViewport({
         )}
       >
         {hasMessages ? (
-          <div className="mx-auto flex min-h-full w-full max-w-[64rem] flex-col">
-            <div className="flex-1 px-4 pb-20 pt-4">
-              <ThreadMessages messages={messages} />
+          <div ref={contentRef} className="mx-auto flex min-h-full w-full max-w-[64rem] flex-col">
+            <div className="flex-1 px-4 pt-4" style={{ paddingBottom: composerHeight + 12 }}>
+              <ThreadMessages messages={messages} onApprovalResponse={onApprovalResponse} />
             </div>
 
-            <div className="sticky bottom-0 z-10 mt-auto">
+            <div ref={composerWrapRef} className="sticky bottom-0 z-10 mt-auto">
               <div className="px-4 pb-3">
                 {composer}
               </div>

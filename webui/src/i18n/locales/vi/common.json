@@ -65,6 +65,8 @@
       "inputAria": "Ô nhập tin nhắn",
       "sendHint": "Enter để gửi · Shift+Enter để xuống dòng",
       "send": "Gửi tin nhắn",
+      "modelMenuAria": "Chọn đích mô hình",
+      "modelMenuLabel": "Đích mô hình",
       "attachImage": "Đính kèm ảnh",
       "encoding": "Đang xử lý…",
       "remove": "Xóa tệp đính kèm",
@@ -85,7 +87,12 @@
     "assistantTyping": "Trợ lý đang nhập",
     "toolSingle": "Đang dùng một công cụ",
     "toolMany": "Đã dùng {{count}} công cụ",
-    "imageAttachment": "Tệp hình ảnh đính kèm"
+    "imageAttachment": "Tệp hình ảnh đính kèm",
+    "approval": {
+      "title": "Cần phê duyệt",
+      "approve": "Phê duyệt",
+      "block": "Chặn"
+    }
   },
   "lightbox": {
     "title": "Xem trước ảnh",

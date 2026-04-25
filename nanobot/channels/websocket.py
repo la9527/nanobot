@@ -197,6 +197,29 @@ def _read_webui_active_target() -> str | None:
         return None
 
 
+def _read_webui_model_targets() -> list[dict[str, Any]]:
+    """Return configured model targets in a UI-friendly shape for the WebUI."""
+    try:
+        from nanobot.config.loader import load_config
+        from nanobot.model_targets import build_model_targets
+
+        config = load_config()
+        targets = build_model_targets(config)
+        payload: list[dict[str, Any]] = []
+        for name, target in targets.items():
+            payload.append({
+                "name": name,
+                "kind": target.kind,
+                "provider": target.provider,
+                "model": target.model,
+                "description": target.description,
+            })
+        return payload
+    except Exception as e:
+        logger.debug("webui bootstrap could not load model targets: {}", e)
+        return []
+
+
 def _parse_request_path(path_with_query: str) -> tuple[str, dict[str, list[str]]]:
     """Parse normalized path and query parameters in one pass."""
     parsed = urlparse("ws://x" + path_with_query)
@@ -607,6 +630,18 @@ class WebSocketChannel(BaseChannel):
         if m:
             return self._handle_session_messages(request, m.group(1))
 
+        m = re.match(r"^/api/sessions/([^/]+)/model-target$", got)
+        if m:
+            return self._handle_session_model_target(request, m.group(1))
+
+        m = re.match(r"^/api/sessions/([^/]+)/model-target/clear$", got)
+        if m:
+            return self._handle_session_model_target_clear(request, m.group(1))
+
+        m = re.match(r"^/api/sessions/([^/]+)/model-target/([^/]+)/select$", got)
+        if m:
+            return self._handle_session_model_target_select(request, m.group(1), m.group(2))
+
         # NOTE: websockets' HTTP parser only accepts GET, so we cannot expose a
         # true ``DELETE`` verb. The action is folded into the path instead.
         m = re.match(r"^/api/sessions/([^/]+)/delete$", got)
@@ -696,6 +731,7 @@ class WebSocketChannel(BaseChannel):
                 "expires_in": self.config.token_ttl_s,
                 "model_name": _read_webui_model_name(),
                 "active_target": _read_webui_active_target(),
+                "model_targets": _read_webui_model_targets(),
             }
         )
 
@@ -705,12 +741,33 @@ class WebSocketChannel(BaseChannel):
         if self._session_manager is None:
             return _http_error(503, "session manager unavailable")
         sessions = self._session_manager.list_sessions()
+        config, _targets = self._load_model_target_context()
+
+        active_default = _read_webui_active_target()
+
+        def _row_with_target(row: dict[str, Any]) -> dict[str, Any]:
+            cleaned = {k: v for k, v in row.items() if k != "path"}
+            key = row.get("key")
+            if not isinstance(key, str) or self._session_manager is None:
+                return cleaned
+            if config is None:
+                cleaned["active_target"] = active_default
+                return cleaned
+            try:
+                from nanobot.model_targets import get_active_model_target_name
+
+                session = self._session_manager.get_or_create(key)
+                cleaned["active_target"] = get_active_model_target_name(config, session)
+            except Exception:
+                cleaned["active_target"] = active_default
+            return cleaned
+
         # The webui is only meaningful for websocket-channel chats — CLI /
         # Slack / Lark / Discord sessions can't be resumed from the browser,
         # so leaking them into the sidebar is just noise. Filter to the
         # ``websocket:`` prefix and strip absolute paths on the way out.
         cleaned = [
-            {k: v for k, v in s.items() if k != "path"}
+            _row_with_target(s)
             for s in sessions
             if isinstance(s.get("key"), str) and s["key"].startswith("websocket:")
         ]
@@ -743,6 +800,115 @@ class WebSocketChannel(BaseChannel):
         # the client never needs them once it has the signed fetch URL.
         self._augment_media_urls(data)
         return _http_json_response(data)
+
+    def _load_model_target_context(self) -> tuple[Any, dict[str, Any]] | tuple[None, None]:
+        try:
+            from nanobot.config.loader import load_config
+            from nanobot.model_targets import build_model_targets
+
+            config = load_config()
+            return config, build_model_targets(config)
+        except Exception as e:
+            logger.warning("webui model target context unavailable: {}", e)
+            return None, None
+
+    def _resolve_webui_session(self, key: str) -> tuple[str | None, Any | None, Response | None]:
+        if not self._check_api_token(key if False else None):
+            pass
+        return None, None, None
+
+    def _decode_webui_session_key(self, key: str) -> str | None:
+        decoded_key = _decode_api_key(key)
+        if decoded_key is None:
+            return None
+        if not self._is_webui_session_key(decoded_key):
+            return None
+        return decoded_key
+
+    def _current_session_model_target_payload(self, decoded_key: str) -> Response:
+        assert self._session_manager is not None
+        config, targets = self._load_model_target_context()
+        if config is None or targets is None:
+            return _http_error(503, "model targets unavailable")
+
+        from nanobot.model_targets import get_active_model_target_name
+
+        session = self._session_manager.get_or_create(decoded_key)
+        active_target = get_active_model_target_name(config, session)
+        target = targets.get(active_target)
+        return _http_json_response({
+            "key": decoded_key,
+            "active_target": active_target,
+            "target": {
+                "name": target.name,
+                "kind": target.kind,
+                "provider": target.provider,
+                "model": target.model,
+                "description": target.description,
+            } if target is not None else None,
+        })
+
+    def _handle_session_model_target(self, request: WsRequest, key: str) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        if self._session_manager is None:
+            return _http_error(503, "session manager unavailable")
+        decoded_key = self._decode_webui_session_key(key)
+        if decoded_key is None:
+            return _http_error(404, "session not found")
+        return self._current_session_model_target_payload(decoded_key)
+
+    def _handle_session_model_target_clear(self, request: WsRequest, key: str) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        if self._session_manager is None:
+            return _http_error(503, "session manager unavailable")
+        decoded_key = self._decode_webui_session_key(key)
+        if decoded_key is None:
+            return _http_error(404, "session not found")
+
+        from nanobot.model_targets import SESSION_MODEL_TARGET_KEY
+
+        session = self._session_manager.get_or_create(decoded_key)
+        session.metadata.pop(SESSION_MODEL_TARGET_KEY, None)
+        self._session_manager.save(session)
+        return self._current_session_model_target_payload(decoded_key)
+
+    def _handle_session_model_target_select(
+        self,
+        request: WsRequest,
+        key: str,
+        target_name: str,
+    ) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        if self._session_manager is None:
+            return _http_error(503, "session manager unavailable")
+        decoded_key = self._decode_webui_session_key(key)
+        if decoded_key is None:
+            return _http_error(404, "session not found")
+
+        decoded_target = _decode_api_key(target_name)
+        if decoded_target is None:
+            return _http_error(400, "invalid model target")
+
+        config, _targets = self._load_model_target_context()
+        if config is None:
+            return _http_error(503, "model targets unavailable")
+
+        from nanobot.model_targets import SESSION_MODEL_TARGET_KEY, resolve_model_target
+
+        try:
+            resolve_model_target(config, decoded_target)
+        except KeyError:
+            return _http_error(404, "unknown model target")
+        except Exception:
+            return _http_error(400, "invalid model target")
+
+        session = self._session_manager.get_or_create(decoded_key)
+        session.metadata[SESSION_MODEL_TARGET_KEY] = decoded_target
+        self._session_manager.save(session)
+        return self._current_session_model_target_payload(decoded_key)
 
     def _augment_media_urls(self, payload: dict[str, Any]) -> None:
         """Mutate *payload* in place: each message's ``media`` path list is
@@ -1201,7 +1367,9 @@ class WebSocketChannel(BaseChannel):
         # Mark intermediate agent breadcrumbs (tool-call hints, generic
         # progress strings) so WS clients can render them as subordinate
         # trace rows rather than conversational replies.
-        if msg.metadata.get("_tool_hint"):
+        if msg.metadata.get("_tool_approval"):
+            payload["kind"] = "tool_approval"
+        elif msg.metadata.get("_tool_hint"):
             payload["kind"] = "tool_hint"
         elif msg.metadata.get("_progress"):
             payload["kind"] = "progress"

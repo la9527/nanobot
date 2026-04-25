@@ -3,6 +3,43 @@ import { beforeEach } from "vitest";
 
 import i18n from "@/i18n";
 
+function ensureLocalStorage() {
+  if (
+    typeof globalThis.localStorage !== "undefined"
+    && typeof globalThis.localStorage.getItem === "function"
+    && typeof globalThis.localStorage.setItem === "function"
+  ) {
+    return;
+  }
+
+  const store = new Map<string, string>();
+  const shim = {
+    get length() {
+      return store.size;
+    },
+    clear() {
+      store.clear();
+    },
+    getItem(key: string) {
+      return store.has(key) ? store.get(key)! : null;
+    },
+    key(index: number) {
+      return Array.from(store.keys())[index] ?? null;
+    },
+    removeItem(key: string) {
+      store.delete(key);
+    },
+    setItem(key: string, value: string) {
+      store.set(key, String(value));
+    },
+  } satisfies Storage;
+
+  Object.defineProperty(globalThis, "localStorage", {
+    value: shim,
+    configurable: true,
+  });
+}
+
 // happy-dom doesn't ship with ``crypto.randomUUID``; shim a tiny v4-ish helper.
 if (!("randomUUID" in globalThis.crypto)) {
   Object.defineProperty(globalThis.crypto, "randomUUID", {
@@ -15,6 +52,8 @@ if (!("randomUUID" in globalThis.crypto)) {
     configurable: true,
   });
 }
+
+ensureLocalStorage();
 
 beforeEach(async () => {
   await i18n.changeLanguage("en");

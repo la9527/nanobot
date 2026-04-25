@@ -90,6 +90,72 @@ async def test_bootstrap_returns_token_for_localhost(
         assert body["ws_path"] == "/"
         assert body["expires_in"] > 0
         assert isinstance(body.get("model_name"), str)
+        assert isinstance(body.get("model_targets"), list)
+        assert any(row.get("name") == "default" for row in body["model_targets"])
+    finally:
+        await channel.stop()
+        await server_task
+
+
+@pytest.mark.asyncio
+async def test_session_model_target_routes_round_trip(
+    bus: MagicMock, tmp_path: Path
+) -> None:
+    sm = _seed_session(tmp_path, key="websocket:model-chat")
+    channel = _ch(bus, session_manager=sm, port=29911)
+    server_task = asyncio.create_task(channel.start())
+    await asyncio.sleep(0.3)
+    try:
+        boot = await _http_get("http://127.0.0.1:29911/webui/bootstrap")
+        token = boot.json()["token"]
+        auth = {"Authorization": f"Bearer {token}"}
+
+        current = await _http_get(
+            "http://127.0.0.1:29911/api/sessions/websocket:model-chat/model-target",
+            headers=auth,
+        )
+        assert current.status_code == 200
+        assert isinstance(current.json()["active_target"], str)
+
+        selected = await _http_get(
+            "http://127.0.0.1:29911/api/sessions/websocket:model-chat/model-target/default/select",
+            headers=auth,
+        )
+        assert selected.status_code == 200
+        assert isinstance(selected.json()["active_target"], str)
+        session = sm.get_or_create("websocket:model-chat")
+        assert session.metadata.get("model_target") == "default"
+
+        cleared = await _http_get(
+            "http://127.0.0.1:29911/api/sessions/websocket:model-chat/model-target/clear",
+            headers=auth,
+        )
+        assert cleared.status_code == 200
+        session = sm.get_or_create("websocket:model-chat")
+        assert "model_target" not in session.metadata
+    finally:
+        await channel.stop()
+        await server_task
+
+
+@pytest.mark.asyncio
+async def test_session_model_target_routes_reject_unknown_target(
+    bus: MagicMock, tmp_path: Path
+) -> None:
+    sm = _seed_session(tmp_path, key="websocket:model-chat")
+    channel = _ch(bus, session_manager=sm, port=29912)
+    server_task = asyncio.create_task(channel.start())
+    await asyncio.sleep(0.3)
+    try:
+        boot = await _http_get("http://127.0.0.1:29912/webui/bootstrap")
+        token = boot.json()["token"]
+        auth = {"Authorization": f"Bearer {token}"}
+
+        resp = await _http_get(
+            "http://127.0.0.1:29912/api/sessions/websocket:model-chat/model-target/not-a-real-target/select",
+            headers=auth,
+        )
+        assert resp.status_code == 404
     finally:
         await channel.stop()
         await server_task
@@ -119,6 +185,7 @@ async def test_sessions_routes_require_bearer_token(
         assert "websocket:abc" in keys
         # Server stays an opaque source: filesystem paths must not leak to the wire.
         assert all("path" not in s for s in listing.json()["sessions"])
+        assert all(isinstance(s.get("active_target"), str) for s in listing.json()["sessions"])
 
         msgs = await _http_get(
             "http://127.0.0.1:29902/api/sessions/websocket:abc/messages",
@@ -168,6 +235,32 @@ async def test_sessions_list_only_returns_websocket_sessions_by_default(
     finally:
         await channel.stop()
         await server_task
+
+
+@pytest.mark.asyncio
+async def test_sessions_list_uses_session_model_target_override(
+        bus: MagicMock, tmp_path: Path
+) -> None:
+        sm = _seed_session(tmp_path, key="websocket:alpha")
+        session = sm.get_or_create("websocket:alpha")
+        session.metadata["model_target"] = "default"
+        sm.save(session)
+        channel = _ch(bus, session_manager=sm, port=29913)
+        server_task = asyncio.create_task(channel.start())
+        await asyncio.sleep(0.3)
+        try:
+            boot = await _http_get("http://127.0.0.1:29913/webui/bootstrap")
+            token = boot.json()["token"]
+            auth = {"Authorization": f"Bearer {token}"}
+
+            listing = await _http_get("http://127.0.0.1:29913/api/sessions", headers=auth)
+            assert listing.status_code == 200
+            row = listing.json()["sessions"][0]
+            assert row["key"] == "websocket:alpha"
+            assert row["active_target"] == "default"
+        finally:
+            await channel.stop()
+            await server_task
 
 
 @pytest.mark.asyncio

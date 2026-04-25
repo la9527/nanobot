@@ -65,6 +65,8 @@
       "inputAria": "訊息輸入框",
       "sendHint": "Enter 送出 · Shift+Enter 換行",
       "send": "送出訊息",
+      "modelMenuAria": "選擇模型目標",
+      "modelMenuLabel": "模型目標",
       "attachImage": "附加圖片",
       "encoding": "處理中…",
       "remove": "移除附件",
@@ -85,7 +87,12 @@
     "assistantTyping": "助理正在輸入",
     "toolSingle": "正在使用工具",
     "toolMany": "已使用 {{count}} 個工具",
-    "imageAttachment": "圖片附件"
+    "imageAttachment": "圖片附件",
+    "approval": {
+      "title": "需要批准",
+      "approve": "批准",
+      "block": "封鎖"
+    }
   },
   "lightbox": {
     "title": "圖片預覽",

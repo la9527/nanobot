@@ -92,4 +92,27 @@ describe("useNanobotStream", () => {
     expect(result.current.messages[1].role).toBe("assistant");
     expect(result.current.messages[1].kind).toBeUndefined();
   });
+
+  it("maps tool_approval frames into approval messages", () => {
+    const fake = fakeClient();
+    const { result } = renderHook(() => useNanobotStream("chat-a", []), {
+      wrapper: wrap(fake.client),
+    });
+
+    act(() => {
+      fake.emit("chat-a", {
+        event: "message",
+        chat_id: "chat-a",
+        text: "Approval required for a high-risk command.",
+        kind: "tool_approval",
+      });
+    });
+
+    expect(result.current.messages).toHaveLength(1);
+    expect(result.current.messages[0]).toMatchObject({
+      role: "assistant",
+      kind: "approval",
+      content: "Approval required for a high-risk command.",
+    });
+  });
 });

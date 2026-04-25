@@ -123,3 +123,7 @@ class ToolRegistry:
 
     def __contains__(self, name: str) -> bool:
         return name in self._tools
+
+    def items(self) -> list[tuple[str, Tool]]:
+        """Return a stable snapshot of registered tools."""
+        return list(self._tools.items())

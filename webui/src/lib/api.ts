@@ -1,4 +1,4 @@
-import type { ChatSummary } from "./types";
+import type { ChatSummary, SessionModelTargetResponse } from "./types";
 
 export class ApiError extends Error {
   status: number;
@@ -43,6 +43,7 @@ export async function listSessions(
     created_at: string | null;
     updated_at: string | null;
     preview?: string;
+    active_target?: string | null;
   };
   const body = await request<{ sessions: Row[] }>(
     `${base}/api/sessions`,
@@ -54,6 +55,7 @@ export async function listSessions(
     createdAt: s.created_at,
     updatedAt: s.updated_at,
     preview: s.preview ?? "",
+    activeTarget: s.active_target ?? null,
   }));
 }
 
@@ -103,4 +105,27 @@ export async function deleteSession(
     token,
   );
   return body.deleted;
+}
+
+export async function fetchSessionModelTarget(
+  token: string,
+  key: string,
+  base: string = "",
+): Promise<SessionModelTargetResponse> {
+  return request(
+    `${base}/api/sessions/${encodeURIComponent(key)}/model-target`,
+    token,
+  );
+}
+
+export async function selectSessionModelTarget(
+  token: string,
+  key: string,
+  targetName: string,
+  base: string = "",
+): Promise<SessionModelTargetResponse> {
+  return request(
+    `${base}/api/sessions/${encodeURIComponent(key)}/model-target/${encodeURIComponent(targetName)}/select`,
+    token,
+  );
 }

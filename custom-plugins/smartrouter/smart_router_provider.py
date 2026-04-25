@@ -264,6 +264,12 @@ class SmartRouterProvider(LLMProvider):
                 )
                 if tier != "full":
                     continue
+                response.provider_metadata = {
+                    **(response.provider_metadata or {}),
+                    "smart_router_requested_tier": decision.requested_tier,
+                    "smart_router_final_tier": tier,
+                    "smart_router_final_model": target.model,
+                }
                 self._logger.log(
                     decision=decision,
                     final_tier=tier,
@@ -281,6 +287,12 @@ class SmartRouterProvider(LLMProvider):
                     status="ok",
                 )
             )
+            response.provider_metadata = {
+                **(response.provider_metadata or {}),
+                "smart_router_requested_tier": decision.requested_tier,
+                "smart_router_final_tier": tier,
+                "smart_router_final_model": target.model,
+            }
             self._logger.log(
                 decision=decision,
                 final_tier=tier,

@@ -30,6 +30,8 @@
     --sidebar-accent: 0 0% 96.1%;
     --sidebar-accent-foreground: 0 0% 9%;
     --sidebar-border: 0 0% 89.8%;
+    --chat-font-size: 15px;
+    --chat-line-height: 1.7;
   }
 
   .dark {

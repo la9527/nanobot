@@ -49,7 +49,7 @@ export function useNanobotStream(
    * notification or starts a fresh action). */
   dismissStreamError: () => void;
 } {
-  const { client, setModelName } = useClient();
+  const { client, setActiveTarget, setModelName } = useClient();
   const [messages, setMessages] = useState<UIMessage[]>(initialMessages);
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamError, setStreamError] = useState<StreamError | null>(null);
@@ -80,9 +80,11 @@ export function useNanobotStream(
       active_target?: string;
       response_model?: string;
     }) => {
-      const next = ev.active_target ?? ev.response_model;
-      if (typeof next === "string" && next.trim()) {
-        setModelName(next);
+      if (typeof ev.active_target === "string" && ev.active_target.trim()) {
+        setActiveTarget(ev.active_target);
+      }
+      if (typeof ev.response_model === "string" && ev.response_model.trim()) {
+        setModelName(ev.response_model);
       }
     };
 
@@ -160,6 +162,20 @@ export function useNanobotStream(
           return;
         }
 
+        if (ev.kind === "tool_approval") {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: createUuid(),
+              role: "assistant",
+              kind: "approval",
+              content: ev.text,
+              createdAt: Date.now(),
+            },
+          ]);
+          return;
+        }
+
         applyModelHint(ev);
 
         // A complete (non-streamed) assistant message. If a stream was in
@@ -190,7 +206,7 @@ export function useNanobotStream(
       unsub();
       buffer.current = null;
     };
-  }, [chatId, client, setModelName]);
+  }, [chatId, client, setActiveTarget, setModelName]);
 
   const send = useCallback(
     (content: string, images?: SendImage[]) => {

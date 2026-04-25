@@ -26,6 +26,14 @@ function titleFor(s: ChatSummary, fallbackTitle: string): string {
   return fallbackTitle;
 }
 
+function targetBadgeLabel(activeTarget: string | null | undefined): string | null {
+  if (!activeTarget) return null;
+  const trimmed = activeTarget.trim();
+  if (!trimmed || trimmed === "default") return null;
+  if (trimmed === "smart_router") return "smart-router";
+  return trimmed;
+}
+
 export function ChatList({
   sessions,
   activeKey,
@@ -59,6 +67,7 @@ export function ChatList({
             s,
             t("chat.fallbackTitle", { id: s.chatId.slice(0, 6) }),
           );
+          const badge = targetBadgeLabel(s.activeTarget);
           return (
             <li key={s.key}>
               <div
@@ -75,8 +84,13 @@ export function ChatList({
                   className="flex min-w-0 flex-1 flex-col items-start text-left"
                 >
                   <span className="w-full truncate font-medium leading-5">{title}</span>
-                  <span className="text-[10.5px] text-muted-foreground/80">
-                    {relativeTime(s.updatedAt ?? s.createdAt) || "—"}
+                  <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[10.5px] text-muted-foreground/80">
+                    <span>{relativeTime(s.updatedAt ?? s.createdAt) || "—"}</span>
+                    {badge ? (
+                      <span className="inline-flex max-w-[8rem] truncate rounded-full border border-sidebar-border/80 bg-card/30 px-1.5 py-[1px] text-[9.5px] font-medium text-sidebar-foreground/80">
+                        {badge}
+                      </span>
+                    ) : null}
                   </span>
                 </button>
                 <DropdownMenu modal={false}>

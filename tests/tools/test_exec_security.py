@@ -182,3 +182,77 @@ async def test_exec_ignores_workspace_check_when_not_restricted(tmp_path):
     result = await tool.execute(command="echo ok", working_dir=str(other))
     assert "ok" in result
     assert "outside the configured workspace" not in result
+
+
+@pytest.mark.asyncio
+async def test_exec_allows_working_dir_in_explicit_allowed_dir(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    approved = tmp_path / "approved"
+    approved.mkdir()
+
+    tool = ExecTool(
+        working_dir=str(workspace),
+        restrict_to_workspace=False,
+        allowed_dirs=[str(approved)],
+        timeout=5,
+    )
+    result = await tool.execute(command="echo ok", working_dir=str(approved))
+    assert "ok" in result
+
+
+@pytest.mark.asyncio
+async def test_exec_blocks_working_dir_outside_explicit_allowed_dir(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    approved = tmp_path / "approved"
+    approved.mkdir()
+    blocked = tmp_path / "blocked"
+    blocked.mkdir()
+
+    tool = ExecTool(
+        working_dir=str(workspace),
+        restrict_to_workspace=False,
+        allowed_dirs=[str(approved)],
+        timeout=5,
+    )
+    result = await tool.execute(command="echo ok", working_dir=str(blocked))
+    assert "outside the configured workspace" in result
+
+
+def test_exec_guard_blocks_absolute_path_outside_explicit_allowed_dir(tmp_path):
+    approved = tmp_path / "approved"
+    approved.mkdir()
+    blocked = tmp_path / "blocked"
+    blocked.mkdir()
+    target = blocked / "secret.txt"
+    target.write_text("nope", encoding="utf-8")
+
+    tool = ExecTool(
+        restrict_to_workspace=False,
+        allowed_dirs=[str(approved)],
+    )
+    error = tool._guard_command(f"cat {target}", str(approved))
+    assert error == "Error: Command blocked by safety guard (path outside working dir)"
+
+
+@pytest.mark.parametrize(
+    ("command", "needs_approval"),
+    [
+        ("rm -rf build", True),
+        ("sudo systemctl restart nanobot", True),
+        ("kill -9 1234", True),
+        ("pkill nanobot", True),
+        ("ls -la", False),
+    ],
+)
+def test_exec_approval_prompt_matches_high_risk_commands(command: str, needs_approval: bool):
+    tool = ExecTool(approval_patterns=[
+        r"(^|[;&|]\s*)rm\b",
+        r"(^|[;&|]\s*)(?:sudo|su)\b",
+        r"(^|[;&|]\s*)(?:kill|pkill|killall)\b",
+    ])
+    prompt = tool.approval_prompt({"command": command, "working_dir": "/tmp/demo"})
+    assert (prompt is not None) is needs_approval
+    if needs_approval:
+        assert "Reply yes to run it or no to block it." in prompt

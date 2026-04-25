@@ -6,6 +6,7 @@ import asyncio
 import dataclasses
 import json
 import os
+import re
 import time
 from contextlib import AsyncExitStack, nullcontext
 from pathlib import Path
@@ -33,7 +34,7 @@ from nanobot.agent.tools.web import WebFetchTool, WebSearchTool
 from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.command import CommandContext, CommandRouter, register_builtin_commands
-from nanobot.config.schema import AgentDefaults
+from nanobot.config.schema import AgentDefaults, ChannelToolsOverride
 from nanobot.model_targets import (
     DEFAULT_MODEL_TARGET_NAME,
     SESSION_MODEL_TARGET_KEY,
@@ -151,6 +152,10 @@ class AgentLoop:
 
     _RUNTIME_CHECKPOINT_KEY = "runtime_checkpoint"
     _PENDING_USER_TURN_KEY = "pending_user_turn"
+    _SMART_ROUTER_TIER_KEY = "smart_router_last_tier"
+    _SMART_ROUTER_MODEL_KEY = "smart_router_last_model"
+    _APPROVAL_YES = frozenset({"y", "yes", "ok", "approve", "approved", "run", "continue", "예", "네", "승인", "허용"})
+    _APPROVAL_NO = frozenset({"n", "no", "deny", "denied", "block", "cancel", "stop", "아니오", "아니", "거부", "취소"})
 
     def __init__(
         self,
@@ -207,6 +212,7 @@ class AgentLoop:
         self.provider_retry_mode = provider_retry_mode
         self.web_config = web_config or WebToolsConfig()
         self.exec_config = exec_config or ExecToolConfig()
+        self.tools_config = _tc
         self.cron_service = cron_service
         self.restrict_to_workspace = restrict_to_workspace
         self._start_time = time.time()
@@ -340,6 +346,16 @@ class AgentLoop:
             "context_tokens_estimate": ctx_est,
             "context_window_tokens": self.context_window_tokens,
             "footer_mode": self.get_response_footer_mode(session),
+            "smart_router_tier": (
+                session.metadata.get(self._SMART_ROUTER_TIER_KEY)
+                if session is not None
+                else None
+            ),
+            "smart_router_model": (
+                session.metadata.get(self._SMART_ROUTER_MODEL_KEY)
+                if session is not None
+                else None
+            ),
         }
 
     def _resolve_execution_runtime(self, session: Session | None) -> tuple[LLMProvider, str, str | None]:
@@ -362,10 +378,9 @@ class AgentLoop:
 
     def _register_default_tools(self) -> None:
         """Register the default set of tools."""
-        allowed_dir = (
-            self.workspace if (self.restrict_to_workspace or self.exec_config.sandbox) else None
-        )
-        extra_read = [BUILTIN_SKILLS_DIR] if allowed_dir else None
+        policy = self._resolve_tool_policy("cli")
+        allowed_dir = policy["filesystem_primary_dir"]
+        extra_read = policy["filesystem_extra_dirs"]
         self.tools.register(
             ReadFileTool(
                 workspace=self.workspace, allowed_dir=allowed_dir, extra_allowed_dirs=extra_read
@@ -381,10 +396,13 @@ class AgentLoop:
                 ExecTool(
                     working_dir=str(self.workspace),
                     timeout=self.exec_config.timeout,
-                    restrict_to_workspace=self.restrict_to_workspace,
+                    restrict_to_workspace=policy["restrict_to_workspace"],
+                    allowed_dirs=[str(path) for path in policy["exec_allowed_dirs"]],
                     sandbox=self.exec_config.sandbox,
                     path_append=self.exec_config.path_append,
                     allowed_env_keys=self.exec_config.allowed_env_keys,
+                    allow_patterns=policy["exec_allow_patterns"],
+                    deny_patterns=policy["exec_deny_patterns"],
                 )
             )
         if self.web_config.enable:
@@ -398,6 +416,232 @@ class AgentLoop:
             self.tools.register(
                 CronTool(self.cron_service, default_timezone=self.context.timezone or "UTC")
             )
+
+    def _resolve_allowed_dirs(self, raw_dirs: list[str] | None) -> list[Path]:
+        resolved: list[Path] = []
+        for raw in raw_dirs or []:
+            candidate = Path(raw).expanduser()
+            if not candidate.is_absolute():
+                candidate = self.workspace / candidate
+            path = candidate.resolve()
+            if path not in resolved:
+                resolved.append(path)
+        return resolved
+
+    def _resolve_channel_tools_override(self, channel: str) -> ChannelToolsOverride:
+        if self.channels_config is None:
+            return ChannelToolsOverride()
+        section = getattr(self.channels_config, channel, None)
+        if not isinstance(section, dict):
+            return ChannelToolsOverride()
+        raw_tools = section.get("tools")
+        if not isinstance(raw_tools, dict):
+            return ChannelToolsOverride()
+        try:
+            return ChannelToolsOverride.model_validate(raw_tools)
+        except Exception as exc:
+            logger.warning("Ignoring invalid tool override for channel {}: {}", channel, exc)
+            return ChannelToolsOverride()
+
+    def _resolve_tool_policy(self, channel: str) -> dict[str, Any]:
+        override = self._resolve_channel_tools_override(channel)
+        restrict_to_workspace = self.restrict_to_workspace
+        if override.restrict_to_workspace is not None:
+            restrict_to_workspace = override.restrict_to_workspace
+
+        filesystem_allowed_dirs = self._resolve_allowed_dirs(self.tools_config.filesystem.allowed_dirs)
+        if override.filesystem.allowed_dirs is not None:
+            filesystem_allowed_dirs = self._resolve_allowed_dirs(override.filesystem.allowed_dirs)
+        if restrict_to_workspace and not filesystem_allowed_dirs:
+            filesystem_allowed_dirs = [self.workspace.resolve()]
+
+        exec_allowed_dirs = self._resolve_allowed_dirs(self.exec_config.allowed_dirs)
+        if override.exec.allowed_dirs is not None:
+            exec_allowed_dirs = self._resolve_allowed_dirs(override.exec.allowed_dirs)
+        if restrict_to_workspace and not exec_allowed_dirs:
+            exec_allowed_dirs = [self.workspace.resolve()]
+
+        exec_allow_patterns = list(self.exec_config.allow_patterns)
+        if override.exec.allow_patterns is not None:
+            exec_allow_patterns = list(override.exec.allow_patterns)
+
+        exec_deny_patterns = list(self.exec_config.deny_patterns)
+        if override.exec.deny_patterns is not None:
+            exec_deny_patterns = list(override.exec.deny_patterns)
+
+        exec_approval_patterns = list(self.exec_config.approval_patterns)
+        if override.exec.approval_patterns is not None:
+            exec_approval_patterns = list(override.exec.approval_patterns)
+
+        return {
+            "restrict_to_workspace": restrict_to_workspace,
+            "filesystem_primary_dir": filesystem_allowed_dirs[0] if filesystem_allowed_dirs else None,
+            "filesystem_extra_dirs": ([*filesystem_allowed_dirs[1:], BUILTIN_SKILLS_DIR] if filesystem_allowed_dirs else None),
+            "exec_allowed_dirs": exec_allowed_dirs,
+            "exec_allow_patterns": exec_allow_patterns,
+            "exec_deny_patterns": exec_deny_patterns,
+            "exec_approval_patterns": exec_approval_patterns,
+        }
+
+    def _build_effective_tools(self, channel: str) -> ToolRegistry:
+        policy = self._resolve_tool_policy(channel)
+        registry = ToolRegistry()
+        skipped = {
+            "read_file",
+            "write_file",
+            "edit_file",
+            "list_dir",
+            "glob",
+            "grep",
+            "notebook_edit",
+            "exec",
+        }
+        for name, tool in self.tools.items():
+            if name not in skipped:
+                registry.register(tool)
+
+        allowed_dir = policy["filesystem_primary_dir"]
+        extra_read = policy["filesystem_extra_dirs"]
+        registry.register(
+            ReadFileTool(
+                workspace=self.workspace,
+                allowed_dir=allowed_dir,
+                extra_allowed_dirs=extra_read,
+            )
+        )
+        for cls in (WriteFileTool, EditFileTool, ListDirTool):
+            registry.register(
+                cls(
+                    workspace=self.workspace,
+                    allowed_dir=allowed_dir,
+                    extra_allowed_dirs=extra_read,
+                )
+            )
+        for cls in (GlobTool, GrepTool):
+            registry.register(
+                cls(
+                    workspace=self.workspace,
+                    allowed_dir=allowed_dir,
+                    extra_allowed_dirs=extra_read,
+                )
+            )
+        registry.register(
+            NotebookEditTool(
+                workspace=self.workspace,
+                allowed_dir=allowed_dir,
+                extra_allowed_dirs=extra_read,
+            )
+        )
+
+        if self.exec_config.enable:
+            registry.register(
+                ExecTool(
+                    working_dir=str(self.workspace),
+                    timeout=self.exec_config.timeout,
+                    restrict_to_workspace=policy["restrict_to_workspace"],
+                    allowed_dirs=[str(path) for path in policy["exec_allowed_dirs"]],
+                    sandbox=self.exec_config.sandbox,
+                    path_append=self.exec_config.path_append,
+                    allowed_env_keys=self.exec_config.allowed_env_keys,
+                    allow_patterns=policy["exec_allow_patterns"],
+                    deny_patterns=policy["exec_deny_patterns"],
+                    approval_patterns=policy["exec_approval_patterns"],
+                )
+            )
+        return registry
+
+    @classmethod
+    def _parse_tool_approval_response(cls, content: str | None) -> bool | None:
+        if not isinstance(content, str):
+            return None
+        normalized = " ".join(content.strip().lower().split())
+        if not normalized:
+            return None
+        token = re.sub(r"^[^\w가-힣]+|[^\w가-힣]+$", "", normalized.split(" ", 1)[0])
+        if token in cls._APPROVAL_YES:
+            return True
+        if token in cls._APPROVAL_NO:
+            return False
+        return None
+
+    @staticmethod
+    def _compact_approval_command(command: Any, *, limit: int = 160) -> str | None:
+        if not isinstance(command, str):
+            return None
+        compact = " ".join(command.strip().split())
+        if not compact:
+            return None
+        if len(compact) > limit:
+            return compact[: limit - 3] + "..."
+        return compact
+
+    def _format_tool_approval_prompt(
+        self,
+        *,
+        channel: str,
+        prompt: str,
+        params: dict[str, Any] | None,
+    ) -> str:
+        command_preview = self._compact_approval_command((params or {}).get("command"))
+        if channel == "telegram":
+            lines = ["Approval required for a high-risk command."]
+            if command_preview:
+                lines.append(f"Command: {command_preview}")
+            lines.append("Reply yes to run or no to block.")
+            return "\n".join(lines)
+        return prompt
+
+    async def _request_tool_approval(
+        self,
+        *,
+        channel: str,
+        chat_id: str,
+        message_id: str | None,
+        pending_queue: asyncio.Queue | None,
+        tool_name: str,
+        tool_call_id: str,
+        prompt: str,
+        params: dict[str, Any] | None,
+    ) -> tuple[bool, str | None]:
+        approval_text = self._format_tool_approval_prompt(
+            channel=channel,
+            prompt=prompt,
+            params=params,
+        )
+        meta = {
+            "_tool_approval": True,
+            "tool_name": tool_name,
+            "tool_call_id": tool_call_id,
+        }
+        if message_id:
+            meta["message_id"] = message_id
+        await self.bus.publish_outbound(OutboundMessage(
+            channel=channel,
+            chat_id=chat_id,
+            content=approval_text,
+            metadata=meta,
+        ))
+        if pending_queue is None:
+            return False, "Error: Tool call requires approval but no interactive approval channel is available"
+
+        while True:
+            try:
+                approval_msg = await asyncio.wait_for(pending_queue.get(), timeout=300)
+            except asyncio.TimeoutError:
+                return False, "Error: Tool approval timed out after 300 seconds"
+
+            decision = self._parse_tool_approval_response(approval_msg.content)
+            if decision is None:
+                await self.bus.publish_outbound(OutboundMessage(
+                    channel=channel,
+                    chat_id=chat_id,
+                    content="Approval is still pending. Reply yes to run the command or no to block it.",
+                    metadata=meta,
+                ))
+                continue
+            if decision:
+                return True, None
+            return False, "Error: Command execution was denied by the user"
 
     async def _connect_mcp(self) -> None:
         """Connect to configured MCP servers (one-time, lazy)."""
@@ -501,7 +745,7 @@ class AgentLoop:
         pending_queue: asyncio.Queue | None = None,
         provider: LLMProvider | None = None,
         model: str | None = None,
-    ) -> tuple[str | None, list[str], list[dict], str, bool]:
+    ) -> tuple[str | None, list[str], list[dict], str, bool, dict[str, Any]]:
         """Run the agent iteration loop.
 
         *on_stream*: called with each content delta during streaming.
@@ -527,6 +771,7 @@ class AgentLoop:
         active_provider = provider or self.provider
         active_model = model or self.model
         runner = self.runner if active_provider is self.provider else AgentRunner(active_provider)
+        effective_tools = self._build_effective_tools(channel)
 
         async def _checkpoint(payload: dict[str, Any]) -> None:
             if session is None:
@@ -595,7 +840,7 @@ class AgentLoop:
 
         result = await runner.run(AgentRunSpec(
             initial_messages=initial_messages,
-            tools=self.tools,
+            tools=effective_tools,
             model=active_model,
             max_iterations=self.max_iterations,
             max_tool_result_chars=self.max_tool_result_chars,
@@ -611,6 +856,16 @@ class AgentLoop:
             retry_wait_callback=on_retry_wait,
             checkpoint_callback=_checkpoint,
             injection_callback=_drain_pending,
+            tool_approval_callback=lambda tool_call, _tool, _params, prompt: self._request_tool_approval(
+                channel=channel,
+                chat_id=chat_id,
+                message_id=message_id,
+                pending_queue=pending_queue,
+                tool_name=tool_call.name,
+                tool_call_id=tool_call.id,
+                prompt=prompt,
+                params=_params,
+            ),
         ))
         self._last_usage = result.usage
         if result.stop_reason == "max_iterations":
@@ -622,7 +877,14 @@ class AgentLoop:
                 await on_stream_end(resuming=False)
         elif result.stop_reason == "error":
             logger.error("LLM returned error: {}", (result.final_content or "")[:200])
-        return result.final_content, result.tools_used, result.messages, result.stop_reason, result.had_injections
+        return (
+            result.final_content,
+            result.tools_used,
+            result.messages,
+            result.stop_reason,
+            result.had_injections,
+            dict(result.response_metadata or {}),
+        )
 
     async def run(self) -> None:
         """Run the agent loop, dispatching messages as tasks to stay responsive to /stop."""
@@ -894,7 +1156,7 @@ class AgentLoop:
                 session_summary=pending,
                 current_role=current_role,
             )
-            final_content, _, all_msgs, _, _ = await self._run_agent_loop(
+            final_content, _, all_msgs, _, _, _ = await self._run_agent_loop(
                 messages, session=session, channel=channel, chat_id=chat_id,
                 message_id=msg.metadata.get("message_id"),
                 provider=exec_provider,
@@ -1022,7 +1284,7 @@ class AgentLoop:
                 "active_target": active_target,
             }
 
-        final_content, _, all_msgs, stop_reason, had_injections = await self._run_agent_loop(
+        final_content, _, all_msgs, stop_reason, had_injections, response_meta = await self._run_agent_loop(
             initial_messages,
             on_progress=on_progress or _bus_progress,
             on_stream=on_stream,
@@ -1036,6 +1298,26 @@ class AgentLoop:
             provider=exec_provider,
             model=exec_model,
         )
+
+        route_tier = None
+        route_model = None
+        if isinstance(response_meta, dict):
+            tier = response_meta.get("smart_router_final_tier")
+            model_name = response_meta.get("smart_router_final_model")
+            if isinstance(tier, str) and tier:
+                route_tier = tier
+            if isinstance(model_name, str) and model_name:
+                route_model = model_name
+
+        if route_tier is not None:
+            session.metadata[self._SMART_ROUTER_TIER_KEY] = route_tier
+        elif session.metadata.get(self._SMART_ROUTER_TIER_KEY):
+            session.metadata.pop(self._SMART_ROUTER_TIER_KEY, None)
+        if route_model is not None:
+            session.metadata[self._SMART_ROUTER_MODEL_KEY] = route_model
+        elif session.metadata.get(self._SMART_ROUTER_MODEL_KEY):
+            session.metadata.pop(self._SMART_ROUTER_MODEL_KEY, None)
+        self.sessions.save(session)
 
         if final_content is None or not final_content.strip():
             final_content = EMPTY_FINAL_RESPONSE_MESSAGE
@@ -1060,6 +1342,8 @@ class AgentLoop:
                 usage=status_snapshot["usage"],
                 context_window_tokens=status_snapshot["context_window_tokens"],
                 context_tokens_estimate=status_snapshot["context_tokens_estimate"],
+                route_tier=route_tier,
+                route_model=route_model,
             )
             if footer and on_stream is None:
                 final_content = final_content.rstrip() + footer
@@ -1099,6 +1383,10 @@ class AgentLoop:
         meta["response_footer_mode"] = status_snapshot["footer_mode"]
         if status_snapshot["active_target"]:
             meta["active_target"] = status_snapshot["active_target"]
+        if route_tier:
+            meta["smart_router_tier"] = route_tier
+        if route_model:
+            meta["smart_router_model"] = route_model
         if on_stream is not None and stop_reason != "error":
             meta["_streamed"] = True
         return OutboundMessage(

@@ -65,6 +65,8 @@
       "inputAria": "Champ de message",
       "sendHint": "Entrée pour envoyer · Maj+Entrée pour un retour à la ligne",
       "send": "Envoyer le message",
+      "modelMenuAria": "Choisir la cible du modèle",
+      "modelMenuLabel": "Cibles de modèle",
       "attachImage": "Joindre une image",
       "encoding": "Traitement…",
       "remove": "Retirer la pièce jointe",
@@ -85,7 +87,12 @@
     "assistantTyping": "L’assistant est en train d’écrire",
     "toolSingle": "Utilisation d’un outil",
     "toolMany": "{{count}} outils utilisés",
-    "imageAttachment": "Pièce jointe image"
+    "imageAttachment": "Pièce jointe image",
+    "approval": {
+      "title": "Approbation requise",
+      "approve": "Approuver",
+      "block": "Bloquer"
+    }
   },
   "lightbox": {
     "title": "Aperçu de l’image",

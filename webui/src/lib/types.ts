@@ -2,7 +2,7 @@ export type Role = "user" | "assistant" | "tool" | "system";
 
 /** "trace" rows are intermediate agent breadcrumbs (tool-call hints,
  * progress pings) that should not be rendered as conversational replies. */
-export type MessageKind = "message" | "trace";
+export type MessageKind = "message" | "trace" | "approval";
 
 /** One image attached to a UIMessage.
  *
@@ -45,6 +45,15 @@ export interface ChatSummary {
   createdAt: string | null;
   updatedAt: string | null;
   preview: string;
+  activeTarget?: string | null;
+}
+
+export interface ModelTargetOption {
+  name: string;
+  kind: string;
+  provider?: string | null;
+  model?: string | null;
+  description?: string;
 }
 
 export interface BootstrapResponse {
@@ -53,6 +62,13 @@ export interface BootstrapResponse {
   expires_in: number;
   model_name?: string | null;
   active_target?: string | null;
+  model_targets?: ModelTargetOption[];
+}
+
+export interface SessionModelTargetResponse {
+  key: string;
+  active_target: string;
+  target?: ModelTargetOption | null;
 }
 
 export type ConnectionStatus =
@@ -76,7 +92,7 @@ export type InboundEvent =
       active_target?: string;
       /** Present when the frame is an agent breadcrumb (e.g. tool hint,
        * generic progress line) rather than a conversational reply. */
-      kind?: "tool_hint" | "progress";
+      kind?: "tool_hint" | "progress" | "tool_approval";
     }
   | {
       event: "delta";

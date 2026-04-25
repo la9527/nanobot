@@ -8,6 +8,7 @@ import {
 } from "react";
 import {
   ArrowUp,
+  ChevronDown,
   ImageIcon,
   Loader2,
   Paperclip,
@@ -17,6 +18,15 @@ import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
   useAttachedImages,
   type AttachedImage,
   type AttachmentError,
@@ -24,6 +34,7 @@ import {
 } from "@/hooks/useAttachedImages";
 import { useClipboardAndDrop } from "@/hooks/useClipboardAndDrop";
 import type { SendImage } from "@/hooks/useNanobotStream";
+import type { ModelTargetOption } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 /** ``<input accept>``: aligned with the server's MIME whitelist. SVG is
@@ -36,11 +47,33 @@ function formatBytes(n: number): string {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function resizeTextarea(el: HTMLTextAreaElement | null) {
+  if (!el) return;
+  el.style.height = "auto";
+  el.style.height = `${Math.min(el.scrollHeight, 260)}px`;
+}
+
+function describeModelTarget(target: ModelTargetOption): string | null {
+  if (target.kind === "smart_router") {
+    return "smart-router";
+  }
+  const model = typeof target.model === "string" ? target.model.trim() : "";
+  const provider = typeof target.provider === "string" ? target.provider.trim() : "";
+  if (provider && model) return `${provider} -> ${model}`;
+  if (model) return model;
+  if (provider) return provider;
+  return null;
+}
+
 interface ThreadComposerProps {
   onSend: (content: string, images?: SendImage[]) => void;
   disabled?: boolean;
   placeholder?: string;
   modelLabel?: string | null;
+  activeTarget?: string | null;
+  modelTargets?: ModelTargetOption[];
+  modelTargetPending?: boolean;
+  onSelectModelTarget?: (targetName: string) => void | Promise<void>;
   variant?: "thread" | "hero";
 }
 
@@ -49,14 +82,21 @@ export function ThreadComposer({
   disabled,
   placeholder,
   modelLabel = null,
+  activeTarget = null,
+  modelTargets = [],
+  modelTargetPending = false,
+  onSelectModelTarget,
   variant = "thread",
 }: ThreadComposerProps) {
   const { t } = useTranslation();
   const [value, setValue] = useState("");
   const [inlineError, setInlineError] = useState<string | null>(null);
+  const [historyIndex, setHistoryIndex] = useState<number | null>(null);
+  const [sentHistory, setSentHistory] = useState<string[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const chipRefs = useRef(new Map<string, HTMLButtonElement>());
+  const draftBeforeHistoryRef = useRef("");
   const isHero = variant === "hero";
   const resolvedPlaceholder =
     placeholder ?? t("thread.composer.placeholderThread");
@@ -115,6 +155,7 @@ export function ThreadComposer({
     && !encoding
     && !hasErrors
     && (value.trim().length > 0 || readyImages.length > 0);
+  const canSelectModelTarget = !disabled && !modelTargetPending && modelTargets.length > 0 && !!onSelectModelTarget;
 
   const submit = useCallback(() => {
     if (!canSend) return;
@@ -134,6 +175,15 @@ export function ThreadComposer({
           }))
         : undefined;
     onSend(trimmed, payload);
+    if (trimmed) {
+      setSentHistory((prev) => (
+        prev.length > 0 && prev[prev.length - 1] === trimmed
+          ? prev
+          : [...prev, trimmed]
+      ));
+    }
+    setHistoryIndex(null);
+    draftBeforeHistoryRef.current = "";
     setValue("");
     setInlineError(null);
     // Bubble owns the data URL copy; safe to revoke every staged blob
@@ -142,23 +192,82 @@ export function ThreadComposer({
     requestAnimationFrame(() => {
       const el = textareaRef.current;
       if (el) {
-        el.style.height = "auto";
+        resizeTextarea(el);
         el.focus();
       }
     });
   }, [canSend, clear, onSend, readyImages, value]);
 
+  const applyHistoryValue = useCallback((nextValue: string) => {
+    setValue(nextValue);
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      resizeTextarea(el);
+      const pos = nextValue.length;
+      el.focus();
+      el.setSelectionRange(pos, pos);
+    });
+  }, []);
+
   const onKeyDown = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       submit();
+      return;
+    }
+
+    const el = textareaRef.current;
+    const singleCursor = !!el && el.selectionStart === el.selectionEnd;
+    const atStart = !!el && singleCursor && el.selectionStart === 0;
+    const atEnd = !!el && singleCursor && el.selectionStart === el.value.length;
+
+    if (
+      e.key === "ArrowUp"
+      && !e.shiftKey
+      && !e.altKey
+      && !e.metaKey
+      && !e.ctrlKey
+      && (atStart || historyIndex !== null)
+      && sentHistory.length > 0
+    ) {
+      e.preventDefault();
+      if (historyIndex === null) {
+        draftBeforeHistoryRef.current = value;
+        const nextIndex = sentHistory.length - 1;
+        setHistoryIndex(nextIndex);
+        applyHistoryValue(sentHistory[nextIndex]);
+        return;
+      }
+      const nextIndex = Math.max(0, historyIndex - 1);
+      setHistoryIndex(nextIndex);
+      applyHistoryValue(sentHistory[nextIndex]);
+      return;
+    }
+
+    if (
+      e.key === "ArrowDown"
+      && !e.shiftKey
+      && !e.altKey
+      && !e.metaKey
+      && !e.ctrlKey
+      && historyIndex !== null
+      && (atEnd || historyIndex !== null)
+    ) {
+      e.preventDefault();
+      const nextIndex = historyIndex + 1;
+      if (nextIndex >= sentHistory.length) {
+        setHistoryIndex(null);
+        applyHistoryValue(draftBeforeHistoryRef.current);
+        return;
+      }
+      setHistoryIndex(nextIndex);
+      applyHistoryValue(sentHistory[nextIndex]);
     }
   };
 
   const onInput: React.FormEventHandler<HTMLTextAreaElement> = (e) => {
-    const el = e.currentTarget;
-    el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 260)}px`;
+    resizeTextarea(e.currentTarget);
   };
 
   const onFilePick: React.ChangeEventHandler<HTMLInputElement> = (e) => {
@@ -254,7 +363,13 @@ export function ThreadComposer({
         <textarea
           ref={textareaRef}
           value={value}
-          onChange={(e) => setValue(e.target.value)}
+          onChange={(e) => {
+            if (historyIndex !== null) {
+              setHistoryIndex(null);
+              draftBeforeHistoryRef.current = e.target.value;
+            }
+            setValue(e.target.value);
+          }}
           onInput={onInput}
           onKeyDown={onKeyDown}
           onPaste={onPaste}
@@ -265,12 +380,16 @@ export function ThreadComposer({
           className={cn(
             "w-full resize-none bg-transparent",
             isHero
-              ? "min-h-[96px] px-4 pb-2 pt-4 text-[15px] leading-6"
-              : "min-h-[50px] px-4 pb-1.5 pt-3 text-sm",
+              ? "min-h-[96px] px-4 pb-2 pt-4"
+              : "min-h-[50px] px-4 pb-1.5 pt-3",
             "placeholder:text-muted-foreground",
             "focus:outline-none focus-visible:outline-none",
             "disabled:cursor-not-allowed",
           )}
+          style={{
+            fontSize: "var(--chat-font-size)",
+            lineHeight: "var(--chat-line-height)",
+          }}
         />
         {inlineError ? (
           <div
@@ -313,20 +432,79 @@ export function ThreadComposer({
               <Paperclip className={cn(isHero ? "h-4 w-4" : "h-3.5 w-3.5")} />
             </Button>
             {modelLabel ? (
-              <span
-                title={modelLabel}
-                className={cn(
-                  "inline-flex min-w-0 items-center gap-1.5 rounded-full border px-2.5 py-1",
-                  "border-foreground/10 bg-foreground/[0.035] font-medium text-foreground/80",
-                  isHero ? "text-[11px]" : "text-[10.5px]",
-                )}
-              >
+              canSelectModelTarget ? (
+                <DropdownMenu modal={false}>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      title={modelLabel}
+                      aria-label={t("thread.composer.modelMenuAria")}
+                      className={cn(
+                        "inline-flex min-w-0 items-center gap-1.5 rounded-full border px-2.5 py-1",
+                        "border-foreground/10 bg-foreground/[0.035] font-medium text-foreground/80 transition-colors hover:bg-foreground/[0.07]",
+                        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+                        isHero ? "text-[11px]" : "text-[10.5px]",
+                      )}
+                      disabled={!canSelectModelTarget}
+                    >
+                      <span
+                        aria-hidden
+                        className="h-1.5 w-1.5 flex-none rounded-full bg-emerald-500/80"
+                      />
+                      <span className="truncate">{modelLabel}</span>
+                      {modelTargetPending ? (
+                        <Loader2 className="h-3 w-3 flex-none animate-spin" aria-hidden />
+                      ) : (
+                        <ChevronDown className="h-3 w-3 flex-none" aria-hidden />
+                      )}
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="w-[20rem]">
+                    <DropdownMenuLabel>{t("thread.composer.modelMenuLabel")}</DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuRadioGroup
+                      value={activeTarget ?? ""}
+                      onValueChange={(value) => {
+                        if (!value || value === activeTarget || !onSelectModelTarget) return;
+                        void onSelectModelTarget(value);
+                      }}
+                    >
+                      {modelTargets.map((target) => (
+                        <DropdownMenuRadioItem key={target.name} value={target.name}>
+                          <span className="flex min-w-0 flex-col gap-0.5">
+                            <span className="truncate font-medium">{target.name}</span>
+                            {describeModelTarget(target) ? (
+                              <span className="max-w-[15rem] whitespace-normal text-[11px] text-muted-foreground">
+                                {describeModelTarget(target)}
+                              </span>
+                            ) : null}
+                            {target.description ? (
+                              <span className="max-w-[15rem] whitespace-normal text-xs text-muted-foreground">
+                                {target.description}
+                              </span>
+                            ) : null}
+                          </span>
+                        </DropdownMenuRadioItem>
+                      ))}
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ) : (
                 <span
-                  aria-hidden
-                  className="h-1.5 w-1.5 flex-none rounded-full bg-emerald-500/80"
-                />
-                <span className="truncate">{modelLabel}</span>
-              </span>
+                  title={modelLabel}
+                  className={cn(
+                    "inline-flex min-w-0 items-center gap-1.5 rounded-full border px-2.5 py-1",
+                    "border-foreground/10 bg-foreground/[0.035] font-medium text-foreground/80",
+                    isHero ? "text-[11px]" : "text-[10.5px]",
+                  )}
+                >
+                  <span
+                    aria-hidden
+                    className="h-1.5 w-1.5 flex-none rounded-full bg-emerald-500/80"
+                  />
+                  <span className="truncate">{modelLabel}</span>
+                </span>
+              )
             ) : null}
             <span className="hidden select-none text-[10.5px] text-muted-foreground/60 sm:inline">
               {t("thread.composer.sendHint")}

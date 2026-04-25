@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { deleteSession, fetchSessionMessages } from "@/lib/api";
+import { deleteSession, fetchSessionMessages, selectSessionModelTarget } from "@/lib/api";
 
 describe("webui API helpers", () => {
   beforeEach(() => {
@@ -29,6 +29,17 @@ describe("webui API helpers", () => {
 
     expect(fetch).toHaveBeenCalledWith(
       "/api/sessions/websocket%3Achat-1/delete",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer tok" },
+      }),
+    );
+  });
+
+  it("percent-encodes websocket keys and targets when selecting a model target", async () => {
+    await selectSessionModelTarget("tok", "websocket:chat-1", "smart-router");
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/sessions/websocket%3Achat-1/model-target/smart-router/select",
       expect.objectContaining({
         headers: { Authorization: "Bearer tok" },
       }),

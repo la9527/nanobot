@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import { useTranslation } from "react-i18next";
 import { DeleteConfirm } from "@/components/DeleteConfirm";
 import { Sidebar } from "@/components/Sidebar";
@@ -21,10 +22,34 @@ type BootState =
       client: NanobotClient;
       token: string;
       modelName: string | null;
+      activeTarget: string | null;
+      modelTargets: import("@/lib/types").ModelTargetOption[];
     };
 
 const SIDEBAR_STORAGE_KEY = "nanobot-webui.sidebar";
+const CHAT_FONT_SIZE_STORAGE_KEY = "nanobot-webui.chatFontSize";
 const SIDEBAR_WIDTH = 279;
+
+type ChatFontSize = "sm" | "md" | "lg";
+
+function readChatFontSize(): ChatFontSize {
+  if (typeof window === "undefined") return "md";
+  try {
+    const raw = window.localStorage.getItem(CHAT_FONT_SIZE_STORAGE_KEY);
+    if (raw === "sm" || raw === "md" || raw === "lg") {
+      return raw;
+    }
+    return "md";
+  } catch {
+    return "md";
+  }
+}
+
+function chatFontCss(size: ChatFontSize): { size: string; lineHeight: string } {
+  if (size === "sm") return { size: "14px", lineHeight: "1.6" };
+  if (size === "lg") return { size: "17px", lineHeight: "1.8" };
+  return { size: "15px", lineHeight: "1.7" };
+}
 
 function readSidebarOpen(): boolean {
   if (typeof window === "undefined") return true;
@@ -65,6 +90,8 @@ export default function App() {
           client,
           token: boot.token,
           modelName: boot.active_target ?? boot.model_name ?? null,
+          activeTarget: boot.active_target ?? null,
+          modelTargets: boot.model_targets ?? [],
         });
       } catch (e) {
         if (cancelled) return;
@@ -141,6 +168,8 @@ export default function App() {
       client={state.client}
       token={state.token}
       modelName={state.modelName}
+      activeTarget={state.activeTarget}
+      modelTargets={state.modelTargets}
     >
       <Shell />
     </ClientProvider>
@@ -155,6 +184,7 @@ function Shell() {
   const [desktopSidebarOpen, setDesktopSidebarOpen] =
     useState<boolean>(readSidebarOpen);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [chatFontSize, setChatFontSize] = useState<ChatFontSize>(readChatFontSize);
   const [pendingDelete, setPendingDelete] = useState<{
     key: string;
     label: string;
@@ -171,6 +201,14 @@ function Shell() {
       // ignore storage errors (private mode, etc.)
     }
   }, [desktopSidebarOpen]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(CHAT_FONT_SIZE_STORAGE_KEY, chatFontSize);
+    } catch {
+      // ignore storage errors
+    }
+  }, [chatFontSize]);
 
   useEffect(() => {
     if (activeKey) return;
@@ -266,7 +304,11 @@ function Shell() {
     onRefresh: () => void refresh(),
     onRequestDelete: (key: string, label: string) =>
       setPendingDelete({ key, label }),
+    chatFontSize,
+    onChangeChatFontSize: setChatFontSize,
   };
+
+  const fontCss = chatFontCss(chatFontSize);
 
   return (
     <div className="relative flex h-full w-full overflow-hidden">
@@ -302,7 +344,14 @@ function Shell() {
         </SheetContent>
       </Sheet>
 
-      <main className="flex h-full min-w-0 flex-1 flex-col">
+      <main
+        className="flex h-full min-w-0 flex-1 flex-col"
+        style={{
+          "--chat-font-size": fontCss.size,
+          "--chat-line-height": fontCss.lineHeight,
+          "--chat-ui-scale": chatFontSize === "sm" ? "0.95" : chatFontSize === "lg" ? "1.08" : "1",
+        } as CSSProperties}
+      >
         <ThreadShell
           session={activeSession}
           title={headerTitle}

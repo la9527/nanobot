@@ -322,6 +322,25 @@ class TestWorkspaceRestriction:
         assert "Error" not in result
 
     @pytest.mark.asyncio
+    async def test_read_allowed_with_multiple_allowed_dirs(self, tmp_path):
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        docs_dir = tmp_path / "docs"
+        docs_dir.mkdir()
+        notes_dir = tmp_path / "notes"
+        notes_dir.mkdir()
+        target = notes_dir / "daily.txt"
+        target.write_text("allowed", encoding="utf-8")
+
+        tool = ReadFileTool(
+            workspace=workspace,
+            allowed_dirs=[docs_dir, notes_dir],
+        )
+        result = await tool.execute(path=str(target))
+        assert "allowed" in result
+        assert "Error" not in result
+
+    @pytest.mark.asyncio
     async def test_read_allowed_in_media_dir(self, tmp_path, monkeypatch):
         workspace = tmp_path / "ws"
         workspace.mkdir()

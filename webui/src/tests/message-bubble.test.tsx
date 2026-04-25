@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { MessageBubble } from "@/components/MessageBubble";
 import type { UIMessage } from "@/lib/types";
@@ -39,5 +39,37 @@ describe("MessageBubble", () => {
 
     fireEvent.click(toggle);
     expect(screen.queryByText('weather("get")')).not.toBeInTheDocument();
+  });
+
+  it("renders approval messages with approve and block actions", () => {
+    const onApprovalResponse = vi.fn();
+    const message: UIMessage = {
+      id: "a1",
+      role: "assistant",
+      kind: "approval",
+      content: "Approval required for a high-risk command.",
+      createdAt: Date.now(),
+    };
+
+    render(<MessageBubble message={message} onApprovalResponse={onApprovalResponse} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /approve/i }));
+    expect(onApprovalResponse).toHaveBeenCalledWith("a1", "yes");
+  });
+
+  it("renders status footers as compact inline status text", () => {
+    const message: UIMessage = {
+      id: "s1",
+      role: "assistant",
+      content:
+        "Status: model=LiquidAI/LFM2-24B-A2B-GGUF:Q4_0 | target=local-llm | tokens=🔵30377 in/🟢656 out | total=🟠31033 | cached=🟣29702 | context=🟡31k/⚪65k",
+      createdAt: Date.now(),
+    };
+
+    render(<MessageBubble message={message} />);
+
+    expect(screen.getByText(/model=LiquidAI\/LFM2-24B-A2B-GGUF:Q4_0/)).toBeInTheDocument();
+    expect(screen.getByText(/target=local-llm/)).toBeInTheDocument();
+    expect(screen.getByText(/tokens=🔵30377 in\/🟢656 out/)).toBeInTheDocument();
   });
 });
