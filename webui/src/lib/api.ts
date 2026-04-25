@@ -1,4 +1,4 @@
-import type { ChatSummary, SessionModelTargetResponse } from "./types";
+import type { ChatSummary, SessionMessagesResponse, SessionModelTargetResponse } from "./types";
 
 export class ApiError extends Error {
   status: number;
@@ -73,22 +73,7 @@ export async function fetchSessionMessages(
   token: string,
   key: string,
   base: string = "",
-): Promise<{
-  key: string;
-  created_at: string | null;
-  updated_at: string | null;
-  messages: Array<{
-    role: string;
-    content: string;
-    timestamp?: string;
-    tool_calls?: unknown;
-    tool_call_id?: string;
-    name?: string;
-    /** Present on ``user`` turns that attached images. Paths have already
-     * been stripped server-side; only the signed fetch URLs survive. */
-    media_urls?: SessionMediaUrl[];
-  }>;
-}> {
+): Promise<SessionMessagesResponse> {
   return request(
     `${base}/api/sessions/${encodeURIComponent(key)}/messages`,
     token,

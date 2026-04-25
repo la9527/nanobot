@@ -50,6 +50,7 @@ describe("useSessions", () => {
     vi.mocked(api.listSessions).mockReset();
     vi.mocked(api.deleteSession).mockReset();
     vi.mocked(api.fetchSessionMessages).mockReset();
+    vi.useRealTimers();
   });
 
   it("removes a session from the local list after delete succeeds", async () => {
@@ -134,6 +135,60 @@ describe("useSessions", () => {
     expect(second.images).toBeUndefined();
     expect(third.role).toBe("user");
     expect(third.images).toBeUndefined();
+  });
+
+  it("polls active telegram sessions so remote messages appear without a manual refresh", async () => {
+    vi.useFakeTimers();
+    vi.mocked(api.fetchSessionMessages)
+      .mockResolvedValueOnce({
+        key: "telegram:12345",
+        created_at: "2026-04-20T10:00:00Z",
+        updated_at: "2026-04-20T10:05:00Z",
+        messages: [
+          {
+            role: "user",
+            content: "first telegram turn",
+            timestamp: "2026-04-20T10:00:00Z",
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        key: "telegram:12345",
+        created_at: "2026-04-20T10:00:00Z",
+        updated_at: "2026-04-20T10:05:02Z",
+        messages: [
+          {
+            role: "user",
+            content: "first telegram turn",
+            timestamp: "2026-04-20T10:00:00Z",
+          },
+          {
+            role: "user",
+            content: "remote telegram follow-up",
+            timestamp: "2026-04-20T10:00:02Z",
+          },
+        ],
+      });
+
+    const { result } = renderHook(() => useSessionHistory("telegram:12345"), {
+      wrapper: wrap(fakeClient()),
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(result.current.loading).toBe(false);
+    expect(result.current.messages.map((msg) => msg.content)).toEqual(["first telegram turn"]);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+
+    expect(result.current.messages.map((msg) => msg.content)).toEqual([
+      "first telegram turn",
+      "remote telegram follow-up",
+    ]);
   });
 
   it("keeps the session in the list when delete fails", async () => {

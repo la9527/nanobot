@@ -190,6 +190,14 @@ export class NanobotClient {
     this.queueSend(frame);
   }
 
+  sendSessionMessage(sessionKey: string, content: string, media?: OutboundMedia[]): void {
+    const frame: Outbound =
+      media && media.length > 0
+        ? { type: "session_message", session_key: sessionKey, content, media }
+        : { type: "session_message", session_key: sessionKey, content };
+    this.queueSend(frame);
+  }
+
   // -- internals ---------------------------------------------------------
 
   private setStatus(status: ConnectionStatus): void {

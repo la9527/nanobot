@@ -34,6 +34,11 @@ function targetBadgeLabel(activeTarget: string | null | undefined): string | nul
   return trimmed;
 }
 
+function channelBadgeLabel(channel: string): string | null {
+  if (!channel || channel === "websocket") return null;
+  return channel;
+}
+
 export function ChatList({
   sessions,
   activeKey,
@@ -68,6 +73,8 @@ export function ChatList({
             t("chat.fallbackTitle", { id: s.chatId.slice(0, 6) }),
           );
           const badge = targetBadgeLabel(s.activeTarget);
+          const channelBadge = channelBadgeLabel(s.channel);
+          const canDelete = s.channel === "websocket";
           return (
             <li key={s.key}>
               <div
@@ -86,6 +93,11 @@ export function ChatList({
                   <span className="w-full truncate font-medium leading-5">{title}</span>
                   <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[10.5px] text-muted-foreground/80">
                     <span>{relativeTime(s.updatedAt ?? s.createdAt) || "—"}</span>
+                    {channelBadge ? (
+                      <span className="inline-flex max-w-[7rem] truncate rounded-full border border-sidebar-border/80 bg-sidebar-accent/35 px-1.5 py-[1px] text-[9.5px] font-medium uppercase tracking-[0.08em] text-sidebar-foreground/78">
+                        {channelBadge}
+                      </span>
+                    ) : null}
                     {badge ? (
                       <span className="inline-flex max-w-[8rem] truncate rounded-full border border-sidebar-border/80 bg-card/30 px-1.5 py-[1px] text-[9.5px] font-medium text-sidebar-foreground/80">
                         {badge}
@@ -109,15 +121,17 @@ export function ChatList({
                     align="end"
                     onCloseAutoFocus={(event) => event.preventDefault()}
                   >
-                    <DropdownMenuItem
-                      onSelect={() => {
-                        window.setTimeout(() => onRequestDelete(s.key, title), 0);
-                      }}
-                      className="text-destructive focus:text-destructive"
-                    >
-                      <Trash2 className="mr-2 h-4 w-4" />
-                      {t("chat.delete")}
-                    </DropdownMenuItem>
+                    {canDelete ? (
+                      <DropdownMenuItem
+                        onSelect={() => {
+                          window.setTimeout(() => onRequestDelete(s.key, title), 0);
+                        }}
+                        className="text-destructive focus:text-destructive"
+                      >
+                        <Trash2 className="mr-2 h-4 w-4" />
+                        {t("chat.delete")}
+                      </DropdownMenuItem>
+                    ) : null}
                   </DropdownMenuContent>
                 </DropdownMenu>
               </div>

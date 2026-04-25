@@ -5,9 +5,9 @@ import { ThreadComposer } from "@/components/thread/ThreadComposer";
 import { ThreadHeader } from "@/components/thread/ThreadHeader";
 import { StreamErrorNotice } from "@/components/thread/StreamErrorNotice";
 import { ThreadViewport } from "@/components/thread/ThreadViewport";
-import { useNanobotStream } from "@/hooks/useNanobotStream";
-import { useSessionHistory } from "@/hooks/useSessions";
-import { ApiError, fetchSessionModelTarget, selectSessionModelTarget } from "@/lib/api";
+import { type SendImage, useNanobotStream } from "@/hooks/useNanobotStream";
+import { hydrateSessionMessages, useSessionHistory } from "@/hooks/useSessions";
+import { ApiError, fetchSessionMessages, fetchSessionModelTarget, selectSessionModelTarget } from "@/lib/api";
 import type { ChatSummary, ModelTargetOption, SessionModelTargetResponse, UIMessage } from "@/lib/types";
 import { createUuid } from "@/lib/uuid";
 import { useClient } from "@/providers/ClientProvider";
@@ -70,7 +70,8 @@ export function ThreadShell({
   hideSidebarToggleOnDesktop = false,
 }: ThreadShellProps) {
   const { t } = useTranslation();
-  const chatId = session?.chatId ?? null;
+  const isWebSocketSession = session?.channel === "websocket";
+  const chatId = isWebSocketSession ? (session?.chatId ?? null) : null;
   const historyKey = session?.key ?? null;
   const { messages: historical, loading } = useSessionHistory(historyKey);
   const {
@@ -85,7 +86,9 @@ export function ThreadShell({
   } = useClient();
   const [booting, setBooting] = useState(false);
   const [modelTargetPending, setModelTargetPending] = useState(false);
+  const [remoteReplyPending, setRemoteReplyPending] = useState(false);
   const pendingFirstRef = useRef<string | null>(null);
+  const remoteReplyPollRef = useRef(0);
   const messageCacheRef = useRef<Map<string, UIMessage[]>>(new Map());
 
   const initial = useMemo(() => {
@@ -121,6 +124,11 @@ export function ThreadShell({
     if (!chatId) return;
     messageCacheRef.current.set(chatId, messages);
   }, [chatId, messages]);
+
+  useEffect(() => {
+    if (!historyKey || isWebSocketSession) return;
+    messageCacheRef.current.set(historyKey, messages);
+  }, [historyKey, isWebSocketSession, messages]);
 
   useEffect(() => {
     let cancelled = false;
@@ -167,6 +175,10 @@ export function ThreadShell({
     setBooting(false);
   }, [chatId, client, setMessages]);
 
+  useEffect(() => () => {
+    remoteReplyPollRef.current += 1;
+  }, []);
+
   const handleWelcomeSend = useCallback(
     async (content: string) => {
       if (booting) return;
@@ -188,6 +200,69 @@ export function ThreadShell({
       client.sendMessage(chatId, decision);
     },
     [chatId, client, setMessages],
+  );
+
+  const handleBridgedSessionSend = useCallback(
+    async (content: string, images?: SendImage[]) => {
+      if (!session || !historyKey || remoteReplyPending) return;
+      const hasImages = !!images && images.length > 0;
+      if (!hasImages && !content.trim()) return;
+
+      const optimisticAssistantId = createUuid();
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: createUuid(),
+          role: "user",
+          content,
+          createdAt: Date.now(),
+          ...(hasImages ? { images: images!.map((img) => img.preview) } : {}),
+        },
+        {
+          id: optimisticAssistantId,
+          role: "assistant",
+          content: "",
+          isStreaming: true,
+          createdAt: Date.now(),
+        },
+      ]);
+      setRemoteReplyPending(true);
+
+      const pollId = remoteReplyPollRef.current + 1;
+      remoteReplyPollRef.current = pollId;
+      const startedAt = Date.now();
+      const baselineHistoryLength = historical.length;
+      const wireMedia = hasImages ? images!.map((img) => img.media) : undefined;
+
+      client.sendSessionMessage(historyKey, content, wireMedia);
+
+      while (remoteReplyPollRef.current === pollId) {
+        try {
+          const body = await fetchSessionMessages(token, historyKey);
+          if (remoteReplyPollRef.current !== pollId) return;
+          const nextMessages = hydrateSessionMessages(body);
+          const hasAssistantReply =
+            nextMessages.length > baselineHistoryLength
+            && nextMessages[nextMessages.length - 1]?.role === "assistant";
+          if (hasAssistantReply) {
+            setMessages(nextMessages);
+            messageCacheRef.current.set(historyKey, nextMessages);
+            setRemoteReplyPending(false);
+            return;
+          }
+        } catch (error) {
+          console.error("Failed to refresh bridged session", error);
+        }
+
+        if (Date.now() - startedAt > 90_000) {
+          setMessages((prev) => prev.filter((message) => message.id !== optimisticAssistantId));
+          setRemoteReplyPending(false);
+          return;
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 1000));
+      }
+    },
+    [client, historical.length, historyKey, remoteReplyPending, session, setMessages, token],
   );
 
   const handleSelectModelTarget = useCallback(
@@ -244,7 +319,7 @@ export function ThreadShell({
       />
       <ThreadViewport
         messages={messages}
-        isStreaming={isStreaming}
+        isStreaming={isStreaming || remoteReplyPending}
         onApprovalResponse={handleApprovalResponse}
         emptyState={emptyState}
         composer={
@@ -257,8 +332,8 @@ export function ThreadShell({
             ) : null}
             {session ? (
               <ThreadComposer
-                onSend={send}
-                disabled={!chatId}
+                onSend={isWebSocketSession ? send : handleBridgedSessionSend}
+                disabled={isWebSocketSession ? !chatId : remoteReplyPending}
                 placeholder={
                   showHeroComposer
                     ? t("thread.composer.placeholderHero")

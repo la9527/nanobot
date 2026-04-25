@@ -48,6 +48,24 @@ export interface ChatSummary {
   activeTarget?: string | null;
 }
 
+export interface SessionMessagesResponse {
+  key: string;
+  created_at: string | null;
+  updated_at: string | null;
+  messages: Array<{
+    role: string;
+    content: string;
+    timestamp?: string;
+    tool_calls?: unknown;
+    tool_call_id?: string;
+    name?: string;
+    media_urls?: {
+      url: string;
+      name?: string;
+    }[];
+  }>;
+}
+
 export interface ModelTargetOption {
   name: string;
   kind: string;
@@ -125,6 +143,12 @@ export interface OutboundMedia {
 export type Outbound =
   | { type: "new_chat" }
   | { type: "attach"; chat_id: string }
+  | {
+      type: "session_message";
+      session_key: string;
+      content: string;
+      media?: OutboundMedia[];
+    }
   | {
       type: "message";
       chat_id: string;

@@ -23,6 +23,7 @@ function makeClient() {
       for (const h of errorHandlers) h(err);
     },
     sendMessage: vi.fn(),
+    sendSessionMessage: vi.fn(),
     newChat: vi.fn(),
     attach: vi.fn(),
     connect: vi.fn(),
@@ -50,6 +51,17 @@ function session(chatId: string) {
     createdAt: null,
     updatedAt: null,
     preview: "",
+  };
+}
+
+function telegramSession(chatId: string, key: string = `telegram:${chatId}`) {
+  return {
+    key,
+    channel: "telegram" as const,
+    chatId,
+    createdAt: null,
+    updatedAt: null,
+    preview: "telegram thread",
   };
 }
 
@@ -475,5 +487,79 @@ describe("ThreadShell", () => {
 
     await waitFor(() => expect(screen.getByText("from chat b")).toBeInTheDocument());
     expect(screen.queryByText("from chat a")).not.toBeInTheDocument();
+  });
+
+  it("bridges telegram session replies through the websocket transport and refreshes history", async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    const onNewChat = vi.fn().mockResolvedValue("chat-a");
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("telegram%3A12345/messages")) {
+        fetchMock.mock.calls.length;
+        const callCount = fetchMock.mock.calls.filter(([value]) => String(value).includes("telegram%3A12345/messages")).length;
+        if (callCount < 2) {
+          return httpJson({
+            key: "telegram:12345",
+            created_at: null,
+            updated_at: null,
+            messages: [{ role: "user", content: "older telegram user turn" }],
+          });
+        }
+        return httpJson({
+          key: "telegram:12345",
+          created_at: null,
+          updated_at: null,
+          messages: [
+            { role: "user", content: "older telegram user turn" },
+            { role: "user", content: "reply from webui" },
+            { role: "assistant", content: "telegram assistant answer" },
+          ],
+        });
+      }
+      if (url.includes("telegram%3A12345/model-target")) {
+        return {
+          ok: false,
+          status: 404,
+          json: async () => ({}),
+        };
+      }
+      return {
+        ok: false,
+        status: 404,
+        json: async () => ({}),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={telegramSession("12345")}
+          title="Telegram 12345"
+          onToggleSidebar={() => {}}
+          onGoHome={() => {}}
+          onNewChat={onNewChat}
+        />,
+      ),
+    );
+
+    await waitFor(() => expect(screen.getByText("older telegram user turn")).toBeInTheDocument());
+
+    await user.type(screen.getByLabelText("Message input"), "reply from webui");
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => {
+      expect(client.sendSessionMessage).toHaveBeenCalledWith(
+        "telegram:12345",
+        "reply from webui",
+        undefined,
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("telegram assistant answer")).toBeInTheDocument();
+    });
   });
 });

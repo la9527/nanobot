@@ -9,9 +9,39 @@ import {
   listSessions,
 } from "@/lib/api";
 import { deriveTitle } from "@/lib/format";
-import type { ChatSummary, UIMessage } from "@/lib/types";
+import type { ChatSummary, SessionMessagesResponse, UIMessage } from "@/lib/types";
 
 const EMPTY_MESSAGES: UIMessage[] = [];
+const REMOTE_SESSION_REFRESH_MS = 1000;
+
+function shouldPollSessionHistory(key: string): boolean {
+  return key.startsWith("telegram:");
+}
+
+export function hydrateSessionMessages(body: SessionMessagesResponse): UIMessage[] {
+  return body.messages.flatMap((m, idx) => {
+    if (m.role !== "user" && m.role !== "assistant") return [];
+    if (typeof m.content !== "string") return [];
+    const images =
+      m.role === "user" &&
+      Array.isArray(m.media_urls) &&
+      m.media_urls.length > 0
+        ? m.media_urls.map((mu) => ({
+            url: mu.url,
+            name: mu.name,
+          }))
+        : undefined;
+    return [
+      {
+        id: `hist-${idx}`,
+        role: m.role,
+        content: m.content,
+        createdAt: m.timestamp ? Date.parse(m.timestamp) : Date.now(),
+        ...(images ? { images } : {}),
+      },
+    ];
+  });
+}
 
 /** Sidebar state: fetches the full session list and exposes create / delete actions. */
 export function useSessions(): {
@@ -116,35 +146,12 @@ export function useSessionHistory(key: string | null): {
       loading: true,
       error: null,
     });
-    (async () => {
+
+    const load = async (mode: "initial" | "refresh") => {
       try {
         const body = await fetchSessionMessages(token, key);
         if (cancelled) return;
-        const ui: UIMessage[] = body.messages.flatMap((m, idx) => {
-          if (m.role !== "user" && m.role !== "assistant") return [];
-          if (typeof m.content !== "string") return [];
-          // Hydrate signed media URLs into the bubble's ``images`` slot so
-          // historical user turns render real previews (the live-send path
-          // uses data URLs; both shapes converge on the same ``UIImage``).
-          const images =
-            m.role === "user" &&
-            Array.isArray(m.media_urls) &&
-            m.media_urls.length > 0
-              ? m.media_urls.map((mu) => ({
-                  url: mu.url,
-                  name: mu.name,
-                }))
-              : undefined;
-          return [
-            {
-              id: `hist-${idx}`,
-              role: m.role,
-              content: m.content,
-              createdAt: m.timestamp ? Date.parse(m.timestamp) : Date.now(),
-              ...(images ? { images } : {}),
-            },
-          ];
-        });
+        const ui = hydrateSessionMessages(body);
         setState({
           key,
           messages: ui,
@@ -153,8 +160,6 @@ export function useSessionHistory(key: string | null): {
         });
       } catch (e) {
         if (cancelled) return;
-        // A 404 just means the session hasn't been persisted yet (brand-new
-        // chat, first message not sent). That's a normal state, not an error.
         if (e instanceof ApiError && e.status === 404) {
           setState({
             key,
@@ -162,18 +167,31 @@ export function useSessionHistory(key: string | null): {
             loading: false,
             error: null,
           });
-        } else {
-          setState({
-            key,
-            messages: [],
-            loading: false,
-            error: (e as Error).message,
-          });
+          return;
         }
+        if (mode === "refresh") {
+          return;
+        }
+        setState({
+          key,
+          messages: [],
+          loading: false,
+          error: (e as Error).message,
+        });
       }
-    })();
+    };
+
+    void load("initial");
+    const refreshTimer = shouldPollSessionHistory(key)
+      ? window.setInterval(() => {
+          void load("refresh");
+        }, REMOTE_SESSION_REFRESH_MS)
+      : null;
     return () => {
       cancelled = true;
+      if (refreshTimer !== null) {
+        window.clearInterval(refreshTimer);
+      }
     };
   }, [key, token]);
 
