@@ -29,7 +29,7 @@ from websockets.exceptions import ConnectionClosed
 from websockets.http11 import Request as WsRequest
 from websockets.http11 import Response
 
-from nanobot.bus.events import OutboundMessage
+from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.channels.base import BaseChannel
 from nanobot.config.paths import get_media_dir
@@ -762,21 +762,36 @@ class WebSocketChannel(BaseChannel):
                 cleaned["active_target"] = active_default
             return cleaned
 
-        # The webui is only meaningful for websocket-channel chats — CLI /
-        # Slack / Lark / Discord sessions can't be resumed from the browser,
-        # so leaking them into the sidebar is just noise. Filter to the
-        # ``websocket:`` prefix and strip absolute paths on the way out.
+        # The webui currently supports browser-native websocket sessions plus
+        # bridged Telegram sessions. Other channels stay hidden until the
+        # browser has a concrete read/write bridge for them.
         cleaned = [
             _row_with_target(s)
             for s in sessions
-            if isinstance(s.get("key"), str) and s["key"].startswith("websocket:")
+            if isinstance(s.get("key"), str) and self._is_webui_session_key(s["key"])
         ]
         return _http_json_response({"sessions": cleaned})
 
     @staticmethod
     def _is_webui_session_key(key: str) -> bool:
-        """Return True when *key* belongs to the webui's websocket-only surface."""
-        return key.startswith("websocket:")
+        """Return True when *key* belongs to the browser-supported session surface."""
+        return key.startswith("websocket:") or key.startswith("telegram:")
+
+    @staticmethod
+    def _decode_telegram_session_target(
+        session_key: str,
+    ) -> tuple[str, dict[str, Any]] | None:
+        if not session_key.startswith("telegram:"):
+            return None
+        topic_match = re.fullmatch(r"telegram:([^:]+):topic:(\d+)", session_key)
+        if topic_match:
+            return topic_match.group(1), {
+                "message_thread_id": int(topic_match.group(2)),
+            }
+        direct_match = re.fullmatch(r"telegram:([^:]+)", session_key)
+        if direct_match:
+            return direct_match.group(1), {}
+        return None
 
     def _handle_session_messages(self, request: WsRequest, key: str) -> Response:
         if not self._check_api_token(request):
@@ -786,9 +801,6 @@ class WebSocketChannel(BaseChannel):
         decoded_key = _decode_api_key(key)
         if decoded_key is None:
             return _http_error(400, "invalid session key")
-        # The embedded webui only understands websocket-channel sessions. Keep
-        # its read surface aligned with ``/api/sessions`` instead of letting a
-        # caller probe arbitrary CLI / Slack / Lark history by handcrafted URL.
         if not self._is_webui_session_key(decoded_key):
             return _http_error(404, "session not found")
         data = self._session_manager.read_session_file(decoded_key)
@@ -1017,13 +1029,46 @@ class WebSocketChannel(BaseChannel):
         decoded_key = _decode_api_key(key)
         if decoded_key is None:
             return _http_error(400, "invalid session key")
-        # Same boundary as ``_handle_session_messages``: the webui may only
-        # mutate websocket sessions, and deletion really does unlink the local
-        # JSONL, so keep the blast radius narrow and explicit.
-        if not self._is_webui_session_key(decoded_key):
+        # Deletion stays limited to browser-native websocket sessions. Telegram
+        # bridged sessions are readable/writable from the browser, but their
+        # persisted history is still tied to a remote channel identity and we
+        # avoid exposing destructive actions for them here.
+        if not decoded_key.startswith("websocket:"):
             return _http_error(404, "session not found")
         deleted = self._session_manager.delete_session(decoded_key)
         return _http_json_response({"deleted": bool(deleted)})
+
+    async def _publish_bridged_session_message(
+        self,
+        *,
+        session_key: str,
+        client_id: str,
+        content: str,
+        media_paths: list[str] | None,
+        metadata: dict[str, Any] | None,
+    ) -> str | None:
+        target = self._decode_telegram_session_target(session_key)
+        if target is None:
+            return "unsupported session"
+        chat_id, extra_meta = target
+        meta = {
+            **(metadata or {}),
+            **extra_meta,
+            "_webui_bridge": True,
+            "bridge_client_id": client_id,
+        }
+        await self.bus.publish_inbound(
+            InboundMessage(
+                channel="telegram",
+                sender_id=f"webui:{client_id}",
+                chat_id=chat_id,
+                content=content,
+                media=media_paths or [],
+                metadata=meta,
+                session_key_override=session_key,
+            )
+        )
+        return None
 
     def _serve_static(self, request_path: str) -> Response | None:
         """Resolve *request_path* against the built SPA directory; SPA fallback to index.html."""
@@ -1311,6 +1356,51 @@ class WebSocketChannel(BaseChannel):
                 media=media_paths or None,
                 metadata={"remote": getattr(connection, "remote_address", None)},
             )
+            return
+        if t == "session_message":
+            session_key = envelope.get("session_key")
+            content = envelope.get("content")
+            if not isinstance(session_key, str) or not session_key:
+                await self._send_event(connection, "error", detail="invalid session_key")
+                return
+            decoded_key = session_key if self._is_webui_session_key(session_key) else None
+            if decoded_key is None:
+                await self._send_event(connection, "error", detail="session not found")
+                return
+            if not isinstance(content, str):
+                await self._send_event(connection, "error", detail="missing content")
+                return
+
+            raw_media = envelope.get("media")
+            media_paths: list[str] = []
+            if raw_media is not None:
+                if not isinstance(raw_media, list):
+                    await self._send_event(
+                        connection, "error",
+                        detail="image_rejected", reason="malformed",
+                    )
+                    return
+                media_paths, reason = self._save_envelope_media(raw_media)
+                if reason is not None:
+                    await self._send_event(
+                        connection, "error",
+                        detail="image_rejected", reason=reason,
+                    )
+                    return
+
+            if not content.strip() and not media_paths:
+                await self._send_event(connection, "error", detail="missing content")
+                return
+
+            error = await self._publish_bridged_session_message(
+                session_key=decoded_key,
+                client_id=client_id,
+                content=content,
+                media_paths=media_paths or None,
+                metadata={"remote": getattr(connection, "remote_address", None)},
+            )
+            if error is not None:
+                await self._send_event(connection, "error", detail=error)
             return
         await self._send_event(connection, "error", detail=f"unknown type: {t!r}")
 

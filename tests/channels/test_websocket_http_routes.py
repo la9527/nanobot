@@ -212,6 +212,8 @@ async def test_sessions_list_only_returns_websocket_sessions_by_default(
             "cli:direct",
             "slack:C123",
             "lark:oc_abc",
+            "telegram:12345",
+            "telegram:-1001:topic:42",
             "websocket:alpha",
             "websocket:beta",
         ],
@@ -229,12 +231,70 @@ async def test_sessions_list_only_returns_websocket_sessions_by_default(
         )
         assert listing.status_code == 200
         keys = {s["key"] for s in listing.json()["sessions"]}
-        # Only websocket-channel sessions are part of the webui surface; CLI /
-        # Slack / Lark rows would be non-resumable from the browser.
-        assert keys == {"websocket:alpha", "websocket:beta"}
+        assert keys == {
+            "telegram:12345",
+            "telegram:-1001:topic:42",
+            "websocket:alpha",
+            "websocket:beta",
+        }
     finally:
         await channel.stop()
         await server_task
+
+
+@pytest.mark.asyncio
+async def test_session_messages_route_reads_telegram_sessions(
+    bus: MagicMock, tmp_path: Path
+) -> None:
+    sm = _seed_session(tmp_path, key="telegram:12345")
+    channel = _ch(bus, session_manager=sm, port=29925)
+    server_task = asyncio.create_task(channel.start())
+    await asyncio.sleep(0.3)
+    try:
+        boot = await _http_get("http://127.0.0.1:29925/webui/bootstrap")
+        token = boot.json()["token"]
+        auth = {"Authorization": f"Bearer {token}"}
+
+        msgs = await _http_get(
+            "http://127.0.0.1:29925/api/sessions/telegram%3A12345/messages",
+            headers=auth,
+        )
+        assert msgs.status_code == 200
+        assert msgs.json()["key"] == "telegram:12345"
+    finally:
+        await channel.stop()
+        await server_task
+
+
+@pytest.mark.asyncio
+async def test_session_message_envelope_publishes_telegram_inbound(
+    bus: MagicMock, tmp_path: Path
+) -> None:
+    sm = _seed_session(tmp_path, key="telegram:-1001:topic:42")
+    channel = _ch(bus, session_manager=sm, port=29926)
+
+    class DummyConn:
+        remote_address = ("127.0.0.1", 9999)
+
+    conn = DummyConn()
+
+    await channel._dispatch_envelope(
+        conn,
+        "browser-client",
+        {
+            "type": "session_message",
+            "session_key": "telegram:-1001:topic:42",
+            "content": "reply from webui",
+        },
+    )
+
+    bus.publish_inbound.assert_awaited_once()
+    msg = bus.publish_inbound.await_args.args[0]
+    assert msg.channel == "telegram"
+    assert msg.chat_id == "-1001"
+    assert msg.session_key_override == "telegram:-1001:topic:42"
+    assert msg.metadata["message_thread_id"] == 42
+    assert msg.content == "reply from webui"
 
 
 @pytest.mark.asyncio
