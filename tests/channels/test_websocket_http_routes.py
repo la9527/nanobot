@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 
+from nanobot.bus.events import OutboundMessage
 from nanobot.channels.websocket import WebSocketChannel
 from nanobot.session.manager import Session, SessionManager
 
@@ -295,6 +296,42 @@ async def test_session_message_envelope_publishes_telegram_inbound(
     assert msg.session_key_override == "telegram:-1001:topic:42"
     assert msg.metadata["message_thread_id"] == 42
     assert msg.content == "reply from webui"
+
+
+@pytest.mark.asyncio
+async def test_send_marks_remote_user_echo_kind_for_webui_mirrors(
+    bus: MagicMock, tmp_path: Path
+) -> None:
+    sm = _seed_session(tmp_path, key="telegram:12345")
+    channel = _ch(bus, session_manager=sm, port=29927)
+
+    class DummyConn:
+        remote_address = ("127.0.0.1", 9999)
+
+        def __init__(self) -> None:
+            self.sent: list[str] = []
+
+        async def send(self, raw: str) -> None:
+            self.sent.append(raw)
+
+    conn = DummyConn()
+    channel._attach(conn, "telegram:12345")
+
+    await channel.send(
+        OutboundMessage(
+            channel="websocket",
+            chat_id="telegram:12345",
+            content="fresh telegram push",
+            metadata={"_remote_user_echo": True},
+        )
+    )
+
+    assert conn.sent
+    payload = json.loads(conn.sent[-1])
+    assert payload["event"] == "message"
+    assert payload["chat_id"] == "telegram:12345"
+    assert payload["kind"] == "remote_user"
+    assert payload["text"] == "fresh telegram push"
 
 
 @pytest.mark.asyncio

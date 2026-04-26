@@ -1463,6 +1463,8 @@ class WebSocketChannel(BaseChannel):
             payload["kind"] = "tool_hint"
         elif msg.metadata.get("_progress"):
             payload["kind"] = "progress"
+        elif msg.metadata.get("_remote_user_echo"):
+            payload["kind"] = "remote_user"
         raw = json.dumps(payload, ensure_ascii=False)
         for connection in conns:
             await self._safe_send_to(connection, raw, label=" ")

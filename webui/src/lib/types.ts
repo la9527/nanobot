@@ -110,7 +110,7 @@ export type InboundEvent =
       active_target?: string;
       /** Present when the frame is an agent breadcrumb (e.g. tool hint,
        * generic progress line) rather than a conversational reply. */
-      kind?: "tool_hint" | "progress" | "tool_approval";
+      kind?: "tool_hint" | "progress" | "tool_approval" | "remote_user";
     }
   | {
       event: "delta";

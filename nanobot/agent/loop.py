@@ -973,6 +973,7 @@ class AgentLoop:
         # routed here (mid-turn injection) instead of spawning a new task.
         pending = asyncio.Queue(maxsize=20)
         self._pending_queues[session_key] = pending
+        mirror_session_key = session_key if session_key.startswith("telegram:") else None
 
         try:
             async with lock, gate:
@@ -995,6 +996,12 @@ class AgentLoop:
                                 content=delta,
                                 metadata=meta,
                             ))
+                            if mirror_session_key:
+                                await self.bus.publish_outbound(OutboundMessage(
+                                    channel="websocket", chat_id=mirror_session_key,
+                                    content=delta,
+                                    metadata=meta,
+                                ))
 
                         async def on_stream_end(
                             *,
@@ -1016,6 +1023,12 @@ class AgentLoop:
                                 content="",
                                 metadata=meta,
                             ))
+                            if mirror_session_key:
+                                await self.bus.publish_outbound(OutboundMessage(
+                                    channel="websocket", chat_id=mirror_session_key,
+                                    content="",
+                                    metadata=meta,
+                                ))
                             stream_segment += 1
 
                     response = await self._process_message(
@@ -1024,6 +1037,15 @@ class AgentLoop:
                     )
                     if response is not None:
                         await self.bus.publish_outbound(response)
+                        if mirror_session_key:
+                            await self.bus.publish_outbound(OutboundMessage(
+                                channel="websocket",
+                                chat_id=mirror_session_key,
+                                content=response.content,
+                                reply_to=response.reply_to,
+                                media=response.media,
+                                metadata=dict(response.metadata or {}),
+                            ))
                     elif msg.channel == "cli":
                         await self.bus.publish_outbound(OutboundMessage(
                             channel=msg.channel, chat_id=msg.chat_id,
@@ -1232,6 +1254,34 @@ class AgentLoop:
                 )
             )
 
+        mirror_session_key = msg.session_key if msg.session_key.startswith("telegram:") else None
+
+        async def _mirror_webui_message(
+            content: str,
+            *,
+            metadata: dict[str, Any] | None = None,
+        ) -> None:
+            if not mirror_session_key:
+                return
+            await self.bus.publish_outbound(
+                OutboundMessage(
+                    channel="websocket",
+                    chat_id=mirror_session_key,
+                    content=content,
+                    metadata=dict(metadata or {}),
+                )
+            )
+
+        async def _publish_progress(content: str, *, tool_hint: bool = False) -> None:
+            await _bus_progress(content, tool_hint=tool_hint)
+            await _mirror_webui_message(
+                content,
+                metadata={
+                    "_progress": True,
+                    "_tool_hint": tool_hint,
+                },
+            )
+
         async def _on_retry_wait(content: str) -> None:
             meta = dict(msg.metadata or {})
             meta["_retry_wait"] = True
@@ -1258,6 +1308,11 @@ class AgentLoop:
             self._mark_pending_user_turn(session)
             self.sessions.save(session)
             user_persisted_early = True
+            if not msg.metadata.get("_webui_bridge"):
+                await _mirror_webui_message(
+                    text,
+                    metadata={"_remote_user_echo": True},
+                )
 
         pending_final_stream_end = False
         pending_stream_end_meta: dict[str, Any] | None = None
@@ -1286,7 +1341,7 @@ class AgentLoop:
 
         final_content, _, all_msgs, stop_reason, had_injections, response_meta = await self._run_agent_loop(
             initial_messages,
-            on_progress=on_progress or _bus_progress,
+            on_progress=on_progress or _publish_progress,
             on_stream=on_stream,
             on_stream_end=_on_stream_end_proxy if on_stream is not None else on_stream_end,
             on_retry_wait=_on_retry_wait,

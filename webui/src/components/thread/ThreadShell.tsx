@@ -92,9 +92,10 @@ export function ThreadShell({
   const messageCacheRef = useRef<Map<string, UIMessage[]>>(new Map());
 
   const initial = useMemo(() => {
-    if (!chatId) return historical;
-    return messageCacheRef.current.get(chatId) ?? historical;
-  }, [chatId, historical]);
+    const cacheKey = chatId ?? historyKey;
+    if (!cacheKey) return historical;
+    return messageCacheRef.current.get(cacheKey) ?? historical;
+  }, [chatId, historyKey, historical]);
   const {
     messages,
     isStreaming,
@@ -102,7 +103,7 @@ export function ThreadShell({
     setMessages,
     streamError,
     dismissStreamError,
-  } = useNanobotStream(chatId, initial);
+  } = useNanobotStream(chatId ?? historyKey, initial, chatId);
   const showHeroComposer = messages.length === 0 && !loading;
 
   useEffect(() => {
@@ -129,6 +130,15 @@ export function ThreadShell({
     if (!historyKey || isWebSocketSession) return;
     messageCacheRef.current.set(historyKey, messages);
   }, [historyKey, isWebSocketSession, messages]);
+
+  useEffect(() => {
+    if (!remoteReplyPending) return;
+    const lastMessage = messages[messages.length - 1];
+    if (!lastMessage) return;
+    if (lastMessage.role !== "assistant") return;
+    if (lastMessage.isStreaming) return;
+    setRemoteReplyPending(false);
+  }, [messages, remoteReplyPending]);
 
   useEffect(() => {
     let cancelled = false;

@@ -35,8 +35,9 @@ export interface SendImage {
 }
 
 export function useNanobotStream(
-  chatId: string | null,
+  subscriptionId: string | null,
   initialMessages: UIMessage[] = [],
+  sendChatId: string | null = subscriptionId,
 ): {
   messages: UIMessage[];
   isStreaming: boolean;
@@ -71,10 +72,10 @@ export function useNanobotStream(
     setStreamError(null);
     buffer.current = null;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatId]);
+  }, [subscriptionId]);
 
   useEffect(() => {
-    if (!chatId) return;
+    if (!subscriptionId) return;
 
     const applyModelHint = (ev: {
       active_target?: string;
@@ -132,6 +133,19 @@ export function useNanobotStream(
       }
 
       if (ev.event === "message") {
+        if (ev.kind === "remote_user") {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: createUuid(),
+              role: "user",
+              content: ev.text,
+              createdAt: Date.now(),
+            },
+          ]);
+          return;
+        }
+
         // Intermediate agent breadcrumbs (tool-call hints, raw progress).
         // Attach them to the last trace row if it was the last emitted item
         // so a sequence of calls collapses into one compact trace group.
@@ -201,16 +215,16 @@ export function useNanobotStream(
       // shell handles them separately.
     };
 
-    const unsub = client.onChat(chatId, handle);
+    const unsub = client.onChat(subscriptionId, handle);
     return () => {
       unsub();
       buffer.current = null;
     };
-  }, [chatId, client, setActiveTarget, setModelName]);
+  }, [client, setActiveTarget, setModelName, subscriptionId]);
 
   const send = useCallback(
     (content: string, images?: SendImage[]) => {
-      if (!chatId) return;
+      if (!sendChatId) return;
       const hasImages = !!images && images.length > 0;
       // Text is optional when images are attached — the agent will still see
       // the image blocks via ``media`` paths.
@@ -228,9 +242,9 @@ export function useNanobotStream(
         },
       ]);
       const wireMedia = hasImages ? images!.map((i) => i.media) : undefined;
-      client.sendMessage(chatId, content, wireMedia);
+      client.sendMessage(sendChatId, content, wireMedia);
     },
-    [chatId, client],
+    [client, sendChatId],
   );
 
   return {

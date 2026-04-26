@@ -8,11 +8,22 @@ import { ClientProvider } from "@/providers/ClientProvider";
 
 function makeClient() {
   const errorHandlers = new Set<(err: { kind: string }) => void>();
+  const perChat = new Map<string, Set<(ev: import("@/lib/types").InboundEvent) => void>>();
   return {
     status: "open" as const,
     defaultChatId: null as string | null,
     onStatus: () => () => {},
-    onChat: () => () => {},
+    onChat: (chatId: string, handler: (ev: import("@/lib/types").InboundEvent) => void) => {
+      let handlers = perChat.get(chatId);
+      if (!handlers) {
+        handlers = new Set();
+        perChat.set(chatId, handlers);
+      }
+      handlers.add(handler);
+      return () => {
+        handlers!.delete(handler);
+      };
+    },
     onError: (handler: (err: { kind: string }) => void) => {
       errorHandlers.add(handler);
       return () => {
@@ -21,6 +32,10 @@ function makeClient() {
     },
     _emitError(err: { kind: string }) {
       for (const h of errorHandlers) h(err);
+    },
+    _emitChat(chatId: string, ev: import("@/lib/types").InboundEvent) {
+      const handlers = perChat.get(chatId);
+      handlers?.forEach((h) => h(ev));
     },
     sendMessage: vi.fn(),
     sendSessionMessage: vi.fn(),
@@ -561,5 +576,59 @@ describe("ThreadShell", () => {
     await waitFor(() => {
       expect(screen.getByText("telegram assistant answer")).toBeInTheDocument();
     });
+  });
+
+  it("renders remote telegram user turns immediately through websocket mirror events", async () => {
+    const client = makeClient();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("telegram%3A12345/messages")) {
+        return httpJson({
+          key: "telegram:12345",
+          created_at: null,
+          updated_at: null,
+          messages: [{ role: "user", content: "older telegram user turn" }],
+        });
+      }
+      if (url.includes("telegram%3A12345/model-target")) {
+        return {
+          ok: false,
+          status: 404,
+          json: async () => ({}),
+        };
+      }
+      return {
+        ok: false,
+        status: 404,
+        json: async () => ({}),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={telegramSession("12345")}
+          title="Telegram 12345"
+          onToggleSidebar={() => {}}
+          onGoHome={() => {}}
+          onNewChat={vi.fn().mockResolvedValue("chat-a")}
+        />,
+      ),
+    );
+
+    await waitFor(() => expect(screen.getByText("older telegram user turn")).toBeInTheDocument());
+
+    act(() => {
+      client._emitChat("telegram:12345", {
+        event: "message",
+        chat_id: "telegram:12345",
+        text: "fresh telegram push",
+        kind: "remote_user",
+      });
+    });
+
+    expect(screen.getByText("fresh telegram push")).toBeInTheDocument();
   });
 });

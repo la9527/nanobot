@@ -115,4 +115,27 @@ describe("useNanobotStream", () => {
       content: "Approval required for a high-risk command.",
     });
   });
+
+  it("accepts remote_user frames for session-key subscriptions", () => {
+    const fake = fakeClient();
+    const { result } = renderHook(
+      () => useNanobotStream("telegram:12345", [], null),
+      { wrapper: wrap(fake.client) },
+    );
+
+    act(() => {
+      fake.emit("telegram:12345", {
+        event: "message",
+        chat_id: "telegram:12345",
+        text: "hello from telegram",
+        kind: "remote_user",
+      });
+    });
+
+    expect(result.current.messages).toHaveLength(1);
+    expect(result.current.messages[0]).toMatchObject({
+      role: "user",
+      content: "hello from telegram",
+    });
+  });
 });
