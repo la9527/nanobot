@@ -53,16 +53,45 @@ function resizeTextarea(el: HTMLTextAreaElement | null) {
   el.style.height = `${Math.min(el.scrollHeight, 260)}px`;
 }
 
+function normalizeDisplayText(value: string): string {
+  return value.replaceAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, "$1");
+}
+
 function describeModelTarget(target: ModelTargetOption): string | null {
   if (target.kind === "smart_router") {
-    return "smart-router";
+    return target.smart_router_mode === "auto"
+      ? "smart-router"
+      : `smart-router -> ${target.smart_router_mode ?? "auto"}`;
   }
-  const model = typeof target.model === "string" ? target.model.trim() : "";
-  const provider = typeof target.provider === "string" ? target.provider.trim() : "";
+  const model = typeof target.model === "string" ? normalizeDisplayText(target.model.trim()) : "";
+  const provider = typeof target.provider === "string" ? normalizeDisplayText(target.provider.trim()) : "";
   if (provider && model) return `${provider} -> ${model}`;
   if (model) return model;
   if (provider) return provider;
   return null;
+}
+
+function displayModelTargetName(target: ModelTargetOption): string {
+  const label = typeof target.display_name === "string" ? target.display_name.trim() : "";
+  return normalizeDisplayText(label || target.name);
+}
+
+function orderModelTargets(targets: ModelTargetOption[]): ModelTargetOption[] {
+  const rank: Record<string, number> = {
+    auto: 0,
+    local: 1,
+    mini: 2,
+    full: 3,
+  };
+  return [...targets].sort((left, right) => {
+    const leftGroup = left.group === "smart-router" ? 0 : 1;
+    const rightGroup = right.group === "smart-router" ? 0 : 1;
+    if (leftGroup !== rightGroup) return leftGroup - rightGroup;
+    if (left.group === "smart-router" && right.group === "smart-router") {
+      return (rank[left.smart_router_mode ?? "full"] ?? 99) - (rank[right.smart_router_mode ?? "full"] ?? 99);
+    }
+    return displayModelTargetName(left).localeCompare(displayModelTargetName(right));
+  });
 }
 
 interface ThreadComposerProps {
@@ -156,6 +185,7 @@ export function ThreadComposer({
     && !hasErrors
     && (value.trim().length > 0 || readyImages.length > 0);
   const canSelectModelTarget = !disabled && !modelTargetPending && modelTargets.length > 0 && !!onSelectModelTarget;
+  const orderedTargets = useMemo(() => orderModelTargets(modelTargets), [modelTargets]);
 
   const submit = useCallback(() => {
     if (!canSend) return;
@@ -469,10 +499,10 @@ export function ThreadComposer({
                         void onSelectModelTarget(value);
                       }}
                     >
-                      {modelTargets.map((target) => (
+                      {orderedTargets.map((target) => (
                         <DropdownMenuRadioItem key={target.name} value={target.name}>
                           <span className="flex min-w-0 flex-col gap-0.5">
-                            <span className="truncate font-medium">{target.name}</span>
+                            <span className="truncate font-medium">{displayModelTargetName(target)}</span>
                             {describeModelTarget(target) ? (
                               <span className="max-w-[15rem] whitespace-normal text-[11px] text-muted-foreground">
                                 {describeModelTarget(target)}
@@ -480,7 +510,7 @@ export function ThreadComposer({
                             ) : null}
                             {target.description ? (
                               <span className="max-w-[15rem] whitespace-normal text-xs text-muted-foreground">
-                                {target.description}
+                                {normalizeDisplayText(target.description)}
                               </span>
                             ) : null}
                           </span>

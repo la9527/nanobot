@@ -13,6 +13,13 @@ from .policy import RoutingPolicy
 from .types import AttemptRecord, RouteDecision, TierName
 
 
+_FORCED_TIER_ALIAS: dict[str, TierName] = {
+    "smart-router-local": "local",
+    "smart-router-mini": "mini",
+    "smart-router-full": "full",
+}
+
+
 class SmartRouterProvider(LLMProvider):
     def __init__(
         self,
@@ -146,7 +153,17 @@ class SmartRouterProvider(LLMProvider):
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None,
+        *,
+        model: str | None = None,
     ) -> RouteDecision:
+        forced = _FORCED_TIER_ALIAS.get((model or "").strip())
+        if forced is not None:
+            return RouteDecision(
+                requested_tier=forced,
+                score=0,
+                reason_codes=[f"forced_tier:{forced}"],
+                features=self._policy.extract_features(messages=messages, tools=tools),
+            )
         return self._policy.choose(messages=messages, tools=tools)
 
     async def _dispatch(
@@ -164,7 +181,7 @@ class SmartRouterProvider(LLMProvider):
         retry_mode: str = "standard",
         on_retry_wait: Callable[[str], Awaitable[None]] | None = None,
     ) -> LLMResponse:
-        decision = self._route(messages, tools)
+        decision = self._route(messages, tools, model=model)
         target_tier = decision.requested_tier
         if target_tier == "local" and tool_choice not in (None, "auto") and not self._config.allow_local_tools:
             target_tier = "mini"

@@ -8,6 +8,12 @@ from typing import Any
 
 DEFAULT_MODEL_TARGET_NAME = "default"
 SMART_ROUTER_TARGET_NAME = "smart-router"
+SMART_ROUTER_TARGET_NAMES = {
+    "auto": SMART_ROUTER_TARGET_NAME,
+    "local": "smart-router-local",
+    "mini": "smart-router-mini",
+    "full": "smart-router-full",
+}
 SESSION_MODEL_TARGET_KEY = "model_target"
 
 
@@ -20,6 +26,74 @@ class ResolvedModelTarget:
     model: str | None = None
     provider: str | None = None
     description: str = ""
+    display_name: str | None = None
+    group: str | None = None
+    smart_router_mode: str | None = None
+
+
+def _smart_router_variant(
+    *,
+    name: str,
+    mode: str,
+    description: str,
+    display_name: str,
+) -> ResolvedModelTarget:
+    return ResolvedModelTarget(
+        name=name,
+        kind="smart_router",
+        description=description,
+        display_name=display_name,
+        group="smart-router",
+        smart_router_mode=mode,
+    )
+
+
+def _smart_router_variants(config: Any) -> dict[str, ResolvedModelTarget]:
+    router = config.plugins.smartrouter
+    return {
+        SMART_ROUTER_TARGET_NAMES["auto"]: _smart_router_variant(
+            name=SMART_ROUTER_TARGET_NAMES["auto"],
+            mode="auto",
+            display_name="Auto",
+            description="smart-router automatic tier selection.",
+        ),
+        SMART_ROUTER_TARGET_NAMES["local"]: _smart_router_variant(
+            name=SMART_ROUTER_TARGET_NAMES["local"],
+            mode="local",
+            display_name="Local",
+            description=f"smart-router forced local tier ({router.local.model}).",
+        ),
+        SMART_ROUTER_TARGET_NAMES["mini"]: _smart_router_variant(
+            name=SMART_ROUTER_TARGET_NAMES["mini"],
+            mode="mini",
+            display_name="Mini",
+            description=f"smart-router forced mini tier ({router.mini.model}).",
+        ),
+        SMART_ROUTER_TARGET_NAMES["full"]: _smart_router_variant(
+            name=SMART_ROUTER_TARGET_NAMES["full"],
+            mode="full",
+            display_name="Full",
+            description=f"smart-router forced full tier ({router.full.model}).",
+        ),
+    }
+
+
+def _normalize_smart_router_targets(config: Any, targets: dict[str, ResolvedModelTarget]) -> None:
+    for name, default_target in _smart_router_variants(config).items():
+        current = targets.get(name)
+        if current is None:
+            targets[name] = default_target
+            continue
+        if current.kind != "smart_router":
+            continue
+        if not current.display_name:
+            current.display_name = default_target.display_name
+        if not current.group:
+            current.group = default_target.group
+        if not current.smart_router_mode:
+            current.smart_router_mode = default_target.smart_router_mode
+        if not current.description:
+            current.description = default_target.description
 
 
 def _default_target(config: Any) -> ResolvedModelTarget:
@@ -67,12 +141,8 @@ def build_model_targets(config: Any) -> dict[str, ResolvedModelTarget]:
             description=target.description or "",
         )
 
-    if SMART_ROUTER_TARGET_NAME not in targets and config._router_has_values(config.plugins.smartrouter):
-        targets[SMART_ROUTER_TARGET_NAME] = ResolvedModelTarget(
-            name=SMART_ROUTER_TARGET_NAME,
-            kind="smart_router",
-            description="smart-router runtime plugin target.",
-        )
+    if config._router_has_values(config.plugins.smartrouter):
+        _normalize_smart_router_targets(config, targets)
 
     return targets
 

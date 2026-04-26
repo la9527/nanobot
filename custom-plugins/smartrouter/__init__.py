@@ -1,5 +1,9 @@
 from nanobot.plugins import RuntimePlugin, RuntimePluginContext, RuntimePluginStatus
-from nanobot.model_targets import ResolvedModelTarget, SMART_ROUTER_TARGET_NAME
+from nanobot.model_targets import (
+	ResolvedModelTarget,
+	SMART_ROUTER_TARGET_NAME,
+	SMART_ROUTER_TARGET_NAMES,
+)
 
 from .config import RouterConfig, load_router_config_from_config, resolve_router_section
 from .smart_router_provider import SmartRouterProvider
@@ -72,6 +76,33 @@ def _build_model_targets(context: RuntimePluginContext) -> dict[str, ResolvedMod
 			name=SMART_ROUTER_TARGET_NAME,
 			kind="smart_router",
 			description=description,
+			display_name="Auto",
+			group="smart-router",
+			smart_router_mode="auto",
+		),
+		SMART_ROUTER_TARGET_NAMES["local"]: ResolvedModelTarget(
+			name=SMART_ROUTER_TARGET_NAMES["local"],
+			kind="smart_router",
+			description=f"smart-router forced local tier ({router_config.local.model})",
+			display_name="Local",
+			group="smart-router",
+			smart_router_mode="local",
+		),
+		SMART_ROUTER_TARGET_NAMES["mini"]: ResolvedModelTarget(
+			name=SMART_ROUTER_TARGET_NAMES["mini"],
+			kind="smart_router",
+			description=f"smart-router forced mini tier ({router_config.mini.model})",
+			display_name="Mini",
+			group="smart-router",
+			smart_router_mode="mini",
+		),
+		SMART_ROUTER_TARGET_NAMES["full"]: ResolvedModelTarget(
+			name=SMART_ROUTER_TARGET_NAMES["full"],
+			kind="smart_router",
+			description=f"smart-router forced full tier ({router_config.full.model})",
+			display_name="Full",
+			group="smart-router",
+			smart_router_mode="full",
 		)
 	}
 

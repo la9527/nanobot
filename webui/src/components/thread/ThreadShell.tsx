@@ -21,6 +21,10 @@ interface ThreadShellProps {
   hideSidebarToggleOnDesktop?: boolean;
 }
 
+function normalizeDisplayText(value: string): string {
+  return value.replaceAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, "$1");
+}
+
 function toModelBadgeLabel(
   modelName: string | null,
   activeTarget: string | null,
@@ -28,11 +32,15 @@ function toModelBadgeLabel(
   if (typeof activeTarget === "string") {
     const target = activeTarget.trim();
     if (target && target !== "default") {
-      return target === "smart_router" ? "smart-router" : target;
+      if (target === "smart-router" || target === "smart_router") return "Auto";
+      if (target === "smart-router-local") return "Local";
+      if (target === "smart-router-mini") return "Mini";
+      if (target === "smart-router-full") return "Full";
+      return target;
     }
   }
   if (!modelName) return null;
-  const trimmed = modelName.trim();
+  const trimmed = normalizeDisplayText(modelName.trim());
   if (!trimmed) return null;
   const leaf = trimmed.split("/").pop() ?? trimmed;
   const label = leaf || trimmed;
@@ -46,7 +54,7 @@ function deriveModelNameFromTarget(target: ModelTargetOption | null | undefined)
     return target.name || "smart-router";
   }
   if (typeof target.model === "string") {
-    const trimmed = target.model.trim();
+    const trimmed = normalizeDisplayText(target.model.trim());
     return trimmed || null;
   }
   return null;

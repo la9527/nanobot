@@ -203,3 +203,18 @@ async def test_smart_router_ignores_runtime_context_metadata(tmp_path: Path) -> 
     )
 
     assert response.content == "local ok"
+
+
+@pytest.mark.asyncio
+async def test_smart_router_forced_tier_alias_routes_to_requested_tier(tmp_path: Path) -> None:
+    router = _router(tmp_path)
+
+    response = await router.chat(
+        messages=[{"role": "user", "content": "hello"}],
+        model="smart-router-full",
+    )
+
+    assert response.content == "full ok"
+    assert len(router._tiers["local"].calls) == 0
+    assert len(router._tiers["mini"].calls) == 0
+    assert len(router._tiers["full"].calls) == 1

@@ -72,6 +72,9 @@ export interface ModelTargetOption {
   provider?: string | null;
   model?: string | null;
   description?: string;
+  display_name?: string | null;
+  group?: string | null;
+  smart_router_mode?: "auto" | "local" | "mini" | "full" | null;
 }
 
 export interface BootstrapResponse {

@@ -93,6 +93,9 @@ async def test_cmd_model_shows_smart_router_target(tmp_path: Path) -> None:
 
     out = await cmd_model(_make_ctx(tmp_path, config, "/model", args=""))
     assert "`smart-router`" in out.content
+    assert "`smart-router-local`" in out.content
+    assert "`smart-router-mini`" in out.content
+    assert "`smart-router-full`" in out.content
 
 
 def test_build_help_text_mentions_model_command() -> None:

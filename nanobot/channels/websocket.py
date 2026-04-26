@@ -213,6 +213,9 @@ def _read_webui_model_targets() -> list[dict[str, Any]]:
                 "provider": target.provider,
                 "model": target.model,
                 "description": target.description,
+                "display_name": target.display_name,
+                "group": target.group,
+                "smart_router_mode": target.smart_router_mode,
             })
         return payload
     except Exception as e:
@@ -857,6 +860,9 @@ class WebSocketChannel(BaseChannel):
                 "provider": target.provider,
                 "model": target.model,
                 "description": target.description,
+                "display_name": target.display_name,
+                "group": target.group,
+                "smart_router_mode": target.smart_router_mode,
             } if target is not None else None,
         })
 

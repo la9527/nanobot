@@ -74,17 +74,17 @@ class RoutingPolicy:
     def __init__(self, settings: PolicySettings):
         self._settings = settings
 
-    def choose(
+    def extract_features(
         self,
         *,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None,
-    ) -> RouteDecision:
+    ) -> RequestFeatures:
         prompt = _collect_prompt_text(messages)
         tool_history_count = sum(
             1 for message in messages if message.get("role") == "tool"
         )
-        features = RequestFeatures(
+        return RequestFeatures(
             prompt_chars=len(prompt),
             message_count=len(messages),
             tool_count=len(tools or []),
@@ -95,6 +95,14 @@ class RoutingPolicy:
             tool_keyword_hits=_keyword_hits(prompt, self._settings.tool_keywords),
             full_keyword_hits=_keyword_hits(prompt, self._settings.full_keywords),
         )
+
+    def choose(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+    ) -> RouteDecision:
+        features = self.extract_features(messages=messages, tools=tools)
 
         score = 0
         reason_codes: list[str] = []

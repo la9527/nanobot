@@ -331,7 +331,7 @@ describe("ThreadShell", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText("smart-router")).toBeInTheDocument();
+      expect(screen.getByText("Auto")).toBeInTheDocument();
     });
 
     await user.click(screen.getByRole("button", { name: "Choose model target" }));

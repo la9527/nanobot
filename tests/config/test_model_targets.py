@@ -50,7 +50,13 @@ def test_build_model_targets_includes_smart_router_target_when_configured() -> N
     targets = build_model_targets(config)
 
     assert "smart-router" in targets
+    assert "smart-router-local" in targets
+    assert "smart-router-mini" in targets
+    assert "smart-router-full" in targets
     assert targets["smart-router"].kind == "smart_router"
+    assert targets["smart-router"].smart_router_mode == "auto"
+    assert targets["smart-router-mini"].smart_router_mode == "mini"
+    assert targets["smart-router-full"].display_name == "Full"
 
 
 def test_build_model_targets_merges_plugin_contributed_targets(monkeypatch) -> None:
