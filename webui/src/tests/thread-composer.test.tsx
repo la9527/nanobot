@@ -33,7 +33,7 @@ describe("ThreadComposer", () => {
         activeTarget="smart-router"
         modelTargets={[
           { name: "default", kind: "provider_model", model: "openai/gpt-5.4", description: "Startup default provider/model." },
-          { name: "local-llm", kind: "provider_model", provider: "vllm", model: "${LOCAL_LLM_MODEL}", description: "현재 기본 local runtime (${LOCAL_LLM_MODEL})" },
+          { name: "local-llm", kind: "provider_model", provider: "vllm", model: "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0", description: "현재 기본 local runtime (LiquidAI/LFM2-24B-A2B-GGUF:Q4_0)" },
           { name: "smart-router", kind: "smart_router", display_name: "Auto", group: "smart-router", smart_router_mode: "auto", description: "smart-router runtime plugin target." },
           { name: "smart-router-local", kind: "smart_router", display_name: "Local", group: "smart-router", smart_router_mode: "local", description: "smart-router forced local tier." },
           { name: "smart-router-mini", kind: "smart_router", display_name: "Mini", group: "smart-router", smart_router_mode: "mini", description: "smart-router forced mini tier." },
@@ -48,9 +48,8 @@ describe("ThreadComposer", () => {
     expect(screen.getByText(/^Local$/i)).toBeInTheDocument();
     expect(screen.getByText(/^Mini$/i)).toBeInTheDocument();
     expect(screen.getByText(/^Full$/i)).toBeInTheDocument();
-    expect(screen.getByText("vllm -> LOCAL_LLM_MODEL")).toBeInTheDocument();
-    expect(screen.getByText("현재 기본 local runtime (LOCAL_LLM_MODEL)")).toBeInTheDocument();
-    expect(screen.queryByText("${LOCAL_LLM_MODEL}")).not.toBeInTheDocument();
+    expect(screen.getByText("vllm -> LiquidAI/LFM2-24B-A2B-GGUF:Q4_0")).toBeInTheDocument();
+    expect(screen.getByText("현재 기본 local runtime (LiquidAI/LFM2-24B-A2B-GGUF:Q4_0)")).toBeInTheDocument();
     expect(screen.getByText("openai/gpt-5.4")).toBeInTheDocument();
     await user.click(screen.getByRole("menuitemradio", { name: /Mini/i }));
 

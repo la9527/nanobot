@@ -53,18 +53,14 @@ function resizeTextarea(el: HTMLTextAreaElement | null) {
   el.style.height = `${Math.min(el.scrollHeight, 260)}px`;
 }
 
-function normalizeDisplayText(value: string): string {
-  return value.replaceAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, "$1");
-}
-
 function describeModelTarget(target: ModelTargetOption): string | null {
   if (target.kind === "smart_router") {
     return target.smart_router_mode === "auto"
       ? "smart-router"
       : `smart-router -> ${target.smart_router_mode ?? "auto"}`;
   }
-  const model = typeof target.model === "string" ? normalizeDisplayText(target.model.trim()) : "";
-  const provider = typeof target.provider === "string" ? normalizeDisplayText(target.provider.trim()) : "";
+  const model = typeof target.model === "string" ? target.model.trim() : "";
+  const provider = typeof target.provider === "string" ? target.provider.trim() : "";
   if (provider && model) return `${provider} -> ${model}`;
   if (model) return model;
   if (provider) return provider;
@@ -73,7 +69,7 @@ function describeModelTarget(target: ModelTargetOption): string | null {
 
 function displayModelTargetName(target: ModelTargetOption): string {
   const label = typeof target.display_name === "string" ? target.display_name.trim() : "";
-  return normalizeDisplayText(label || target.name);
+  return label || target.name;
 }
 
 function orderModelTargets(targets: ModelTargetOption[]): ModelTargetOption[] {
@@ -510,7 +506,7 @@ export function ThreadComposer({
                             ) : null}
                             {target.description ? (
                               <span className="max-w-[15rem] whitespace-normal text-xs text-muted-foreground">
-                                {normalizeDisplayText(target.description)}
+                                {target.description}
                               </span>
                             ) : null}
                           </span>

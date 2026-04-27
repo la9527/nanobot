@@ -137,14 +137,13 @@ def _http_json_response(data: dict[str, Any], *, status: int = 200) -> Response:
 def _read_webui_model_name() -> str | None:
     """Return a stable runtime label for the WebUI model badge."""
     try:
-        from nanobot.config.loader import load_config
         from nanobot.model_targets import (
             DEFAULT_MODEL_TARGET_NAME,
             get_active_model_target_name,
             resolve_model_target,
         )
 
-        config = load_config()
+        config = _load_webui_config()
         active_target = get_active_model_target_name(config, None)
         target_name = active_target.strip() if isinstance(active_target, str) else ""
         target = None
@@ -154,8 +153,8 @@ def _read_webui_model_name() -> str | None:
             except Exception:
                 target = None
 
-        # smart-router mode should show the route alias rather than an unresolved
-        # provider-model placeholder like "${LOCAL_LLM_MODEL}".
+        # smart-router mode should show the route alias rather than the backing
+        # provider-model string.
         if target is not None and target.kind == "smart_router":
             return target.name or "smart-router"
 
@@ -165,9 +164,7 @@ def _read_webui_model_name() -> str | None:
         if not model:
             model = str(config.agents.defaults.model or "").strip()
 
-        # Some live configs intentionally keep env placeholders. For UI display,
-        # prefer a concrete target alias over raw "${...}" strings.
-        if model and not re.fullmatch(r"\$\{[A-Za-z_][A-Za-z0-9_]*\}", model):
+        if model:
             return model
 
         if target_name and target_name != DEFAULT_MODEL_TARGET_NAME:
@@ -183,10 +180,9 @@ def _read_webui_model_name() -> str | None:
 def _read_webui_active_target() -> str | None:
     """Return the active model target name for WebUI hints."""
     try:
-        from nanobot.config.loader import load_config
         from nanobot.model_targets import get_active_model_target_name
 
-        config = load_config()
+        config = _load_webui_config()
         active_target = get_active_model_target_name(config, None)
         if isinstance(active_target, str):
             target = active_target.strip()
@@ -200,10 +196,9 @@ def _read_webui_active_target() -> str | None:
 def _read_webui_model_targets() -> list[dict[str, Any]]:
     """Return configured model targets in a UI-friendly shape for the WebUI."""
     try:
-        from nanobot.config.loader import load_config
         from nanobot.model_targets import build_model_targets
 
-        config = load_config()
+        config = _load_webui_config()
         targets = build_model_targets(config)
         payload: list[dict[str, Any]] = []
         for name, target in targets.items():
@@ -221,6 +216,18 @@ def _read_webui_model_targets() -> list[dict[str, Any]]:
     except Exception as e:
         logger.debug("webui bootstrap could not load model targets: {}", e)
         return []
+
+
+def _load_webui_config() -> Any:
+    """Load config for WebUI metadata, preferring env-resolved values."""
+    from nanobot.config.loader import load_config, resolve_config_env_vars
+
+    config = load_config()
+    try:
+        return resolve_config_env_vars(config)
+    except ValueError as exc:
+        logger.debug("webui config env resolution fallback: {}", exc)
+        return config
 
 
 def _parse_request_path(path_with_query: str) -> tuple[str, dict[str, list[str]]]:
@@ -818,10 +825,9 @@ class WebSocketChannel(BaseChannel):
 
     def _load_model_target_context(self) -> tuple[Any, dict[str, Any]] | tuple[None, None]:
         try:
-            from nanobot.config.loader import load_config
             from nanobot.model_targets import build_model_targets
 
-            config = load_config()
+            config = _load_webui_config()
             return config, build_model_targets(config)
         except Exception as e:
             logger.warning("webui model target context unavailable: {}", e)

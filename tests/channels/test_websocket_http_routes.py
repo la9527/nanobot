@@ -99,6 +99,66 @@ async def test_bootstrap_returns_token_for_localhost(
 
 
 @pytest.mark.asyncio
+async def test_bootstrap_resolves_env_backed_model_target_strings(
+    bus: MagicMock,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sm = _seed_session(tmp_path)
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "agents": {
+                    "defaults": {
+                        "model": "${LOCAL_LLM_MODEL}",
+                        "provider": "vllm",
+                        "modelSelection": {
+                            "targets": {
+                                "local-llm": {
+                                    "kind": "provider_model",
+                                    "provider": "vllm",
+                                    "model": "${LOCAL_LLM_MODEL}",
+                                    "description": "current local runtime (${LOCAL_LLM_MODEL})",
+                                }
+                            }
+                        },
+                    }
+                },
+                "plugins": {
+                    "smartrouter": {
+                        "enabled": True,
+                        "local": {"provider": "vllm", "model": "${LOCAL_LLM_MODEL}"},
+                        "mini": {"provider": "openrouter", "model": "openai/gpt-5.4-mini"},
+                        "full": {"provider": "openrouter", "model": "openai/gpt-5.4"},
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LOCAL_LLM_MODEL", "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0")
+    monkeypatch.setattr("nanobot.config.loader._current_config_path", config_path)
+
+    channel = _ch(bus, session_manager=sm, port=29914)
+    server_task = asyncio.create_task(channel.start())
+    await asyncio.sleep(0.3)
+    try:
+        resp = await _http_get("http://127.0.0.1:29914/webui/bootstrap")
+        assert resp.status_code == 200
+        body = resp.json()
+        rows = {row["name"]: row for row in body["model_targets"]}
+        assert rows["local-llm"]["model"] == "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0"
+        assert rows["local-llm"]["description"] == "current local runtime (LiquidAI/LFM2-24B-A2B-GGUF:Q4_0)"
+        assert rows["smart-router-local"]["description"] == (
+            "smart-router forced local tier (LiquidAI/LFM2-24B-A2B-GGUF:Q4_0)"
+        )
+    finally:
+        await channel.stop()
+        await server_task
+
+
+@pytest.mark.asyncio
 async def test_session_model_target_routes_round_trip(
     bus: MagicMock, tmp_path: Path
 ) -> None:
