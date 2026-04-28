@@ -8,20 +8,20 @@ import { ClientProvider } from "@/providers/ClientProvider";
 
 function makeClient() {
   const errorHandlers = new Set<(err: { kind: string }) => void>();
-  const perChat = new Map<string, Set<(ev: import("@/lib/types").InboundEvent) => void>>();
+  const chatHandlers = new Map<string, Set<(ev: import("@/lib/types").InboundEvent) => void>>();
   return {
     status: "open" as const,
     defaultChatId: null as string | null,
     onStatus: () => () => {},
     onChat: (chatId: string, handler: (ev: import("@/lib/types").InboundEvent) => void) => {
-      let handlers = perChat.get(chatId);
+      let handlers = chatHandlers.get(chatId);
       if (!handlers) {
         handlers = new Set();
-        perChat.set(chatId, handlers);
+        chatHandlers.set(chatId, handlers);
       }
       handlers.add(handler);
       return () => {
-        handlers!.delete(handler);
+        handlers?.delete(handler);
       };
     },
     onError: (handler: (err: { kind: string }) => void) => {
@@ -34,8 +34,7 @@ function makeClient() {
       for (const h of errorHandlers) h(err);
     },
     _emitChat(chatId: string, ev: import("@/lib/types").InboundEvent) {
-      const handlers = perChat.get(chatId);
-      handlers?.forEach((h) => h(ev));
+      for (const h of chatHandlers.get(chatId) ?? []) h(ev);
     },
     sendMessage: vi.fn(),
     sendSessionMessage: vi.fn(),
@@ -511,8 +510,9 @@ describe("ThreadShell", () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes("telegram%3A12345/messages")) {
-        fetchMock.mock.calls.length;
-        const callCount = fetchMock.mock.calls.filter(([value]) => String(value).includes("telegram%3A12345/messages")).length;
+        const callCount = fetchMock.mock.calls.filter(([value]) =>
+          String(value).includes("telegram%3A12345/messages"),
+        ).length;
         if (callCount < 2) {
           return httpJson({
             key: "telegram:12345",
@@ -630,5 +630,47 @@ describe("ThreadShell", () => {
     });
 
     expect(screen.getByText("fresh telegram push")).toBeInTheDocument();
+  });
+
+  it("renders ask_user options above the composer and sends selected answers", async () => {
+    const client = makeClient();
+    const onNewChat = vi.fn().mockResolvedValue("chat-a");
+
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={session("chat-a")}
+          title="Chat chat-a"
+          onToggleSidebar={() => {}}
+          onGoHome={() => {}}
+          onNewChat={onNewChat}
+        />,
+      ),
+    );
+
+    await act(async () => {
+      client._emitChat("chat-a", {
+        event: "message",
+        chat_id: "chat-a",
+        text: "How should I continue?",
+        buttons: [["Short answer", "Detailed answer"]],
+      });
+    });
+
+    expect(screen.getByRole("group", { name: "Question" })).toHaveTextContent(
+      "How should I continue?",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Short answer" }));
+
+    expect(client.sendMessage).toHaveBeenCalledWith(
+      "chat-a",
+      "Short answer",
+      undefined,
+    );
+    await waitFor(() => {
+      expect(screen.queryByRole("group", { name: "Question" })).not.toBeInTheDocument();
+    });
   });
 });

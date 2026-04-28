@@ -1,4 +1,10 @@
-import type { ChatSummary, SessionMessagesResponse, SessionModelTargetResponse } from "./types";
+import type {
+  ChatSummary,
+  SessionMessagesResponse,
+  SessionModelTargetResponse,
+  SettingsPayload,
+  SettingsUpdate,
+} from "./types";
 
 export class ApiError extends Error {
   status: number;
@@ -113,4 +119,22 @@ export async function selectSessionModelTarget(
     `${base}/api/sessions/${encodeURIComponent(key)}/model-target/${encodeURIComponent(targetName)}/select`,
     token,
   );
+}
+
+export async function fetchSettings(
+  token: string,
+  base: string = "",
+): Promise<SettingsPayload> {
+  return request<SettingsPayload>(`${base}/api/settings`, token);
+}
+
+export async function updateSettings(
+  token: string,
+  update: SettingsUpdate,
+  base: string = "",
+): Promise<SettingsPayload> {
+  const query = new URLSearchParams();
+  if (update.model !== undefined) query.set("model", update.model);
+  if (update.provider !== undefined) query.set("provider", update.provider);
+  return request<SettingsPayload>(`${base}/api/settings/update?${query}`, token);
 }

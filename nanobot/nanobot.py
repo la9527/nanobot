@@ -92,6 +92,7 @@ class Nanobot:
             disabled_skills=defaults.disabled_skills,
             session_ttl_minutes=defaults.session_ttl_minutes,
             hooks=runtime_hooks,
+            consolidation_ratio=defaults.consolidation_ratio,
             tools_config=config.tools,
         )
         initialize_runtime_plugins(

@@ -9,6 +9,7 @@ import {
   listSessions,
 } from "@/lib/api";
 import { deriveTitle } from "@/lib/format";
+import { toMediaAttachment } from "@/lib/media";
 import type { ChatSummary, SessionMessagesResponse, UIMessage } from "@/lib/types";
 
 const EMPTY_MESSAGES: UIMessage[] = [];
@@ -22,14 +23,15 @@ export function hydrateSessionMessages(body: SessionMessagesResponse): UIMessage
   return body.messages.flatMap((m, idx) => {
     if (m.role !== "user" && m.role !== "assistant") return [];
     if (typeof m.content !== "string") return [];
+    const media =
+      Array.isArray(m.media_urls) && m.media_urls.length > 0
+        ? m.media_urls.map((mu) => toMediaAttachment(mu))
+        : undefined;
     const images =
-      m.role === "user" &&
-      Array.isArray(m.media_urls) &&
-      m.media_urls.length > 0
-        ? m.media_urls.map((mu) => ({
-            url: mu.url,
-            name: mu.name,
-          }))
+      m.role === "user" && media?.length
+        ? media
+            .filter((item) => item.kind === "image")
+            .map((item) => ({ url: item.url, name: item.name }))
         : undefined;
     return [
       {
@@ -38,6 +40,7 @@ export function hydrateSessionMessages(body: SessionMessagesResponse): UIMessage
         content: m.content,
         createdAt: m.timestamp ? Date.parse(m.timestamp) : Date.now(),
         ...(images ? { images } : {}),
+        ...(media ? { media } : {}),
       },
     ];
   });

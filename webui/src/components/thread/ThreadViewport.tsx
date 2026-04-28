@@ -134,7 +134,7 @@ export function ThreadViewport({
               <ThreadMessages messages={messages} onApprovalResponse={onApprovalResponse} />
             </div>
 
-            <div ref={composerWrapRef} className="sticky bottom-0 z-10 mt-auto">
+            <div ref={composerWrapRef} className="sticky bottom-0 z-10 mt-auto bg-background/95 backdrop-blur-sm">
               <div className="px-4 pb-3">
                 {composer}
               </div>

@@ -1,12 +1,12 @@
 import { useState } from "react";
-import { Check, ChevronRight, ImageIcon, ShieldAlert, Wrench, X } from "lucide-react";
+import { Check, ChevronRight, FileIcon, ImageIcon, PlaySquare, ShieldAlert, Wrench, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { ImageLightbox } from "@/components/ImageLightbox";
 import { MarkdownText } from "@/components/MarkdownText";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import type { UIImage, UIMessage } from "@/lib/types";
+import type { UIImage, UIMediaAttachment, UIMessage } from "@/lib/types";
 
 interface MessageBubbleProps {
   message: UIMessage;
@@ -41,7 +41,9 @@ export function MessageBubble({ message, onApprovalResponse }: MessageBubbleProp
 
   if (message.role === "user") {
     const images = message.images ?? [];
+    const media = message.media ?? [];
     const hasImages = images.length > 0;
+    const hasMedia = media.length > 0;
     const hasText = message.content.trim().length > 0;
     return (
       <div
@@ -50,7 +52,10 @@ export function MessageBubble({ message, onApprovalResponse }: MessageBubbleProp
           baseAnim,
         )}
       >
-        {hasImages ? <UserImages images={images} /> : null}
+        {hasImages ? <UserImages images={images} align="right" /> : null}
+        {!hasImages && hasMedia ? (
+          <MessageMedia media={media} align="right" />
+        ) : null}
         {hasText ? (
           <p
             className={cn(
@@ -72,6 +77,7 @@ export function MessageBubble({ message, onApprovalResponse }: MessageBubbleProp
 
   const empty = message.content.trim().length === 0;
   const blocks = splitAssistantBlocks(message.content);
+  const media = message.media ?? [];
   return (
     <div
       className={cn("w-full", baseAnim)}
@@ -98,6 +104,7 @@ export function MessageBubble({ message, onApprovalResponse }: MessageBubbleProp
             <MarkdownText>{message.content}</MarkdownText>
           )}
           {message.isStreaming && <StreamCursor />}
+          {media.length > 0 ? <MessageMedia media={media} align="left" /> : null}
         </>
       )}
     </div>
@@ -208,6 +215,75 @@ function ApprovalCard({
   );
 }
 
+function MessageMedia({
+  media,
+  align,
+}: {
+  media: UIMediaAttachment[];
+  align: "left" | "right";
+}) {
+  if (media.length === 0) return null;
+  const images = media
+    .filter((item) => item.kind === "image")
+    .map(({ url, name }) => ({ url, name }));
+  const nonImages = media.filter((item) => item.kind !== "image");
+
+  return (
+    <div
+      className={cn(
+        "mt-2 flex flex-wrap gap-2",
+        align === "right" ? "justify-end" : "justify-start",
+      )}
+    >
+      {images.length > 0 ? <UserImages images={images} align={align} /> : null}
+      {nonImages.map((item, i) => (
+        <MediaCell key={`${item.url ?? item.name ?? item.kind}-${i}`} media={item} />
+      ))}
+    </div>
+  );
+}
+
+function MediaCell({ media }: { media: UIMediaAttachment }) {
+  const { t } = useTranslation();
+  const hasUrl = typeof media.url === "string" && media.url.length > 0;
+
+  if (media.kind === "video" && hasUrl) {
+    return (
+      <figure className="max-w-[min(100%,32rem)] overflow-hidden rounded-[14px] border border-border/60 bg-muted/40">
+        <video
+          src={media.url}
+          controls
+          preload="metadata"
+          className="block max-h-[26rem] w-full bg-black"
+          aria-label={media.name ? `${t("message.videoAttachment", { defaultValue: "Video attachment" })}: ${media.name}` : t("message.videoAttachment", { defaultValue: "Video attachment" })}
+        />
+        {media.name ? (
+          <figcaption className="truncate px-3 py-1.5 text-[11.5px] text-muted-foreground">
+            {media.name}
+          </figcaption>
+        ) : null}
+      </figure>
+    );
+  }
+
+  const label =
+    media.kind === "video"
+      ? t("message.videoAttachment", { defaultValue: "Video attachment" })
+      : t("message.fileAttachment", { defaultValue: "File attachment" });
+  const Icon = media.kind === "video" ? PlaySquare : FileIcon;
+
+  return (
+    <div
+      className="flex max-w-[18rem] items-center gap-2 rounded-[14px] border border-border/60 bg-muted/40 px-3 py-2 text-xs text-muted-foreground"
+      title={media.name ?? undefined}
+      aria-label={label}
+    >
+      <Icon className="h-4 w-4 flex-none" aria-hidden />
+      <span className="truncate">{media.name ?? label}</span>
+    </div>
+  );
+}
+
 /**
  * Right-aligned preview row for images attached to a user turn.
  *
@@ -222,7 +298,13 @@ function ApprovalCard({
  * have no URL (the backend strips data URLs before persisting), so we
  * render a labelled placeholder tile instead of a broken ``<img>``.
  */
-function UserImages({ images }: { images: UIImage[] }) {
+function UserImages({
+  images,
+  align = "right",
+}: {
+  images: UIImage[];
+  align?: "left" | "right";
+}) {
   const { t } = useTranslation();
   // Only real-URL images can open in the lightbox; historical-replay
   // placeholders (no URL) have nothing to zoom into.
@@ -238,7 +320,12 @@ function UserImages({ images }: { images: UIImage[] }) {
 
   return (
     <>
-      <div className="ml-auto flex flex-wrap items-end justify-end gap-2">
+      <div
+        className={cn(
+          "flex flex-wrap items-end gap-2",
+          align === "right" ? "ml-auto justify-end" : "mr-auto justify-start",
+        )}
+      >
         {images.map((img, i) => (
           <UserImageCell
             key={`${img.url ?? "placeholder"}-${i}`}

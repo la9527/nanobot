@@ -3,6 +3,7 @@ import type { CSSProperties } from "react";
 import { useTranslation } from "react-i18next";
 import { DeleteConfirm } from "@/components/DeleteConfirm";
 import { Sidebar } from "@/components/Sidebar";
+import { SettingsView } from "@/components/settings/SettingsView";
 import { ThreadShell } from "@/components/thread/ThreadShell";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { preloadMarkdownText } from "@/components/MarkdownText";
@@ -29,6 +30,7 @@ type BootState =
 const SIDEBAR_STORAGE_KEY = "nanobot-webui.sidebar";
 const CHAT_FONT_SIZE_STORAGE_KEY = "nanobot-webui.chatFontSize";
 const SIDEBAR_WIDTH = 279;
+type ShellView = "chat" | "settings";
 
 type ChatFontSize = "sm" | "md" | "lg";
 
@@ -163,6 +165,12 @@ export default function App() {
     );
   }
 
+  const handleModelNameChange = (modelName: string | null) => {
+    setState((current) =>
+      current.status === "ready" ? { ...current, modelName } : current,
+    );
+  };
+
   return (
     <ClientProvider
       client={state.client}
@@ -171,16 +179,17 @@ export default function App() {
       activeTarget={state.activeTarget}
       modelTargets={state.modelTargets}
     >
-      <Shell />
+      <Shell onModelNameChange={handleModelNameChange} />
     </ClientProvider>
   );
 }
 
-function Shell() {
+function Shell({ onModelNameChange }: { onModelNameChange: (modelName: string | null) => void }) {
   const { t, i18n } = useTranslation();
   const { theme, toggle } = useTheme();
   const { sessions, loading, refresh, createChat, deleteChat } = useSessions();
   const [activeKey, setActiveKey] = useState<string | null>(null);
+  const [view, setView] = useState<ShellView>("chat");
   const [desktopSidebarOpen, setDesktopSidebarOpen] =
     useState<boolean>(readSidebarOpen);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -246,6 +255,7 @@ function Shell() {
     try {
       const chatId = await createChat();
       setActiveKey(`websocket:${chatId}`);
+      setView("chat");
       setMobileSidebarOpen(false);
       return chatId;
     } catch (e) {
@@ -257,6 +267,7 @@ function Shell() {
   const onSelectChat = useCallback(
     (key: string) => {
       setActiveKey(key);
+      setView("chat");
       setMobileSidebarOpen(false);
     },
     [],
@@ -306,6 +317,11 @@ function Shell() {
       setPendingDelete({ key, label }),
     chatFontSize,
     onChangeChatFontSize: setChatFontSize,
+    activeView: view,
+    onOpenSettings: () => {
+      setView("settings" as const);
+      setMobileSidebarOpen(false);
+    },
   };
 
   const fontCss = chatFontCss(chatFontSize);
@@ -352,14 +368,23 @@ function Shell() {
           "--chat-ui-scale": chatFontSize === "sm" ? "0.95" : chatFontSize === "lg" ? "1.08" : "1",
         } as CSSProperties}
       >
-        <ThreadShell
-          session={activeSession}
-          title={headerTitle}
-          onToggleSidebar={toggleSidebar}
-          onGoHome={() => setActiveKey(null)}
-          onNewChat={onNewChat}
-          hideSidebarToggleOnDesktop={desktopSidebarOpen}
-        />
+        {view === "settings" ? (
+          <SettingsView
+            theme={theme}
+            onToggleTheme={toggle}
+            onBackToChat={() => setView("chat")}
+            onModelNameChange={onModelNameChange}
+          />
+        ) : (
+          <ThreadShell
+            session={activeSession}
+            title={headerTitle}
+            onToggleSidebar={toggleSidebar}
+            onGoHome={() => setActiveKey(null)}
+            onNewChat={onNewChat}
+            hideSidebarToggleOnDesktop={desktopSidebarOpen}
+          />
+        )}
       </main>
 
       <DeleteConfirm
