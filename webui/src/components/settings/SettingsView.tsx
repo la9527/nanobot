@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ChevronLeft, Loader2 } from "lucide-react";
+import { ChevronLeft, Loader2, Minus, Moon, Plus, Sun } from "lucide-react";
 
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { Button } from "@/components/ui/button";
@@ -14,11 +14,21 @@ interface SettingsViewProps {
   onToggleTheme: () => void;
   onBackToChat: () => void;
   onModelNameChange: (modelName: string | null) => void;
+  chatFontSize: "sm" | "md" | "lg";
+  chatFontValue: number;
+  onDecreaseChatFont: () => void;
+  onIncreaseChatFont: () => void;
 }
 
 export function SettingsView({
+  theme,
+  onToggleTheme,
   onBackToChat,
   onModelNameChange,
+  chatFontSize,
+  chatFontValue,
+  onDecreaseChatFont,
+  onIncreaseChatFont,
 }: SettingsViewProps) {
   const { token } = useClient();
   const [settings, setSettings] = useState<SettingsPayload | null>(null);
@@ -115,6 +125,12 @@ export function SettingsView({
             dirty={dirty}
             saving={saving}
             onSave={save}
+            theme={theme}
+            onToggleTheme={onToggleTheme}
+            chatFontSize={chatFontSize}
+            chatFontValue={chatFontValue}
+            onDecreaseChatFont={onDecreaseChatFont}
+            onIncreaseChatFont={onIncreaseChatFont}
           />
         ) : null}
       </main>
@@ -129,6 +145,12 @@ function SettingsSection({
   dirty,
   saving,
   onSave,
+  theme,
+  onToggleTheme,
+  chatFontSize,
+  chatFontValue,
+  onDecreaseChatFont,
+  onIncreaseChatFont,
 }: {
   form: {
     model: string;
@@ -142,7 +164,16 @@ function SettingsSection({
   dirty: boolean;
   saving: boolean;
   onSave: () => void;
+  theme: "light" | "dark";
+  onToggleTheme: () => void;
+  chatFontSize: "sm" | "md" | "lg";
+  chatFontValue: number;
+  onDecreaseChatFont: () => void;
+  onIncreaseChatFont: () => void;
 }) {
+  const canDecreaseFont = chatFontSize !== "sm";
+  const canIncreaseFont = chatFontSize !== "lg";
+
   return (
     <div className="space-y-7">
       <section>
@@ -181,6 +212,59 @@ function SettingsSection({
               onSave={onSave}
             />
           ) : null}
+        </SettingsGroup>
+      </section>
+
+      <section>
+        <h2 className="mb-2 px-2 text-xs font-medium text-muted-foreground">Themes</h2>
+        <SettingsGroup>
+          <SettingsRow title="Theme">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={onToggleTheme}
+              className="h-8 min-w-[7.5rem] justify-between px-3"
+              aria-label="Toggle theme"
+            >
+              <span>{theme === "dark" ? "Dark" : "Light"}</span>
+              {theme === "dark" ? (
+                <Moon className="h-3.5 w-3.5" aria-hidden />
+              ) : (
+                <Sun className="h-3.5 w-3.5" aria-hidden />
+              )}
+            </Button>
+          </SettingsRow>
+
+          <SettingsRow title="Chat font size">
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                size="icon"
+                variant="outline"
+                onClick={onDecreaseChatFont}
+                disabled={!canDecreaseFont}
+                aria-label="Decrease chat font size"
+                className="h-8 w-8"
+              >
+                <Minus className="h-3.5 w-3.5" aria-hidden />
+              </Button>
+              <div className="flex h-8 min-w-[4.5rem] items-center justify-center rounded-md border border-input bg-background px-3 text-sm font-medium tabular-nums">
+                {chatFontValue}
+              </div>
+              <Button
+                type="button"
+                size="icon"
+                variant="outline"
+                onClick={onIncreaseChatFont}
+                disabled={!canIncreaseFont}
+                aria-label="Increase chat font size"
+                className="h-8 w-8"
+              >
+                <Plus className="h-3.5 w-3.5" aria-hidden />
+              </Button>
+            </div>
+          </SettingsRow>
         </SettingsGroup>
       </section>
 

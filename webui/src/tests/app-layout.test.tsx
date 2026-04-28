@@ -154,6 +154,22 @@ describe("App layout", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).includes("/webui/bootstrap")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              token: "tok",
+              ws_path: "/",
+              expires_in: 300,
+              model_name: "openai/gpt-5.4",
+              active_target: "default",
+              model_targets: [
+                { name: "default", kind: "provider_model", model: "openai/gpt-5.4" },
+              ],
+            }),
+          };
+        }
         if (String(input).includes("/api/settings")) {
           return {
             ok: true,
@@ -187,6 +203,68 @@ describe("App layout", () => {
 
     expect(await screen.findByRole("heading", { name: "General" })).toBeInTheDocument();
     expect(screen.getByText("AI")).toBeInTheDocument();
+    expect(screen.getByText("Themes")).toBeInTheDocument();
     expect(screen.getByDisplayValue("openai/gpt-4o")).toBeInTheDocument();
+    expect(screen.getByText("15")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Increase chat font size" }));
+    expect(screen.getByText("17")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Decrease chat font size" }));
+    expect(screen.getByText("15")).toBeInTheDocument();
+  });
+
+  it("uses bootstrap model_name instead of active_target for the default model label", async () => {
+    mockSessions = [
+      {
+        key: "websocket:chat-a",
+        channel: "websocket",
+        chatId: "chat-a",
+        createdAt: "2026-04-16T10:00:00Z",
+        updatedAt: "2026-04-16T10:00:00Z",
+        preview: "First chat",
+        activeTarget: "default",
+      },
+    ];
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).includes("/webui/bootstrap")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              token: "tok",
+              ws_path: "/",
+              expires_in: 300,
+              model_name: "openai/gpt-5.4",
+              active_target: "default",
+              model_targets: [
+                { name: "default", kind: "provider_model", model: "openai/gpt-5.4" },
+              ],
+            }),
+          };
+        }
+        if (String(input).includes("/api/sessions/websocket%3Achat-a/model-target")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              key: "websocket:chat-a",
+              active_target: "default",
+              target: { name: "default", kind: "provider_model", model: "openai/gpt-5.4" },
+            }),
+          };
+        }
+        return { ok: false, status: 404, json: async () => ({}) };
+      }),
+    );
+
+    render(<App />);
+
+    await waitFor(() => expect(connectSpy).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByText("gpt-5.4")).toBeInTheDocument());
+    expect(screen.queryByText(/^default$/i)).not.toBeInTheDocument();
   });
 });

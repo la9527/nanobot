@@ -342,6 +342,10 @@ describe("ThreadShell", () => {
         expect.any(Object),
       );
     });
+
+    await waitFor(() => {
+      expect(screen.getByText("gpt-5.4")).toBeInTheDocument();
+    });
   });
 
   it("surfaces a dismissible banner when the stream reports message_too_big", async () => {

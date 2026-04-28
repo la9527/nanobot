@@ -19,8 +19,6 @@ interface SidebarProps {
   onRefresh: () => void;
   onRequestDelete: (key: string, label: string) => void;
   onCollapse: () => void;
-  chatFontSize: "sm" | "md" | "lg";
-  onChangeChatFontSize: (size: "sm" | "md" | "lg") => void;
   activeView?: "chat" | "settings";
   onOpenSettings: () => void;
 }
@@ -99,23 +97,6 @@ export function Sidebar(props: SidebarProps) {
       <div className="flex items-center justify-between gap-2 px-2.5 py-2 text-xs">
         <ConnectionBadge />
         <div className="flex items-center gap-1.5">
-          <label htmlFor="chat-font-size" className="sr-only">
-            Chat font size
-          </label>
-          <select
-            id="chat-font-size"
-            value={props.chatFontSize}
-            onChange={(e) =>
-              props.onChangeChatFontSize(e.target.value as "sm" | "md" | "lg")
-            }
-            className="h-7 rounded-md border border-sidebar-border/80 bg-card/25 px-1.5 text-[10px] font-medium text-sidebar-foreground outline-none hover:bg-sidebar-accent/80"
-            aria-label="Chat font size"
-            title="Chat font size"
-          >
-            <option value="sm">A-</option>
-            <option value="md">A</option>
-            <option value="lg">A+</option>
-          </select>
           <Button
             onClick={props.onOpenSettings}
             className="h-7 gap-1.5 rounded-md px-2 text-[11px] text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground"

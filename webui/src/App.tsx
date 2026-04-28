@@ -34,6 +34,19 @@ type ShellView = "chat" | "settings";
 
 type ChatFontSize = "sm" | "md" | "lg";
 
+function clampChatFontSize(size: ChatFontSize, delta: -1 | 1): ChatFontSize {
+  const order: ChatFontSize[] = ["sm", "md", "lg"];
+  const index = order.indexOf(size);
+  const next = Math.min(order.length - 1, Math.max(0, index + delta));
+  return order[next];
+}
+
+function chatFontValue(size: ChatFontSize): number {
+  if (size === "sm") return 14;
+  if (size === "lg") return 17;
+  return 15;
+}
+
 function readChatFontSize(): ChatFontSize {
   if (typeof window === "undefined") return "md";
   try {
@@ -91,7 +104,7 @@ export default function App() {
           status: "ready",
           client,
           token: boot.token,
-          modelName: boot.active_target ?? boot.model_name ?? null,
+          modelName: boot.model_name ?? null,
           activeTarget: boot.active_target ?? null,
           modelTargets: boot.model_targets ?? [],
         });
@@ -315,8 +328,6 @@ function Shell({ onModelNameChange }: { onModelNameChange: (modelName: string | 
     onRefresh: () => void refresh(),
     onRequestDelete: (key: string, label: string) =>
       setPendingDelete({ key, label }),
-    chatFontSize,
-    onChangeChatFontSize: setChatFontSize,
     activeView: view,
     onOpenSettings: () => {
       setView("settings" as const);
@@ -374,6 +385,14 @@ function Shell({ onModelNameChange }: { onModelNameChange: (modelName: string | 
             onToggleTheme={toggle}
             onBackToChat={() => setView("chat")}
             onModelNameChange={onModelNameChange}
+            chatFontSize={chatFontSize}
+            chatFontValue={chatFontValue(chatFontSize)}
+            onDecreaseChatFont={() =>
+              setChatFontSize((current) => clampChatFontSize(current, -1))
+            }
+            onIncreaseChatFont={() =>
+              setChatFontSize((current) => clampChatFontSize(current, 1))
+            }
           />
         ) : (
           <ThreadShell
