@@ -107,9 +107,12 @@ export interface SessionModelTargetResponse {
 export interface SettingsPayload {
   agent: {
     model: string;
+    configured_model?: string;
     provider: string;
     resolved_provider: string | null;
     has_api_key: boolean;
+    model_locked?: boolean;
+    provider_locked?: boolean;
   };
   providers: Array<{
     name: string;

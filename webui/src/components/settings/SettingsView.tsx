@@ -72,16 +72,27 @@ export function SettingsView({
   const dirty = useMemo(() => {
     if (!settings) return false;
     return (
-      form.model !== settings.agent.model ||
-      form.provider !== settings.agent.provider
+      (!settings.agent.model_locked && form.model !== settings.agent.model) ||
+      (!settings.agent.provider_locked &&
+        form.provider !== settings.agent.provider)
     );
   }, [form, settings]);
 
   const save = async () => {
-    if (!dirty || saving) return;
+    if (!settings || !dirty || saving) return;
+    const update = {
+      ...(settings.agent.model_locked || form.model === settings.agent.model
+        ? {}
+        : { model: form.model }),
+      ...(settings.agent.provider_locked ||
+      form.provider === settings.agent.provider
+        ? {}
+        : { provider: form.provider }),
+    };
+    if (Object.keys(update).length === 0) return;
     setSaving(true);
     try {
-      const payload = await updateSettings(token, form);
+      const payload = await updateSettings(token, update);
       applyPayload(payload);
       onModelNameChange(payload.agent.model || null);
       setError(null);
@@ -173,6 +184,8 @@ function SettingsSection({
 }) {
   const canDecreaseFont = chatFontSize !== "sm";
   const canIncreaseFont = chatFontSize !== "lg";
+  const modelLocked = settings.agent.model_locked === true;
+  const providerLocked = settings.agent.provider_locked === true;
 
   return (
     <div className="space-y-7">
@@ -183,6 +196,7 @@ function SettingsSection({
             <select
               value={form.provider}
               onChange={(event) => setForm((prev) => ({ ...prev, provider: event.target.value }))}
+              disabled={providerLocked}
               className={cn(
                 "h-8 w-[210px] rounded-md border border-input bg-background px-2 text-sm",
                 "outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring",
@@ -200,6 +214,7 @@ function SettingsSection({
             <Input
               value={form.model}
               onChange={(event) => setForm((prev) => ({ ...prev, model: event.target.value }))}
+              disabled={modelLocked}
               className="h-8 w-[280px]"
             />
           </SettingsRow>

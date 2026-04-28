@@ -267,4 +267,71 @@ describe("App layout", () => {
     await waitFor(() => expect(screen.getByText("gpt-5.4")).toBeInTheDocument());
     expect(screen.queryByText(/^default$/i)).not.toBeInTheDocument();
   });
+
+  it("shows env-managed local settings as locked with the resolved model value", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).includes("/webui/bootstrap")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              token: "tok",
+              ws_path: "/",
+              expires_in: 300,
+              model_name: "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0",
+              active_target: "default",
+              model_targets: [
+                {
+                  name: "default",
+                  kind: "provider_model",
+                  model: "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0",
+                },
+              ],
+            }),
+          };
+        }
+        if (String(input).includes("/api/settings")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              agent: {
+                model: "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0",
+                configured_model: "${LOCAL_LLM_MODEL}",
+                provider: "vllm",
+                resolved_provider: "vllm",
+                has_api_key: false,
+                model_locked: true,
+                provider_locked: true,
+              },
+              providers: [
+                { name: "auto", label: "Auto" },
+                { name: "vllm", label: "vLLM/Local" },
+              ],
+              runtime: {
+                config_path: "/tmp/config.json",
+              },
+              requires_restart: false,
+            }),
+          };
+        }
+        return { ok: false, status: 404, json: async () => ({}) };
+      }),
+    );
+
+    render(<App />);
+
+    await waitFor(() => expect(connectSpy).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+
+    const modelInput = await screen.findByDisplayValue(
+      "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0",
+    );
+    expect(modelInput).toBeDisabled();
+    const providerSelect = screen.getAllByRole("combobox")[0] as HTMLSelectElement;
+    expect(providerSelect).toBeDisabled();
+    expect(providerSelect.value).toBe("vllm");
+  });
 });

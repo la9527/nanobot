@@ -811,24 +811,63 @@ class WebSocketChannel(BaseChannel):
         ]
         return _http_json_response({"sessions": cleaned})
 
-    def _settings_payload(self, *, requires_restart: bool = False) -> dict[str, Any]:
-        from nanobot.config.loader import get_config_path, load_config
-        from nanobot.providers.registry import PROVIDERS, find_by_name
+    def _settings_context(self) -> dict[str, Any]:
+        from nanobot.config.loader import load_config, resolve_config_env_vars
+        from nanobot.providers.registry import find_by_name
 
         config = load_config()
+        resolved_config = config.model_copy(deep=True)
+        try:
+            resolved_config = resolve_config_env_vars(resolved_config)
+        except ValueError as exc:
+            logger.debug("webui settings env resolution fallback: {}", exc)
+
         defaults = config.agents.defaults
-        provider_name = config.get_provider_name(defaults.model) or defaults.provider
-        provider = config.get_provider(defaults.model)
+        resolved_defaults = resolved_config.agents.defaults
+        provider_name = (
+            resolved_config.get_provider_name(resolved_defaults.model)
+            or defaults.provider
+        )
+        provider = resolved_config.get_provider(resolved_defaults.model)
         selected_provider = provider_name
         if defaults.provider != "auto":
             spec = find_by_name(defaults.provider)
             selected_provider = spec.name if spec else provider_name
+
+        resolved_spec = find_by_name(provider_name or selected_provider or "")
+        model_locked = bool(
+            resolved_spec
+            and resolved_spec.is_local
+            and defaults.model != resolved_defaults.model
+        )
+
+        return {
+            "config": config,
+            "defaults": defaults,
+            "resolved_defaults": resolved_defaults,
+            "provider_name": provider_name,
+            "provider": provider,
+            "selected_provider": selected_provider,
+            "model_locked": model_locked,
+            "provider_locked": model_locked,
+        }
+
+    def _settings_payload(self, *, requires_restart: bool = False) -> dict[str, Any]:
+        from nanobot.config.loader import get_config_path
+        from nanobot.providers.registry import PROVIDERS
+
+        context = self._settings_context()
+        defaults = context["defaults"]
+        resolved_defaults = context["resolved_defaults"]
         return {
             "agent": {
-                "model": defaults.model,
-                "provider": selected_provider,
-                "resolved_provider": provider_name,
-                "has_api_key": bool(provider and provider.api_key),
+                "model": resolved_defaults.model,
+                "configured_model": defaults.model,
+                "provider": context["selected_provider"],
+                "resolved_provider": context["provider_name"],
+                "has_api_key": bool(context["provider"] and context["provider"].api_key),
+                "model_locked": context["model_locked"],
+                "provider_locked": context["provider_locked"],
             },
             "providers": [
                 {"name": "auto", "label": "Auto"}
@@ -850,16 +889,17 @@ class WebSocketChannel(BaseChannel):
     def _handle_settings_update(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
-        from nanobot.config.loader import load_config, save_config
+        from nanobot.config.loader import save_config
         from nanobot.providers.registry import find_by_name
 
         query = _parse_query(request.path)
-        config = load_config()
-        defaults = config.agents.defaults
+        context = self._settings_context()
+        config = context["config"]
+        defaults = context["defaults"]
         changed = False
 
         model = _query_first(query, "model")
-        if model is not None:
+        if model is not None and not context["model_locked"]:
             model = model.strip()
             if not model:
                 return _http_error(400, "model is required")
@@ -868,7 +908,7 @@ class WebSocketChannel(BaseChannel):
                 changed = True
 
         provider = _query_first(query, "provider")
-        if provider is not None:
+        if provider is not None and not context["provider_locked"]:
             provider = provider.strip() or "auto"
             if provider != "auto" and find_by_name(provider) is None:
                 return _http_error(400, "unknown provider")

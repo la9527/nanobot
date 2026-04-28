@@ -159,6 +159,69 @@ async def test_bootstrap_resolves_env_backed_model_target_strings(
 
 
 @pytest.mark.asyncio
+async def test_settings_route_resolves_env_backed_local_model_and_preserves_config(
+    bus: MagicMock,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sm = _seed_session(tmp_path)
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "agents": {
+                    "defaults": {
+                        "model": "${LOCAL_LLM_MODEL}",
+                        "provider": "vllm",
+                    }
+                },
+                "providers": {
+                    "vllm": {
+                        "apiBase": "http://127.0.0.1:8000/v1"
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LOCAL_LLM_MODEL", "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0")
+    monkeypatch.setattr("nanobot.config.loader._current_config_path", config_path)
+
+    channel = _ch(bus, session_manager=sm, port=29915)
+    server_task = asyncio.create_task(channel.start())
+    await asyncio.sleep(0.3)
+    try:
+        boot = await _http_get("http://127.0.0.1:29915/webui/bootstrap")
+        token = boot.json()["token"]
+        auth = {"Authorization": f"Bearer {token}"}
+
+        settings = await _http_get("http://127.0.0.1:29915/api/settings", headers=auth)
+        assert settings.status_code == 200
+        body = settings.json()
+        assert body["agent"]["model"] == "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0"
+        assert body["agent"]["configured_model"] == "${LOCAL_LLM_MODEL}"
+        assert body["agent"]["provider"] == "vllm"
+        assert body["agent"]["resolved_provider"] == "vllm"
+        assert body["agent"]["model_locked"] is True
+        assert body["agent"]["provider_locked"] is True
+
+        updated = await _http_get(
+            "http://127.0.0.1:29915/api/settings/update?model=openai%2Fgpt-5.4&provider=openai",
+            headers=auth,
+        )
+        assert updated.status_code == 200
+        updated_body = updated.json()
+        assert updated_body["agent"]["model"] == "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0"
+        assert updated_body["agent"]["provider"] == "vllm"
+        saved = json.loads(config_path.read_text(encoding="utf-8"))
+        assert saved["agents"]["defaults"]["model"] == "${LOCAL_LLM_MODEL}"
+        assert saved["agents"]["defaults"]["provider"] == "vllm"
+    finally:
+        await channel.stop()
+        await server_task
+
+
+@pytest.mark.asyncio
 async def test_session_model_target_routes_round_trip(
     bus: MagicMock, tmp_path: Path
 ) -> None:
