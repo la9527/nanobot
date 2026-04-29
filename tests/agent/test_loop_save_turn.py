@@ -25,6 +25,54 @@ def _make_full_loop(tmp_path: Path) -> AgentLoop:
     return AgentLoop(bus=MessageBus(), provider=provider, workspace=tmp_path, model="test-model")
 
 
+@pytest.mark.asyncio
+async def test_request_tool_approval_persists_and_clears_pending_summary(tmp_path: Path) -> None:
+    loop = _make_full_loop(tmp_path)
+    loop.bus.publish_outbound = AsyncMock()
+    session = loop.sessions.get_or_create("telegram:12345")
+    pending: asyncio.Queue[InboundMessage] = asyncio.Queue()
+    await pending.put(InboundMessage(channel="telegram", sender_id="u1", chat_id="12345", content="yes"))
+
+    approved, reason = await loop._request_tool_approval(
+        session=session,
+        channel="telegram",
+        chat_id="12345",
+        message_id="msg-1",
+        pending_queue=pending,
+        tool_name="exec",
+        tool_call_id="call-1",
+        prompt="Approval required for a high-risk command.\nCommand: rm --help | head -n 1\nReply yes to run or no to block.",
+        params={"command": "rm --help | head -n 1"},
+    )
+
+    assert approved is True
+    assert reason is None
+    persisted = loop.sessions.get_or_create("telegram:12345")
+    assert AgentLoop._APPROVAL_SUMMARY_KEY not in persisted.metadata
+
+
+def test_set_pending_approval_summary_stores_preview(tmp_path: Path) -> None:
+    loop = _make_full_loop(tmp_path)
+    session = loop.sessions.get_or_create("telegram:12345")
+
+    loop._set_pending_approval_summary(
+        session,
+        channel="telegram",
+        tool_name="exec",
+        tool_call_id="call-1",
+        prompt="Approval required for a high-risk command.\nCommand: rm --help | head -n 1\nReply yes to run or no to block.",
+        message_id="msg-1",
+    )
+
+    approval = session.metadata[AgentLoop._APPROVAL_SUMMARY_KEY]
+    assert approval["status"] == "pending"
+    assert approval["channel"] == "telegram"
+    assert approval["tool_name"] == "exec"
+    assert approval["tool_call_id"] == "call-1"
+    assert approval["message_id"] == "msg-1"
+    assert "Approval required for a high-risk command." in approval["prompt_preview"]
+
+
 def test_save_turn_skips_multimodal_user_when_only_runtime_context() -> None:
     loop = _mk_loop()
     session = Session(key="test:runtime-only")
@@ -329,6 +377,7 @@ async def test_process_message_does_not_duplicate_early_persisted_user_message(t
         ],
         "stop",
         False,
+        {},
     ))  # type: ignore[method-assign]
 
     result = await loop._process_message(
@@ -368,6 +417,7 @@ async def test_process_message_uses_context_chat_id_for_runtime_prompt(tmp_path:
         ],
         "stop",
         False,
+        {},
     ))
 
     result = await loop._process_message(
@@ -426,6 +476,7 @@ async def test_next_turn_after_crash_closes_pending_user_turn_before_new_input(t
         ],
         "stop",
         False,
+        {},
     ))  # type: ignore[method-assign]
 
     result = await loop._process_message(
@@ -524,6 +575,7 @@ async def test_stop_preserves_runtime_checkpoint_for_next_turn(tmp_path: Path) -
             [*initial_messages, {"role": "assistant", "content": "next answer"}],
             "stop",
             False,
+            {},
         )
 
     loop._run_agent_loop = resumed_run_agent_loop  # type: ignore[method-assign]
@@ -575,6 +627,7 @@ async def test_system_subagent_followup_is_persisted_before_prompt_assembly(tmp_
             [*initial_messages, {"role": "assistant", "content": "done"}],
             "stop",
             False,
+            {},
         )
 
     loop._run_agent_loop = fake_run_agent_loop  # type: ignore[method-assign]
@@ -631,6 +684,7 @@ async def test_multiple_subagent_followups_all_persist_as_standalone_history(tmp
             [*initial_messages, {"role": "assistant", "content": "ack"}],
             "stop",
             False,
+            {},
         )
 
     loop._run_agent_loop = fake_run_agent_loop  # type: ignore[method-assign]
@@ -755,6 +809,7 @@ async def test_system_subagent_followup_uses_thread_session_and_slack_metadata(t
             [*initial_messages, {"role": "assistant", "content": "done"}],
             "stop",
             False,
+            {},
         )
 
     loop._run_agent_loop = fake_run_agent_loop  # type: ignore[method-assign]

@@ -11,6 +11,7 @@ from typing import Any
 from loguru import logger
 
 from nanobot.config.paths import get_legacy_sessions_dir
+from nanobot.session.continuity import normalized_session_metadata
 from nanobot.utils.helpers import (
     ensure_dir,
     estimate_message_tokens,
@@ -277,6 +278,11 @@ class SessionManager:
         session = self._load(key)
         if session is None:
             session = Session(key=key)
+        session.metadata = normalized_session_metadata(
+            session.key,
+            session.metadata,
+            last_confirmed_at=session.updated_at.isoformat(),
+        )
 
         self._cache[key] = session
         return session
@@ -319,7 +325,7 @@ class SessionManager:
                     else:
                         messages.append(data)
 
-            return Session(
+            session = Session(
                 key=key,
                 messages=messages,
                 created_at=created_at or datetime.now(),
@@ -327,6 +333,12 @@ class SessionManager:
                 metadata=metadata,
                 last_consolidated=last_consolidated
             )
+            session.metadata = normalized_session_metadata(
+                session.key,
+                session.metadata,
+                last_confirmed_at=session.updated_at.isoformat(),
+            )
+            return session
         except Exception as e:
             logger.warning("Failed to load session {}: {}", key, e)
             repaired = self._repair(key)
@@ -381,7 +393,7 @@ class SessionManager:
             if not messages and not metadata:
                 return None
 
-            return Session(
+            session = Session(
                 key=key,
                 messages=messages,
                 created_at=created_at or datetime.now(),
@@ -389,6 +401,12 @@ class SessionManager:
                 metadata=metadata,
                 last_consolidated=last_consolidated
             )
+            session.metadata = normalized_session_metadata(
+                session.key,
+                session.metadata,
+                last_confirmed_at=session.updated_at.isoformat(),
+            )
+            return session
         except Exception as e:
             logger.warning("Repair failed for session {}: {}", key, e)
             return None
@@ -399,7 +417,11 @@ class SessionManager:
             "key": session.key,
             "created_at": session.created_at.isoformat(),
             "updated_at": session.updated_at.isoformat(),
-            "metadata": session.metadata,
+            "metadata": normalized_session_metadata(
+                session.key,
+                session.metadata,
+                last_confirmed_at=session.updated_at.isoformat(),
+            ),
             "messages": session.messages,
         }
 
@@ -415,6 +437,11 @@ class SessionManager:
         """
         path = self._get_session_path(session.key)
         tmp_path = path.with_suffix(".jsonl.tmp")
+        session.metadata = normalized_session_metadata(
+            session.key,
+            session.metadata,
+            last_confirmed_at=session.updated_at.isoformat(),
+        )
 
         try:
             with open(tmp_path, "w", encoding="utf-8") as f:
@@ -512,7 +539,11 @@ class SessionManager:
                         continue
                     data = json.loads(line)
                     if data.get("_type") == "metadata":
-                        metadata = data.get("metadata", {})
+                        metadata = normalized_session_metadata(
+                            stored_key or key,
+                            data.get("metadata", {}),
+                            last_confirmed_at=data.get("updated_at"),
+                        )
                         created_at = data.get("created_at")
                         updated_at = data.get("updated_at")
                         stored_key = data.get("key")
@@ -556,6 +587,11 @@ class SessionManager:
                                 "key": key,
                                 "created_at": data.get("created_at"),
                                 "updated_at": data.get("updated_at"),
+                                "metadata": normalized_session_metadata(
+                                    key,
+                                    data.get("metadata", {}),
+                                    last_confirmed_at=data.get("updated_at"),
+                                ),
                                 "path": str(path)
                             })
             except Exception:
@@ -565,6 +601,11 @@ class SessionManager:
                         "key": repaired.key,
                         "created_at": repaired.created_at.isoformat(),
                         "updated_at": repaired.updated_at.isoformat(),
+                        "metadata": normalized_session_metadata(
+                            repaired.key,
+                            repaired.metadata,
+                            last_confirmed_at=repaired.updated_at.isoformat(),
+                        ),
                         "path": str(path)
                     })
                 continue

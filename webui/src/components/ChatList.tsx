@@ -1,3 +1,5 @@
+import { useState } from "react";
+
 import { MoreHorizontal, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -39,6 +41,18 @@ function channelBadgeLabel(channel: string): string | null {
   return channel;
 }
 
+function hasPendingApproval(session: ChatSummary): boolean {
+  return session.metadata?.approval_summary?.status === "pending";
+}
+
+function approvalSummaryLabel(session: ChatSummary): string | null {
+  const summary = session.metadata?.approval_summary;
+  if (!summary || summary.status !== "pending") return null;
+  const toolName = summary.tool_name?.trim() || "tool";
+  const promptPreview = summary.prompt_preview?.trim();
+  return promptPreview ? `${toolName}: ${promptPreview}` : `${toolName} approval pending`;
+}
+
 export function ChatList({
   sessions,
   activeKey,
@@ -47,6 +61,8 @@ export function ChatList({
   loading,
 }: ChatListProps) {
   const { t } = useTranslation();
+  const [expandedApprovalKey, setExpandedApprovalKey] = useState<string | null>(null);
+
   if (loading && sessions.length === 0) {
     return (
       <div className="px-3 py-6 text-[12px] text-muted-foreground">
@@ -74,37 +90,66 @@ export function ChatList({
           );
           const badge = targetBadgeLabel(s.activeTarget);
           const channelBadge = channelBadgeLabel(s.channel);
+          const approvalBadge = hasPendingApproval(s);
+          const approvalSummary = approvalSummaryLabel(s);
+          const approvalExpanded = expandedApprovalKey === s.key;
+          const approvalDetailId = `approval-summary-${s.key.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
           const canDelete = s.channel === "websocket";
           return (
             <li key={s.key}>
               <div
                 className={cn(
-                  "group flex items-center gap-2 rounded-md px-2 py-1.5 text-[12.5px] transition-colors",
+                  "group flex items-start gap-2 rounded-md px-2 py-1.5 text-[12.5px] transition-colors",
                   active
                     ? "bg-sidebar-accent/80 text-sidebar-accent-foreground shadow-[inset_0_0_0_1px_hsl(var(--border)/0.4)]"
                     : "text-sidebar-foreground/88 hover:bg-sidebar-accent/45",
                 )}
               >
-                <button
-                  type="button"
-                  onClick={() => onSelect(s.key)}
-                  className="flex min-w-0 flex-1 flex-col items-start text-left"
-                >
-                  <span className="w-full truncate font-medium leading-5">{title}</span>
-                  <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[10.5px] text-muted-foreground/80">
-                    <span>{relativeTime(s.updatedAt ?? s.createdAt) || "—"}</span>
-                    {channelBadge ? (
-                      <span className="inline-flex max-w-[7rem] truncate rounded-full border border-sidebar-border/80 bg-sidebar-accent/35 px-1.5 py-[1px] text-[9.5px] font-medium uppercase tracking-[0.08em] text-sidebar-foreground/78">
-                        {channelBadge}
-                      </span>
-                    ) : null}
-                    {badge ? (
-                      <span className="inline-flex max-w-[8rem] truncate rounded-full border border-sidebar-border/80 bg-card/30 px-1.5 py-[1px] text-[9.5px] font-medium text-sidebar-foreground/80">
-                        {badge}
-                      </span>
-                    ) : null}
-                  </span>
-                </button>
+                <div className="min-w-0 flex-1">
+                  <button
+                    type="button"
+                    onClick={() => onSelect(s.key)}
+                    className="flex min-w-0 w-full flex-col items-start text-left"
+                  >
+                    <span className="w-full truncate font-medium leading-5">{title}</span>
+                    <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[10.5px] text-muted-foreground/80">
+                      <span>{relativeTime(s.updatedAt ?? s.createdAt) || "—"}</span>
+                      {channelBadge ? (
+                        <span className="inline-flex max-w-[7rem] truncate rounded-full border border-sidebar-border/80 bg-sidebar-accent/35 px-1.5 py-[1px] text-[9.5px] font-medium uppercase tracking-[0.08em] text-sidebar-foreground/78">
+                          {channelBadge}
+                        </span>
+                      ) : null}
+                      {badge ? (
+                        <span className="inline-flex max-w-[8rem] truncate rounded-full border border-sidebar-border/80 bg-card/30 px-1.5 py-[1px] text-[9.5px] font-medium text-sidebar-foreground/80">
+                          {badge}
+                        </span>
+                      ) : null}
+                    </span>
+                  </button>
+                  {approvalBadge ? (
+                    <div className="mt-1.5 flex flex-col items-start gap-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setExpandedApprovalKey((current) => (current === s.key ? null : s.key));
+                        }}
+                        className="inline-flex max-w-full items-center truncate rounded-full border border-amber-300/60 bg-amber-100/70 px-1.5 py-[1px] text-[9.5px] font-medium text-amber-900 transition-colors hover:bg-amber-100 dark:border-amber-700/50 dark:bg-amber-950/30 dark:text-amber-200 dark:hover:bg-amber-950/50"
+                        aria-expanded={approvalExpanded}
+                        aria-controls={approvalDetailId}
+                      >
+                        Approval pending
+                      </button>
+                      {approvalExpanded && approvalSummary ? (
+                        <div
+                          id={approvalDetailId}
+                          className="max-w-full rounded-md border border-amber-300/40 bg-amber-50/80 px-2 py-1.5 text-[10.5px] leading-4 text-amber-950 shadow-sm dark:border-amber-700/40 dark:bg-amber-950/25 dark:text-amber-100"
+                        >
+                          {approvalSummary}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
                 <DropdownMenu modal={false}>
                   <DropdownMenuTrigger
                     className={cn(

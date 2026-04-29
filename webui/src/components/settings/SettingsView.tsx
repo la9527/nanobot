@@ -115,7 +115,10 @@ export function SettingsView({
           Back to chat
         </button>
 
-        <h1 className="mb-6 text-base font-semibold tracking-tight">General</h1>
+        <h1 className="mb-2 text-base font-semibold tracking-tight">General</h1>
+        <p className="mb-6 max-w-[38rem] text-sm text-muted-foreground">
+          Default assistant settings for model selection, theme, and chat readability.
+        </p>
 
         {loading ? (
           <div className="flex h-48 items-center justify-center text-sm text-muted-foreground">
@@ -190,9 +193,9 @@ function SettingsSection({
   return (
     <div className="space-y-7">
       <section>
-        <h2 className="mb-2 px-2 text-xs font-medium text-muted-foreground">AI</h2>
+        <h2 className="mb-2 px-2 text-xs font-medium text-muted-foreground">Assistant</h2>
         <SettingsGroup>
-          <SettingsRow title="Provider">
+          <SettingsRow title="Default provider">
             <select
               value={form.provider}
               onChange={(event) => setForm((prev) => ({ ...prev, provider: event.target.value }))}
@@ -210,7 +213,7 @@ function SettingsSection({
             </select>
           </SettingsRow>
 
-          <SettingsRow title="Model">
+          <SettingsRow title="Default model">
             <Input
               value={form.model}
               onChange={(event) => setForm((prev) => ({ ...prev, model: event.target.value }))}
@@ -218,6 +221,14 @@ function SettingsSection({
               className="h-8 w-[280px]"
             />
           </SettingsRow>
+
+          {providerLocked || modelLocked ? (
+            <SettingsRow title="Managed by runtime">
+              <span className="max-w-[280px] text-sm text-muted-foreground">
+                Provider or model is locked by the current runtime configuration.
+              </span>
+            </SettingsRow>
+          ) : null}
 
           {(dirty || saving || settings.requires_restart) ? (
             <SettingsFooter

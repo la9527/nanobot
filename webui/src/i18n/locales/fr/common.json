@@ -23,6 +23,10 @@
     "newChat": "Nouvelle discussion",
     "recent": "Récentes",
     "refreshSessions": "Actualiser les sessions",
+    "mobileSheet": {
+      "title": "Barre latérale de navigation",
+      "description": "Parcourez les conversations récentes, démarrez une nouvelle discussion ou ouvrez les réglages."
+    },
     "language": {
       "label": "Langue",
       "ariaLabel": "Changer de langue"

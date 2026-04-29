@@ -4,8 +4,9 @@ import { useTranslation } from "react-i18next";
 import { AskUserPrompt } from "@/components/thread/AskUserPrompt";
 import { ThreadComposer } from "@/components/thread/ThreadComposer";
 import { ThreadHeader } from "@/components/thread/ThreadHeader";
-import { StreamErrorNotice } from "@/components/thread/StreamErrorNotice";
+import { ThreadStatusBlock } from "@/components/thread/ThreadStatusBlock";
 import { ThreadViewport } from "@/components/thread/ThreadViewport";
+import { deriveThreadStatus } from "@/components/thread/threadStatus";
 import { type SendImage, useNanobotStream } from "@/hooks/useNanobotStream";
 import { hydrateSessionMessages, useSessionHistory } from "@/hooks/useSessions";
 import { ApiError, fetchSessionMessages, fetchSessionModelTarget, selectSessionModelTarget } from "@/lib/api";
@@ -43,6 +44,50 @@ function toModelBadgeLabel(
   const label = leaf || trimmed;
   if (label === "smart_router") return "smart-router";
   return label;
+}
+
+function toChannelBadgeLabel(channel: string | null | undefined): string {
+  if (!channel) return "WebUI";
+  if (channel === "websocket") return "WebUI";
+  if (channel === "telegram") return "Telegram";
+  if (channel === "discord") return "Discord";
+  if (channel === "email") return "Email";
+  if (channel === "slack") return "Slack";
+  return channel;
+}
+
+function formatContinuitySummary(session: ChatSummary | null): {
+  title: string;
+  body: string;
+} | null {
+  if (!session?.channel || session.channel === "websocket") return null;
+  const channelLabel = toChannelBadgeLabel(session.channel);
+  const continuity = session.metadata?.continuity;
+  const ownerId = continuity?.canonical_owner_id?.trim();
+  const externalIdentity = continuity?.external_identity?.trim();
+  const trustLevel = continuity?.trust_level?.trim();
+
+  if (!ownerId && !externalIdentity && !trustLevel) {
+    return {
+      title: "Linked external session",
+      body: `This thread is attached to the current ${channelLabel} conversation. Replies and approval steps may continue against that linked session.`,
+    };
+  }
+
+  const parts = [
+    `This thread is attached to the current ${channelLabel} conversation for owner ${ownerId || "primary-user"}.`,
+  ];
+  if (externalIdentity) {
+    parts.push(`Linked identity: ${externalIdentity}.`);
+  }
+  if (trustLevel) {
+    parts.push(`Trust: ${trustLevel}.`);
+  }
+  parts.push("Replies and approval steps may continue against that linked session.");
+  return {
+    title: "Linked external session",
+    body: parts.join(" "),
+  };
 }
 
 function deriveModelNameFromTarget(target: ModelTargetOption | null | undefined): string | null {
@@ -95,6 +140,11 @@ export function ThreadShell({
   const pendingFirstRef = useRef<string | null>(null);
   const remoteReplyPollRef = useRef(0);
   const messageCacheRef = useRef<Map<string, UIMessage[]>>(new Map());
+  const tokenRef = useRef(token);
+
+  useEffect(() => {
+    tokenRef.current = token;
+  }, [token]);
 
   const initial = useMemo(() => {
     const cacheKey = chatId ?? historyKey;
@@ -125,6 +175,57 @@ export function ThreadShell({
     }
     return null;
   }, [messages]);
+
+  const pendingApprovalMessage = useMemo(() => {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (message.kind === "trace") continue;
+      if (message.role === "user") return null;
+      if (message.kind === "approval") return message;
+      if (message.role === "assistant") return null;
+    }
+    return null;
+  }, [messages]);
+
+  const headerStatusBadges = useMemo(() => {
+    const badges: Array<{
+      label: string;
+      tone?: "default" | "muted" | "warning" | "active";
+    }> = [];
+    const modelLabel = toModelBadgeLabel(modelName, activeTarget);
+    if (modelLabel) {
+      badges.push({ label: `Target ${modelLabel}` });
+    }
+    badges.push({ label: `Channel ${toChannelBadgeLabel(session?.channel)}`, tone: "muted" });
+    if (session?.channel && session.channel !== "websocket") {
+      badges.push({ label: "Linked session", tone: "muted" });
+    }
+    if (pendingAsk || pendingApprovalMessage) {
+      badges.push({ label: "Approval pending", tone: "warning" });
+    }
+    if (isStreaming || remoteReplyPending || booting || modelTargetPending) {
+      badges.push({ label: "Assistant active", tone: "active" });
+    }
+    return badges;
+  }, [activeTarget, booting, isStreaming, modelName, modelTargetPending, pendingApprovalMessage, pendingAsk, remoteReplyPending, session?.channel]);
+
+  const continuityPlaceholder = useMemo(() => {
+    return formatContinuitySummary(session);
+  }, [session]);
+
+  const threadStatus = useMemo(
+    () => deriveThreadStatus({
+      messages,
+      pendingAsk,
+      pendingApprovalMessage,
+      streamError,
+      isStreaming,
+      remoteReplyPending,
+      booting,
+      modelTargetPending,
+    }),
+    [booting, isStreaming, messages, modelTargetPending, pendingApprovalMessage, pendingAsk, remoteReplyPending, streamError],
+  );
 
   useEffect(() => {
     if (!chatId || loading) return;
@@ -268,7 +369,7 @@ export function ThreadShell({
 
       while (remoteReplyPollRef.current === pollId) {
         try {
-          const body = await fetchSessionMessages(token, historyKey);
+          const body = await fetchSessionMessages(tokenRef.current, historyKey);
           if (remoteReplyPollRef.current !== pollId) return;
           const nextMessages = hydrateSessionMessages(body);
           const hasAssistantReply =
@@ -292,7 +393,7 @@ export function ThreadShell({
         await new Promise((resolve) => window.setTimeout(resolve, 1000));
       }
     },
-    [client, historical.length, historyKey, remoteReplyPending, session, setMessages, token],
+    [client, historical.length, historyKey, remoteReplyPending, session, setMessages],
   );
 
   const handleSelectModelTarget = useCallback(
@@ -346,6 +447,7 @@ export function ThreadShell({
         onToggleSidebar={onToggleSidebar}
         onGoHome={onGoHome}
         hideSidebarToggleOnDesktop={hideSidebarToggleOnDesktop}
+        statusBadges={headerStatusBadges}
       />
       <ThreadViewport
         messages={messages}
@@ -354,10 +456,18 @@ export function ThreadShell({
         emptyState={emptyState}
         composer={
           <>
-            {streamError ? (
-              <StreamErrorNotice
-                error={streamError}
-                onDismiss={dismissStreamError}
+            {continuityPlaceholder ? (
+              <div className="mb-2 rounded-[16px] border border-border/60 bg-muted/35 px-3 py-2.5 text-sm text-muted-foreground">
+                <p className="font-medium text-foreground/80">{continuityPlaceholder.title}</p>
+                <p className="mt-1 text-[12px] leading-5">{continuityPlaceholder.body}</p>
+              </div>
+            ) : null}
+            {threadStatus ? (
+              <ThreadStatusBlock
+                tone={threadStatus.tone}
+                title={threadStatus.title}
+                body={threadStatus.body}
+                onDismiss={threadStatus.tone === "failed" ? dismissStreamError : undefined}
               />
             ) : null}
             {pendingAsk ? (

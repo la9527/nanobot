@@ -23,6 +23,10 @@
     "newChat": "新增對話",
     "recent": "最近對話",
     "refreshSessions": "重新整理會話",
+    "mobileSheet": {
+      "title": "導覽側邊欄",
+      "description": "查看最近的聊天、開始新聊天，或開啟設定。"
+    },
     "language": {
       "label": "語言",
       "ariaLabel": "切換語言"

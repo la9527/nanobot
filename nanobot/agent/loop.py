@@ -196,6 +196,7 @@ class AgentLoop:
 
     _RUNTIME_CHECKPOINT_KEY = "runtime_checkpoint"
     _PENDING_USER_TURN_KEY = "pending_user_turn"
+    _APPROVAL_SUMMARY_KEY = "approval_summary"
     _SMART_ROUTER_TIER_KEY = "smart_router_last_tier"
     _SMART_ROUTER_MODEL_KEY = "smart_router_last_model"
     _APPROVAL_YES = frozenset({"y", "yes", "ok", "approve", "approved", "run", "continue", "예", "네", "승인", "허용"})
@@ -693,6 +694,7 @@ class AgentLoop:
     async def _request_tool_approval(
         self,
         *,
+        session: Session | None,
         channel: str,
         chat_id: str,
         message_id: str | None,
@@ -714,6 +716,14 @@ class AgentLoop:
         }
         if message_id:
             meta["message_id"] = message_id
+        self._set_pending_approval_summary(
+            session,
+            channel=channel,
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            prompt=approval_text,
+            message_id=message_id,
+        )
         await self.bus.publish_outbound(OutboundMessage(
             channel=channel,
             chat_id=chat_id,
@@ -721,12 +731,14 @@ class AgentLoop:
             metadata=meta,
         ))
         if pending_queue is None:
+            self._clear_pending_approval_summary(session)
             return False, "Error: Tool call requires approval but no interactive approval channel is available"
 
         while True:
             try:
                 approval_msg = await asyncio.wait_for(pending_queue.get(), timeout=300)
             except asyncio.TimeoutError:
+                self._clear_pending_approval_summary(session)
                 return False, "Error: Tool approval timed out after 300 seconds"
 
             decision = self._parse_tool_approval_response(approval_msg.content)
@@ -739,7 +751,9 @@ class AgentLoop:
                 ))
                 continue
             if decision:
+                self._clear_pending_approval_summary(session)
                 return True, None
+            self._clear_pending_approval_summary(session)
             return False, "Error: Command execution was denied by the user"
 
     async def _connect_mcp(self) -> None:
@@ -992,6 +1006,7 @@ class AgentLoop:
             checkpoint_callback=_checkpoint,
             injection_callback=_drain_pending,
             tool_approval_callback=lambda tool_call, _tool, _params, prompt: self._request_tool_approval(
+                session=session,
                 channel=channel,
                 chat_id=chat_id,
                 message_id=message_id,
@@ -1325,7 +1340,7 @@ class AgentLoop:
                 session_summary=pending,
                 current_role=current_role,
             )
-            final_content, _, all_msgs, stop_reason, _, _ = await self._run_agent_loop(
+            final_content, _, all_msgs, stop_reason, _had_injections, _response_meta = await self._run_agent_loop(
                 messages, session=session, channel=channel, chat_id=chat_id,
                 message_id=msg.metadata.get("message_id"),
                 metadata=msg.metadata,
@@ -1770,6 +1785,41 @@ class AgentLoop:
 
     def _clear_pending_user_turn(self, session: Session) -> None:
         session.metadata.pop(self._PENDING_USER_TURN_KEY, None)
+
+    @staticmethod
+    def _approval_summary_preview(prompt: str, *, limit: int = 160) -> str:
+        compact = " ".join(prompt.split())
+        if len(compact) <= limit:
+            return compact
+        return f"{compact[:limit - 3]}..."
+
+    def _set_pending_approval_summary(
+        self,
+        session: Session | None,
+        *,
+        channel: str,
+        tool_name: str,
+        tool_call_id: str,
+        prompt: str,
+        message_id: str | None,
+    ) -> None:
+        if session is None:
+            return
+        session.metadata[self._APPROVAL_SUMMARY_KEY] = {
+            "status": "pending",
+            "channel": channel,
+            "tool_name": tool_name,
+            "tool_call_id": tool_call_id,
+            "message_id": message_id,
+            "prompt_preview": self._approval_summary_preview(prompt),
+        }
+        self.sessions.save(session)
+
+    def _clear_pending_approval_summary(self, session: Session | None) -> None:
+        if session is None:
+            return
+        if session.metadata.pop(self._APPROVAL_SUMMARY_KEY, None) is not None:
+            self.sessions.save(session)
 
     def _clear_runtime_checkpoint(self, session: Session) -> None:
         if self._RUNTIME_CHECKPOINT_KEY in session.metadata:

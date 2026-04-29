@@ -23,6 +23,10 @@
     "newChat": "Obrolan baru",
     "recent": "Terbaru",
     "refreshSessions": "Segarkan sesi",
+    "mobileSheet": {
+      "title": "Bilah samping navigasi",
+      "description": "Lihat chat terbaru, mulai chat baru, atau buka pengaturan."
+    },
     "language": {
       "label": "Bahasa",
       "ariaLabel": "Ganti bahasa"

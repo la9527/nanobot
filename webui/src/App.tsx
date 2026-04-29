@@ -5,7 +5,13 @@ import { DeleteConfirm } from "@/components/DeleteConfirm";
 import { Sidebar } from "@/components/Sidebar";
 import { SettingsView } from "@/components/settings/SettingsView";
 import { ThreadShell } from "@/components/thread/ThreadShell";
-import { Sheet, SheetContent } from "@/components/ui/sheet";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { preloadMarkdownText } from "@/components/MarkdownText";
 import { useSessions } from "@/hooks/useSessions";
 import { useTheme } from "@/hooks/useTheme";
@@ -80,6 +86,14 @@ function readSidebarOpen(): boolean {
 export default function App() {
   const { t } = useTranslation();
   const [state, setState] = useState<BootState>({ status: "loading" });
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -93,6 +107,18 @@ export default function App() {
           onReauth: async () => {
             try {
               const refreshed = await fetchBootstrap();
+              if (mountedRef.current) {
+                setState((prev) => {
+                  if (prev.status !== "ready") return prev;
+                  return {
+                    ...prev,
+                    token: refreshed.token,
+                    modelName: refreshed.model_name ?? prev.modelName,
+                    activeTarget: refreshed.active_target ?? prev.activeTarget,
+                    modelTargets: refreshed.model_targets ?? prev.modelTargets,
+                  };
+                });
+              }
               return deriveWsUrl(refreshed.ws_path, refreshed.token);
             } catch {
               return null;
@@ -359,6 +385,7 @@ function Shell({ onModelNameChange }: { onModelNameChange: (modelName: string | 
       </aside>
 
       <Sheet
+        modal={false}
         open={mobileSidebarOpen}
         onOpenChange={(open) => setMobileSidebarOpen(open)}
       >
@@ -367,6 +394,12 @@ function Shell({ onModelNameChange }: { onModelNameChange: (modelName: string | 
           showCloseButton={false}
           className="w-[279px] p-0 sm:max-w-[279px] lg:hidden"
         >
+          <SheetHeader className="sr-only">
+            <SheetTitle>{t("sidebar.mobileSheet.title")}</SheetTitle>
+            <SheetDescription>
+              {t("sidebar.mobileSheet.description")}
+            </SheetDescription>
+          </SheetHeader>
           <Sidebar {...sidebarProps} onCollapse={closeMobileSidebar} />
         </SheetContent>
       </Sheet>

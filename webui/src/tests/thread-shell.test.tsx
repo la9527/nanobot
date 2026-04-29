@@ -68,7 +68,11 @@ function session(chatId: string) {
   };
 }
 
-function telegramSession(chatId: string, key: string = `telegram:${chatId}`) {
+function telegramSession(
+  chatId: string,
+  key: string = `telegram:${chatId}`,
+  metadata?: import("@/lib/types").ChatSummary["metadata"],
+) {
   return {
     key,
     channel: "telegram" as const,
@@ -76,6 +80,7 @@ function telegramSession(chatId: string, key: string = `telegram:${chatId}`) {
     createdAt: null,
     updatedAt: null,
     preview: "telegram thread",
+    metadata,
   };
 }
 
@@ -254,7 +259,7 @@ describe("ThreadShell", () => {
       ),
     );
 
-    await waitFor(() => expect(screen.getByText("old answer")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText("old answer").length).toBeGreaterThan(0));
 
     await act(async () => {
       rerender(
@@ -271,13 +276,13 @@ describe("ThreadShell", () => {
       );
     });
 
-    expect(screen.queryByText("old answer")).not.toBeInTheDocument();
+    expect(screen.queryAllByText("old answer")).toHaveLength(0);
     await waitFor(() =>
       expect(screen.getByPlaceholderText("What's on your mind?")).toBeInTheDocument(),
     );
     const input = screen.getByPlaceholderText("What's on your mind?");
     expect(input.className).toContain("min-h-[96px]");
-    expect(screen.queryByText("old answer")).not.toBeInTheDocument();
+    expect(screen.queryAllByText("old answer")).toHaveLength(0);
   });
 
   it("loads and changes the active model target for the current session", async () => {
@@ -373,7 +378,7 @@ describe("ThreadShell", () => {
     });
 
     const banner = await screen.findByRole("alert");
-    expect(banner).toHaveTextContent("Message too large");
+    expect(banner).toHaveTextContent("Message rejected");
 
     fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
 
@@ -472,7 +477,7 @@ describe("ThreadShell", () => {
       ),
     );
 
-    await waitFor(() => expect(screen.getByText("from chat a")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText("from chat a").length).toBeGreaterThan(0));
 
     await act(async () => {
       rerender(
@@ -489,7 +494,7 @@ describe("ThreadShell", () => {
       );
     });
 
-    expect(screen.queryByText("from chat a")).not.toBeInTheDocument();
+    expect(screen.queryAllByText("from chat a")).toHaveLength(0);
     expect(screen.getByText("Loading conversation…")).toBeInTheDocument();
 
     await act(async () => {
@@ -503,8 +508,8 @@ describe("ThreadShell", () => {
       );
     });
 
-    await waitFor(() => expect(screen.getByText("from chat b")).toBeInTheDocument());
-    expect(screen.queryByText("from chat a")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getAllByText("from chat b").length).toBeGreaterThan(0));
+    expect(screen.queryAllByText("from chat a")).toHaveLength(0);
   });
 
   it("bridges telegram session replies through the websocket transport and refreshes history", async () => {
@@ -578,7 +583,7 @@ describe("ThreadShell", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText("telegram assistant answer")).toBeInTheDocument();
+      expect(screen.getAllByText("telegram assistant answer").length).toBeGreaterThan(0);
     });
   });
 
@@ -636,6 +641,143 @@ describe("ThreadShell", () => {
     expect(screen.getByText("fresh telegram push")).toBeInTheDocument();
   });
 
+  it("shows a continuity placeholder for linked external sessions", async () => {
+    const client = makeClient();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("telegram%3A12345/messages")) {
+          return httpJson({
+            key: "telegram:12345",
+            created_at: null,
+            updated_at: null,
+            messages: [],
+          });
+        }
+        return {
+          ok: false,
+          status: 404,
+          json: async () => ({}),
+        };
+      }),
+    );
+
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={telegramSession("12345")}
+          title="Telegram 12345"
+          onToggleSidebar={() => {}}
+          onGoHome={() => {}}
+          onNewChat={vi.fn().mockResolvedValue("chat-a")}
+        />,
+      ),
+    );
+
+    expect(await screen.findByText("Linked external session")).toBeInTheDocument();
+    expect(screen.getByText(/attached to the current Telegram conversation/i)).toBeInTheDocument();
+    expect(screen.getByText("Linked session")).toBeInTheDocument();
+  });
+
+  it("keeps the continuity placeholder visible alongside completed status for linked sessions", async () => {
+    const client = makeClient();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("telegram%3A12345/messages")) {
+          return httpJson({
+            key: "telegram:12345",
+            created_at: null,
+            updated_at: null,
+            messages: [{ role: "assistant", content: "telegram assistant answer" }],
+          });
+        }
+        return {
+          ok: false,
+          status: 404,
+          json: async () => ({}),
+        };
+      }),
+    );
+
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={telegramSession("12345")}
+          title="Telegram 12345"
+          onToggleSidebar={() => {}}
+          onGoHome={() => {}}
+          onNewChat={vi.fn().mockResolvedValue("chat-a")}
+        />,
+      ),
+    );
+
+    expect(await screen.findByText("Latest assistant update is ready")).toBeInTheDocument();
+    expect(screen.getByText("Linked external session")).toBeInTheDocument();
+  });
+
+  it("renders linked continuity metadata in the external session summary", async () => {
+    const client = makeClient();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("telegram%3A12345/messages")) {
+          return httpJson({
+            key: "telegram:12345",
+            created_at: null,
+            updated_at: null,
+            metadata: {
+              continuity: {
+                canonical_owner_id: "primary-user",
+                channel_kind: "telegram",
+                external_identity: "12345",
+                trust_level: "linked",
+                last_confirmed_at: "2026-04-30T10:00:00",
+              },
+            },
+            messages: [],
+          });
+        }
+        return {
+          ok: false,
+          status: 404,
+          json: async () => ({}),
+        };
+      }),
+    );
+
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={telegramSession("12345", "telegram:12345", {
+            continuity: {
+              canonical_owner_id: "primary-user",
+              channel_kind: "telegram",
+              external_identity: "12345",
+              trust_level: "linked",
+              last_confirmed_at: "2026-04-30T10:00:00",
+            },
+          })}
+          title="Telegram 12345"
+          onToggleSidebar={() => {}}
+          onGoHome={() => {}}
+          onNewChat={vi.fn().mockResolvedValue("chat-a")}
+        />,
+      ),
+    );
+
+    expect(await screen.findByText("Linked external session")).toBeInTheDocument();
+    expect(screen.getByText(/owner primary-user/i)).toBeInTheDocument();
+    expect(screen.getByText(/Linked identity: 12345\./i)).toBeInTheDocument();
+    expect(screen.getByText(/Trust: linked\./i)).toBeInTheDocument();
+  });
+
   it("renders ask_user options above the composer and sends selected answers", async () => {
     const client = makeClient();
     const onNewChat = vi.fn().mockResolvedValue("chat-a");
@@ -676,5 +818,86 @@ describe("ThreadShell", () => {
     await waitFor(() => {
       expect(screen.queryByRole("group", { name: "Question" })).not.toBeInTheDocument();
     });
+  });
+
+  it("shows waiting approval status for approval messages and header badges", async () => {
+    const client = makeClient();
+
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={session("chat-a")}
+          title="Chat chat-a"
+          onToggleSidebar={() => {}}
+          onGoHome={() => {}}
+          onNewChat={vi.fn().mockResolvedValue("chat-a")}
+        />,
+      ),
+    );
+
+    await act(async () => {
+      client._emitChat("chat-a", {
+        event: "message",
+        chat_id: "chat-a",
+        text: "Approve sending the report email to finance?",
+        kind: "tool_approval",
+      });
+    });
+
+    expect(screen.getByText("Approval pending")).toBeInTheDocument();
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent("Assistant is waiting for confirmation");
+    expect(status).toHaveTextContent("Approve sending the report email to finance?");
+  });
+
+  it("shows running, completed, and failed assistant status blocks", async () => {
+    const client = makeClient();
+
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={session("chat-a")}
+          title="Chat chat-a"
+          onToggleSidebar={() => {}}
+          onGoHome={() => {}}
+          onNewChat={vi.fn().mockResolvedValue("chat-a")}
+        />,
+      ),
+    );
+
+    await act(async () => {
+      client._emitChat("chat-a", {
+        event: "delta",
+        chat_id: "chat-a",
+        text: "Working",
+      });
+    });
+
+    const runningStatus = screen.getByRole("status");
+    expect(runningStatus).toHaveTextContent("Assistant is working");
+    expect(runningStatus).toHaveTextContent("Streaming the current assistant response.");
+
+    await act(async () => {
+      client._emitChat("chat-a", {
+        event: "stream_end",
+        chat_id: "chat-a",
+      });
+    });
+
+    const completedStatus = screen.getByRole("status");
+    expect(completedStatus).toHaveTextContent("Completed");
+    expect(completedStatus).toHaveTextContent("Latest assistant update is ready");
+    expect(completedStatus).toHaveTextContent("Working");
+
+    await act(async () => {
+      client._emitError({ kind: "message_too_big" });
+    });
+
+    const failedStatus = screen.getByRole("alert");
+    expect(failedStatus).toHaveTextContent("Failed");
+    expect(failedStatus).toHaveTextContent("Message rejected");
+    expect(failedStatus).toHaveTextContent("exceeded the upload size limit");
   });
 });

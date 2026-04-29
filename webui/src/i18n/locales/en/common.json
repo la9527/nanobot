@@ -23,6 +23,10 @@
     "newChat": "New chat",
     "recent": "Recent",
     "refreshSessions": "Refresh sessions",
+    "mobileSheet": {
+      "title": "Navigation sidebar",
+      "description": "Browse recent chats, start a new chat, or open settings."
+    },
     "language": {
       "label": "Language",
       "ariaLabel": "Change language"

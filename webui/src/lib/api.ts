@@ -50,6 +50,7 @@ export async function listSessions(
     updated_at: string | null;
     preview?: string;
     active_target?: string | null;
+    metadata?: ChatSummary["metadata"];
   };
   const body = await request<{ sessions: Row[] }>(
     `${base}/api/sessions`,
@@ -62,6 +63,7 @@ export async function listSessions(
     updatedAt: s.updated_at,
     preview: s.preview ?? "",
     activeTarget: s.active_target ?? null,
+    metadata: s.metadata,
   }));
 }
 

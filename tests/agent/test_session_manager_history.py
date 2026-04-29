@@ -1,4 +1,6 @@
-from nanobot.session.manager import Session
+from pathlib import Path
+
+from nanobot.session.manager import Session, SessionManager
 
 
 def _assert_no_orphans(history: list[dict]) -> None:
@@ -192,6 +194,24 @@ def test_get_history_preserves_reasoning_content():
             "reasoning_content": "hidden chain of thought",
         },
     ]
+
+
+def test_session_manager_persists_minimal_continuity_metadata(tmp_path: Path):
+    manager = SessionManager(tmp_path)
+    session = manager.get_or_create("telegram:-1001:topic:42")
+
+    manager.save(session)
+    restored = manager.read_session_file("telegram:-1001:topic:42")
+
+    assert restored is not None
+    continuity = restored["metadata"]["continuity"]
+    assert continuity == {
+        "canonical_owner_id": "primary-user",
+        "channel_kind": "telegram",
+        "external_identity": "-1001",
+        "trust_level": "linked",
+        "last_confirmed_at": session.updated_at.isoformat(),
+    }
 
 
 def test_get_history_annotates_user_turns_but_not_assistant_turns():

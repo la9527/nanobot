@@ -58,12 +58,46 @@ export interface ChatSummary {
   updatedAt: string | null;
   preview: string;
   activeTarget?: string | null;
+  metadata?: {
+    continuity?: {
+      canonical_owner_id?: string;
+      channel_kind?: string;
+      external_identity?: string;
+      trust_level?: string;
+      last_confirmed_at?: string | null;
+    };
+    approval_summary?: {
+      status?: string;
+      channel?: string;
+      tool_name?: string;
+      tool_call_id?: string;
+      message_id?: string | null;
+      prompt_preview?: string;
+    };
+  };
 }
 
 export interface SessionMessagesResponse {
   key: string;
   created_at: string | null;
   updated_at: string | null;
+  metadata?: {
+    continuity?: {
+      canonical_owner_id?: string;
+      channel_kind?: string;
+      external_identity?: string;
+      trust_level?: string;
+      last_confirmed_at?: string | null;
+    };
+    approval_summary?: {
+      status?: string;
+      channel?: string;
+      tool_name?: string;
+      tool_call_id?: string;
+      message_id?: string | null;
+      prompt_preview?: string;
+    };
+  };
   messages: Array<{
     role: string;
     content: string;

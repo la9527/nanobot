@@ -310,6 +310,11 @@ async def test_sessions_routes_require_bearer_token(
         # Server stays an opaque source: filesystem paths must not leak to the wire.
         assert all("path" not in s for s in listing.json()["sessions"])
         assert all(isinstance(s.get("active_target"), str) for s in listing.json()["sessions"])
+        continuity = listing.json()["sessions"][0]["metadata"]["continuity"]
+        assert continuity["canonical_owner_id"] == "primary-user"
+        assert continuity["channel_kind"] == "websocket"
+        assert continuity["external_identity"] == "local-webui"
+        assert continuity["trust_level"] == "trusted"
 
         msgs = await _http_get(
             "http://127.0.0.1:29902/api/sessions/websocket:abc/messages",
@@ -319,6 +324,7 @@ async def test_sessions_routes_require_bearer_token(
         body = msgs.json()
         assert body["key"] == "websocket:abc"
         assert [m["role"] for m in body["messages"]] == ["user", "assistant"]
+        assert body["metadata"]["continuity"]["canonical_owner_id"] == "primary-user"
     finally:
         await channel.stop()
         await server_task
@@ -354,13 +360,20 @@ async def test_sessions_list_only_returns_websocket_sessions_by_default(
             "http://127.0.0.1:29906/api/sessions", headers=auth
         )
         assert listing.status_code == 200
-        keys = {s["key"] for s in listing.json()["sessions"]}
+        rows = listing.json()["sessions"]
+        keys = {s["key"] for s in rows}
         assert keys == {
             "telegram:12345",
             "telegram:-1001:topic:42",
             "websocket:alpha",
             "websocket:beta",
         }
+        continuity = {
+            row["key"]: row["metadata"]["continuity"]["external_identity"]
+            for row in rows
+        }
+        assert continuity["telegram:12345"] == "12345"
+        assert continuity["telegram:-1001:topic:42"] == "-1001"
     finally:
         await channel.stop()
         await server_task
@@ -481,6 +494,74 @@ async def test_sessions_list_uses_session_model_target_override(
         finally:
             await channel.stop()
             await server_task
+
+
+@pytest.mark.asyncio
+async def test_sessions_list_exposes_pending_approval_summary(
+    bus: MagicMock, tmp_path: Path
+) -> None:
+    sm = _seed_session(tmp_path, key="telegram:12345")
+    session = sm.get_or_create("telegram:12345")
+    session.metadata["approval_summary"] = {
+        "status": "pending",
+        "channel": "telegram",
+        "tool_name": "exec",
+        "tool_call_id": "call-1",
+        "prompt_preview": "Approval required for a high-risk command.",
+    }
+    sm.save(session)
+    channel = _ch(bus, session_manager=sm, port=29916)
+    server_task = asyncio.create_task(channel.start())
+    await asyncio.sleep(0.3)
+    try:
+        boot = await _http_get("http://127.0.0.1:29916/webui/bootstrap")
+        token = boot.json()["token"]
+        auth = {"Authorization": f"Bearer {token}"}
+
+        listing = await _http_get("http://127.0.0.1:29916/api/sessions", headers=auth)
+        assert listing.status_code == 200
+        row = listing.json()["sessions"][0]
+        assert row["metadata"]["approval_summary"]["status"] == "pending"
+        assert row["metadata"]["approval_summary"]["tool_name"] == "exec"
+    finally:
+        await channel.stop()
+        await server_task
+
+
+@pytest.mark.asyncio
+async def test_same_owner_sessions_keep_approval_visibility_on_linked_row(
+    bus: MagicMock, tmp_path: Path
+) -> None:
+    sm = _seed_many(tmp_path, ["websocket:alpha", "telegram:12345"])
+    telegram_session = sm.get_or_create("telegram:12345")
+    telegram_session.metadata["approval_summary"] = {
+        "status": "pending",
+        "channel": "telegram",
+        "tool_name": "exec",
+        "tool_call_id": "call-1",
+        "prompt_preview": "Approval required for a high-risk command.",
+    }
+    sm.save(telegram_session)
+
+    channel = _ch(bus, session_manager=sm, port=29917)
+    server_task = asyncio.create_task(channel.start())
+    await asyncio.sleep(0.3)
+    try:
+        boot = await _http_get("http://127.0.0.1:29917/webui/bootstrap")
+        token = boot.json()["token"]
+        auth = {"Authorization": f"Bearer {token}"}
+
+        listing = await _http_get("http://127.0.0.1:29917/api/sessions", headers=auth)
+        assert listing.status_code == 200
+        rows = {row["key"]: row for row in listing.json()["sessions"]}
+
+        assert rows["websocket:alpha"]["metadata"]["continuity"]["canonical_owner_id"] == "primary-user"
+        assert rows["telegram:12345"]["metadata"]["continuity"]["canonical_owner_id"] == "primary-user"
+        assert rows["telegram:12345"]["metadata"]["approval_summary"]["status"] == "pending"
+        assert rows["websocket:alpha"]["metadata"].get("approval_summary") is None
+    finally:
+        await channel.stop()
+        await server_task
 
 
 @pytest.mark.asyncio

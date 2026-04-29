@@ -23,6 +23,10 @@
     "newChat": "새 채팅",
     "recent": "최근 대화",
     "refreshSessions": "세션 새로고침",
+    "mobileSheet": {
+      "title": "탐색 사이드바",
+      "description": "최근 대화를 살펴보고, 새 채팅을 시작하거나, 설정을 열 수 있습니다."
+    },
     "language": {
       "label": "언어",
       "ariaLabel": "언어 변경"

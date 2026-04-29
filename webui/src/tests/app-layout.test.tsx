@@ -1,13 +1,16 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ChatSummary } from "@/lib/types";
+import { fetchBootstrap } from "@/lib/bootstrap";
+import { NanobotClient } from "@/lib/nanobot-client";
 
 const connectSpy = vi.fn();
 const refreshSpy = vi.fn();
 const createChatSpy = vi.fn().mockResolvedValue("chat-1");
 const deleteChatSpy = vi.fn();
 let mockSessions: ChatSummary[] = [];
+const mockClientInstances: Array<{ onReauth?: () => Promise<string | null> }> = [];
 
 vi.mock("@/hooks/useSessions", async (importOriginal) => {
   const React = await import("react");
@@ -51,7 +54,12 @@ vi.mock("@/lib/nanobot-client", () => {
   class MockClient {
     status = "idle" as const;
     defaultChatId: string | null = null;
+    onReauth?: () => Promise<string | null>;
     connect = connectSpy;
+    constructor(options?: { onReauth?: () => Promise<string | null> }) {
+      this.onReauth = options?.onReauth;
+      mockClientInstances.push(this);
+    }
     onStatus = () => () => {};
     onError = () => () => {};
     onChat = () => () => {};
@@ -70,6 +78,7 @@ import App from "@/App";
 describe("App layout", () => {
   beforeEach(() => {
     mockSessions = [];
+    mockClientInstances.length = 0;
     connectSpy.mockClear();
     refreshSpy.mockReset();
     createChatSpy.mockClear();
@@ -96,6 +105,68 @@ describe("App layout", () => {
       (el) => el.className,
     );
     expect(asideClassNames.some((cls) => cls.includes("lg:block"))).toBe(true);
+  });
+
+  it("provides an accessible title and description for the mobile sidebar sheet", async () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn().mockImplementation(() => ({
+        matches: false,
+        media: "(min-width: 1024px)",
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    );
+
+    render(<App />);
+
+    await waitFor(() => expect(connectSpy).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("button", { name: "Toggle sidebar" }));
+
+    expect(await screen.findByText("Navigation sidebar")).toBeInTheDocument();
+    expect(
+      screen.getByText("Browse recent chats, start a new chat, or open settings."),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the mobile sidebar non-modal so thread content stays reachable", async () => {
+    mockSessions = [
+      {
+        key: "websocket:chat-a",
+        channel: "websocket",
+        chatId: "chat-a",
+        createdAt: "2026-04-16T10:00:00Z",
+        updatedAt: "2026-04-16T10:00:00Z",
+        preview: "First chat",
+        activeTarget: null,
+      },
+    ];
+
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn().mockImplementation(() => ({
+        matches: false,
+        media: "(min-width: 1024px)",
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    );
+
+    render(<App />);
+
+    await waitFor(() => expect(connectSpy).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("button", { name: "Toggle sidebar" }));
+
+    expect(await screen.findByRole("dialog", { name: "Navigation sidebar" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^First chat$/ })).toBeInTheDocument();
   });
 
   it("switches to the next session when deleting the active chat", async () => {
@@ -202,7 +273,7 @@ describe("App layout", () => {
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
 
     expect(await screen.findByRole("heading", { name: "General" })).toBeInTheDocument();
-    expect(screen.getByText("AI")).toBeInTheDocument();
+    expect(screen.getByText("Assistant")).toBeInTheDocument();
     expect(screen.getByText("Themes")).toBeInTheDocument();
     expect(screen.getByDisplayValue("openai/gpt-4o")).toBeInTheDocument();
     expect(screen.getByText("15")).toBeInTheDocument();
@@ -212,6 +283,77 @@ describe("App layout", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Decrease chat font size" }));
     expect(screen.getByText("15")).toBeInTheDocument();
+  });
+
+  it("refreshes the REST token when websocket reauth succeeds", async () => {
+    vi.mocked(fetchBootstrap)
+      .mockResolvedValueOnce({
+        token: "tok-1",
+        ws_path: "/",
+        expires_in: 300,
+        model_name: "openai/gpt-5.4",
+        active_target: "default",
+        model_targets: [],
+      })
+      .mockResolvedValueOnce({
+        token: "tok-2",
+        ws_path: "/",
+        expires_in: 300,
+        model_name: "openai/gpt-5.4",
+        active_target: "default",
+        model_targets: [],
+      });
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes("/api/settings")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            agent: {
+              model: "openai/gpt-5.4",
+              provider: "auto",
+              resolved_provider: "openai",
+              has_api_key: true,
+            },
+            providers: [
+              { name: "auto", label: "Auto" },
+              { name: "openai", label: "OpenAI" },
+            ],
+            runtime: { config_path: "/tmp/config.json" },
+            requires_restart: false,
+          }),
+          headers: init?.headers,
+        };
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    await waitFor(() => expect(connectSpy).toHaveBeenCalled());
+
+    const client = mockClientInstances[0];
+    expect(client?.onReauth).toBeTypeOf("function");
+
+    await act(async () => {
+      await client.onReauth?.();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: "General" })).toBeInTheDocument());
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/api/settings"),
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            Authorization: "Bearer tok-2",
+          }),
+        }),
+      ),
+    );
   });
 
   it("uses bootstrap model_name instead of active_target for the default model label", async () => {
@@ -266,6 +408,60 @@ describe("App layout", () => {
     await waitFor(() => expect(connectSpy).toHaveBeenCalled());
     await waitFor(() => expect(screen.getByText("gpt-5.4")).toBeInTheDocument());
     expect(screen.queryByText(/^default$/i)).not.toBeInTheDocument();
+  });
+
+  it("shows compact assistant status badges in the thread header", async () => {
+    mockSessions = [
+      {
+        key: "telegram:chat-a",
+        channel: "telegram",
+        chatId: "chat-a",
+        createdAt: "2026-04-16T10:00:00Z",
+        updatedAt: "2026-04-16T10:00:00Z",
+        preview: "Telegram chat",
+        activeTarget: "smart-router",
+      },
+    ];
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).includes("/webui/bootstrap")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              token: "tok",
+              ws_path: "/",
+              expires_in: 300,
+              model_name: "openai/gpt-5.4",
+              active_target: "smart-router",
+              model_targets: [
+                { name: "smart-router", kind: "smart_router", model: null },
+              ],
+            }),
+          };
+        }
+        if (String(input).includes("/api/sessions/telegram%3Achat-a/model-target")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              key: "telegram:chat-a",
+              active_target: "smart-router",
+              target: { name: "smart-router", kind: "smart_router", model: null },
+            }),
+          };
+        }
+        return { ok: false, status: 404, json: async () => ({}) };
+      }),
+    );
+
+    render(<App />);
+
+    await waitFor(() => expect(connectSpy).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByText("Target Auto")).toBeInTheDocument());
+    expect(screen.getByText("Channel Telegram")).toBeInTheDocument();
   });
 
   it("shows env-managed local settings as locked with the resolved model value", async () => {
@@ -326,6 +522,9 @@ describe("App layout", () => {
     await waitFor(() => expect(connectSpy).toHaveBeenCalled());
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
 
+    expect(await screen.findByText("Default assistant settings for model selection, theme, and chat readability.")).toBeInTheDocument();
+    expect(screen.getByText("Assistant")).toBeInTheDocument();
+
     const modelInput = await screen.findByDisplayValue(
       "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0",
     );
@@ -333,5 +532,6 @@ describe("App layout", () => {
     const providerSelect = screen.getAllByRole("combobox")[0] as HTMLSelectElement;
     expect(providerSelect).toBeDisabled();
     expect(providerSelect.value).toBe("vllm");
+    expect(screen.getByText("Provider or model is locked by the current runtime configuration.")).toBeInTheDocument();
   });
 });

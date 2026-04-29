@@ -23,6 +23,10 @@
     "newChat": "新しいチャット",
     "recent": "最近のチャット",
     "refreshSessions": "セッションを更新",
+    "mobileSheet": {
+      "title": "ナビゲーションサイドバー",
+      "description": "最近のチャットを確認し、新しいチャットを始めたり、設定を開いたりできます。"
+    },
     "language": {
       "label": "言語",
       "ariaLabel": "言語を変更"

@@ -23,6 +23,10 @@
     "newChat": "Nuevo chat",
     "recent": "Recientes",
     "refreshSessions": "Actualizar sesiones",
+    "mobileSheet": {
+      "title": "Barra lateral de navegación",
+      "description": "Revisa los chats recientes, inicia un chat nuevo o abre la configuración."
+    },
     "language": {
       "label": "Idioma",
       "ariaLabel": "Cambiar idioma"
