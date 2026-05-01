@@ -435,6 +435,73 @@ async def test_session_message_envelope_publishes_telegram_inbound(
 
 
 @pytest.mark.asyncio
+async def test_websocket_memory_correction_message_updates_memory_and_replies(
+    bus: MagicMock, tmp_path: Path,
+) -> None:
+    sm = _seed_session(tmp_path, key="websocket:memory-chat")
+    channel = _ch(bus, session_manager=sm, port=29928)
+
+    class DummyConn:
+        remote_address = ("127.0.0.1", 9999)
+
+        def __init__(self) -> None:
+            self.sent: list[str] = []
+
+        async def send(self, raw: str) -> None:
+            self.sent.append(raw)
+
+    conn = DummyConn()
+
+    await channel._dispatch_envelope(
+        conn,
+        "browser-client",
+        {
+            "type": "message",
+            "chat_id": "memory-chat",
+            "content": "기억해\n내용: Telegram 채널을 우선 사용한다\n현재 task: memory correction\n저장 위치: memory/MEMORY.md",
+        },
+    )
+
+    bus.publish_inbound.assert_not_awaited()
+    memory_text = (tmp_path / "memory" / "MEMORY.md").read_text(encoding="utf-8")
+    assert "- Telegram 채널을 우선 사용한다" in memory_text
+    payload = json.loads(conn.sent[-1])
+    assert payload["event"] == "message"
+    assert payload["text"] == "memory/MEMORY.md 에 반영했어요: Telegram 채널을 우선 사용한다"
+
+
+@pytest.mark.asyncio
+async def test_bridged_memory_correction_updates_user_profile_without_bus_publish(
+    bus: MagicMock, tmp_path: Path,
+) -> None:
+    sm = _seed_session(tmp_path, key="telegram:-1001:topic:42")
+    channel = _ch(bus, session_manager=sm, port=29929)
+
+    class DummyConn:
+        remote_address = ("127.0.0.1", 9999)
+
+    await channel._dispatch_envelope(
+        DummyConn(),
+        "browser-client",
+        {
+            "type": "session_message",
+            "session_key": "telegram:-1001:topic:42",
+            "content": "이건 기본 선호가 아님\n수정할 기본 선호: 답변 길이는 기본적으로 간결하게 유지\n현재 task: owner defaults\n저장 위치: USER.md",
+        },
+    )
+
+    bus.publish_inbound.assert_not_awaited()
+    user_text = (tmp_path / "USER.md").read_text(encoding="utf-8")
+    assert "- 답변 길이는 기본적으로 간결하게 유지" in user_text
+    data = sm.read_session_file("telegram:-1001:topic:42")
+    assert data is not None
+    assert data["messages"][-1]["role"] == "assistant"
+    assert data["messages"][-1]["content"] == (
+        "USER.md 기본 선호 보정 항목에 추가했어요: 답변 길이는 기본적으로 간결하게 유지"
+    )
+
+
+@pytest.mark.asyncio
 async def test_send_marks_remote_user_echo_kind_for_webui_mirrors(
     bus: MagicMock, tmp_path: Path
 ) -> None:
@@ -559,6 +626,190 @@ async def test_same_owner_sessions_keep_approval_visibility_on_linked_row(
         assert rows["telegram:12345"]["metadata"]["continuity"]["canonical_owner_id"] == "primary-user"
         assert rows["telegram:12345"]["metadata"]["approval_summary"]["status"] == "pending"
         assert rows["websocket:alpha"]["metadata"].get("approval_summary") is None
+    finally:
+        await channel.stop()
+        await server_task
+
+
+@pytest.mark.asyncio
+async def test_sessions_list_keeps_enough_metadata_for_owner_aggregate_derivation(
+    bus: MagicMock, tmp_path: Path
+) -> None:
+    sm = _seed_many(tmp_path, ["websocket:alpha", "telegram:12345", "websocket:beta"])
+
+    telegram_session = sm.get_or_create("telegram:12345")
+    telegram_session.metadata["continuity"] = {
+        "canonical_owner_id": "primary-user",
+        "channel_kind": "telegram",
+        "external_identity": "12345",
+        "trust_level": "linked",
+    }
+    telegram_session.metadata["approval_summary"] = {
+        "status": "pending",
+        "channel": "telegram",
+        "tool_name": "exec",
+        "tool_call_id": "call-1",
+        "prompt_preview": "Approval required for a high-risk command.",
+    }
+    sm.save(telegram_session)
+
+    channel = _ch(bus, session_manager=sm, port=29918)
+    server_task = asyncio.create_task(channel.start())
+    await asyncio.sleep(0.3)
+    try:
+        boot = await _http_get("http://127.0.0.1:29918/webui/bootstrap")
+        token = boot.json()["token"]
+        auth = {"Authorization": f"Bearer {token}"}
+
+        listing = await _http_get("http://127.0.0.1:29918/api/sessions", headers=auth)
+        assert listing.status_code == 200
+        rows = listing.json()["sessions"]
+
+        owner_rows = [
+            row
+            for row in rows
+            if row["metadata"]["continuity"]["canonical_owner_id"] == "primary-user"
+        ]
+        approval_pending_count = sum(
+            1
+            for row in owner_rows
+            if row["metadata"].get("approval_summary", {}).get("status") == "pending"
+        )
+        linked_external_rows = [
+            row for row in owner_rows if row["key"] != "websocket:alpha" and not row["key"].startswith("websocket:")
+        ]
+
+        assert {row["key"] for row in owner_rows} == {
+            "websocket:alpha",
+            "telegram:12345",
+            "websocket:beta",
+        }
+        assert approval_pending_count == 1
+        assert [row["key"] for row in linked_external_rows] == ["telegram:12345"]
+        assert linked_external_rows[0]["updated_at"] is not None
+        assert linked_external_rows[0]["metadata"]["approval_summary"]["tool_name"] == "exec"
+    finally:
+        await channel.stop()
+        await server_task
+
+
+@pytest.mark.asyncio
+async def test_sessions_list_exposes_minimal_task_summary_backbone(
+    bus: MagicMock, tmp_path: Path
+) -> None:
+    (tmp_path / "USER.md").write_text(
+        """# User Profile
+
+## Basic Information
+
+- **Timezone**: Asia/Seoul
+- **Language**: ko-KR
+
+## Preferences
+
+### Communication Style
+
+- [x] Technical
+- [ ] Professional
+
+### Response Length
+
+- [x] Brief and concise
+- [ ] Detailed explanations
+""",
+        encoding="utf-8",
+    )
+    sm = _seed_many(tmp_path, ["websocket:alpha", "telegram:12345", "websocket:beta"])
+
+    telegram_session = sm.get_or_create("telegram:12345")
+    telegram_session.metadata["approval_summary"] = {
+        "status": "pending",
+        "channel": "telegram",
+        "tool_name": "exec",
+        "tool_call_id": "call-1",
+        "prompt_preview": "Approve sending the summary email.",
+    }
+    sm.save(telegram_session)
+
+    blocked_session = sm.get_or_create("websocket:beta")
+    blocked_session.metadata["pending_user_turn"] = True
+    blocked_session.metadata["runtime_checkpoint"] = {
+        "phase": "awaiting_tools",
+        "iteration": 0,
+        "model": "smart-router",
+    }
+    sm.save(blocked_session)
+
+    proactive_session = sm.get_or_create("telegram:12345")
+    proactive_session.metadata["proactive_summary"] = {
+        "status": "suppressed",
+        "category": "briefing",
+        "title": "Morning briefing ready",
+        "summary": "오늘 일정 1개와 승인 대기 1개가 있습니다.",
+        "target_channel": "telegram",
+        "suppressed_reason": "quiet_hours",
+        "updated_at": "2026-05-01T06:00:00Z",
+    }
+    sm.save(proactive_session)
+
+    channel = _ch(bus, session_manager=sm, port=29919)
+    server_task = asyncio.create_task(channel.start())
+    await asyncio.sleep(0.3)
+    try:
+        boot = await _http_get("http://127.0.0.1:29919/webui/bootstrap")
+        token = boot.json()["token"]
+        auth = {"Authorization": f"Bearer {token}"}
+
+        listing = await _http_get("http://127.0.0.1:29919/api/sessions", headers=auth)
+        assert listing.status_code == 200
+        rows = {row["key"]: row for row in listing.json()["sessions"]}
+
+        approval_task = rows["telegram:12345"]["metadata"]["task_summary"]
+        assert approval_task["task_id"] == "session:telegram:12345"
+        assert approval_task["canonical_owner_id"] == "primary-user"
+        assert approval_task["status"] == "waiting-approval"
+        assert approval_task["title"] == "Approve sending the summary email."
+        assert approval_task["origin_channel"] == "telegram"
+        assert approval_task["origin_session_key"] == "telegram:12345"
+        assert approval_task["next_step_hint"] == "Review the pending approval request."
+
+        proactive_summary = rows["telegram:12345"]["metadata"]["proactive_summary"]
+        assert proactive_summary["status"] == "suppressed"
+        assert proactive_summary["category"] == "briefing"
+        assert proactive_summary["title"] == "Morning briefing ready"
+        assert proactive_summary["target_channel"] == "telegram"
+
+        blocked_task = rows["websocket:beta"]["metadata"]["task_summary"]
+        assert blocked_task["task_id"] == "session:websocket:beta"
+        assert blocked_task["status"] == "blocked"
+        assert blocked_task["origin_channel"] == "websocket"
+        assert blocked_task["next_step_hint"] == "Reopen the interrupted session and continue the task."
+
+        completed_task = rows["websocket:alpha"]["metadata"]["task_summary"]
+        assert completed_task["task_id"] == "session:websocket:alpha"
+        assert completed_task["status"] == "completed"
+        assert completed_task["canonical_owner_id"] == "primary-user"
+        assert completed_task["updated_at"] is not None
+
+        owner_profile = rows["websocket:alpha"]["metadata"]["owner_profile"]
+        assert owner_profile["canonical_owner_id"] == "primary-user"
+        assert owner_profile["preferred_language"] == "ko-KR"
+        assert owner_profile["timezone"] == "Asia/Seoul"
+        assert owner_profile["response_tone"] == "technical"
+        assert owner_profile["response_length"] == "brief"
+
+        memory_boundary = rows["websocket:alpha"]["metadata"]["memory_boundary"]
+        assert memory_boundary["owner_profile"] == "USER.md"
+        assert memory_boundary["project_memory"] == "memory/MEMORY.md"
+        assert memory_boundary["session_state"] == "session.metadata"
+        assert memory_boundary["raw_history"] == "memory/history.jsonl"
+
+        memory_correction = rows["websocket:alpha"]["metadata"]["memory_correction"]
+        assert memory_correction["actions"][0]["code"] == "remember"
+        assert memory_correction["actions"][0]["phrase"] == "기억해"
+        assert memory_correction["actions"][1]["code"] == "forget"
+        assert memory_correction["actions"][2]["code"] == "not-default"
+        assert memory_correction["actions"][3]["code"] == "project-complete"
     finally:
         await channel.stop()
         await server_task

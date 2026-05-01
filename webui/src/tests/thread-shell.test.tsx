@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
+import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ThreadShell } from "@/components/thread/ThreadShell";
@@ -776,6 +777,646 @@ describe("ThreadShell", () => {
     expect(screen.getByText(/owner primary-user/i)).toBeInTheDocument();
     expect(screen.getByText(/Linked identity: 12345\./i)).toBeInTheDocument();
     expect(screen.getByText(/Trust: linked\./i)).toBeInTheDocument();
+  });
+
+  it("renders an owner-aware summary block from linked sessions and pending approvals", async () => {
+    const client = makeClient();
+    const user = userEvent.setup();
+
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={{
+            ...session("chat-a"),
+            metadata: {
+              continuity: {
+                canonical_owner_id: "primary-user",
+                channel_kind: "websocket",
+                external_identity: "local-webui",
+                trust_level: "trusted",
+              },
+              owner_profile: {
+                canonical_owner_id: "primary-user",
+                preferred_language: "ko-KR",
+                timezone: "Asia/Seoul",
+                response_tone: "direct",
+                response_length: "balanced",
+              },
+              memory_correction: {
+                actions: [
+                  {
+                    code: "remember",
+                    phrase: "기억해",
+                    target: "owner_profile_or_project_memory",
+                    store: "USER.md or memory/MEMORY.md",
+                  },
+                  {
+                    code: "forget",
+                    phrase: "잊어",
+                    target: "owner_profile_or_project_memory",
+                    store: "USER.md or memory/MEMORY.md",
+                  },
+                ],
+              },
+              task_summary: {
+                task_id: "session:websocket:chat-a",
+                canonical_owner_id: "primary-user",
+                title: "Review the local thread summary",
+                status: "completed",
+                origin_channel: "websocket",
+                origin_session_key: "websocket:chat-a",
+                updated_at: "2026-04-30T10:06:00Z",
+                next_step_hint: "Review the latest completed update if follow-up is needed.",
+              },
+            },
+          }}
+          sessions={[
+            {
+              ...session("chat-a"),
+              metadata: {
+                continuity: {
+                  canonical_owner_id: "primary-user",
+                  channel_kind: "websocket",
+                  external_identity: "local-webui",
+                  trust_level: "trusted",
+                },
+                owner_profile: {
+                  canonical_owner_id: "primary-user",
+                  preferred_language: "ko-KR",
+                  timezone: "Asia/Seoul",
+                  response_tone: "direct",
+                  response_length: "balanced",
+                },
+                memory_correction: {
+                  actions: [
+                    {
+                      code: "remember",
+                      phrase: "기억해",
+                      target: "owner_profile_or_project_memory",
+                      store: "USER.md or memory/MEMORY.md",
+                    },
+                    {
+                      code: "forget",
+                      phrase: "잊어",
+                      target: "owner_profile_or_project_memory",
+                      store: "USER.md or memory/MEMORY.md",
+                    },
+                  ],
+                },
+                task_summary: {
+                  task_id: "session:websocket:chat-a",
+                  canonical_owner_id: "primary-user",
+                  title: "Review the local thread summary",
+                  status: "completed",
+                  origin_channel: "websocket",
+                  origin_session_key: "websocket:chat-a",
+                  updated_at: "2026-04-30T10:06:00Z",
+                  next_step_hint: "Review the latest completed update if follow-up is needed.",
+                },
+              },
+            },
+            {
+              ...telegramSession("12345"),
+              updatedAt: "2026-04-30T10:05:00Z",
+              metadata: {
+                continuity: {
+                  canonical_owner_id: "primary-user",
+                  channel_kind: "telegram",
+                  external_identity: "12345",
+                  trust_level: "linked",
+                },
+                approval_summary: {
+                  status: "pending",
+                  tool_name: "exec",
+                  prompt_preview: "Approval required for a high-risk command.",
+                },
+                task_summary: {
+                  task_id: "session:telegram:12345",
+                  canonical_owner_id: "primary-user",
+                  title: "Approval required for a high-risk command.",
+                  status: "waiting-approval",
+                  origin_channel: "telegram",
+                  origin_session_key: "telegram:12345",
+                  updated_at: "2026-04-30T10:05:00Z",
+                  next_step_hint: "Review the pending approval request.",
+                },
+              },
+            },
+          ]}
+          title="Chat chat-a"
+          onToggleSidebar={() => {}}
+          onGoHome={() => {}}
+          onNewChat={vi.fn().mockResolvedValue("chat-a")}
+        />,
+      ),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Assistant summary")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Current task")).toBeInTheDocument();
+    expect(screen.getByText("Review the local thread summary")).toBeInTheDocument();
+    expect(screen.getByText("Completed")).toBeInTheDocument();
+    expect(screen.getByText(/Origin WebUI/i)).toBeInTheDocument();
+    expect(screen.getByText(/Owner defaults: ko-KR · Asia\/Seoul · direct · balanced/i)).toBeInTheDocument();
+    expect(screen.getByText("Memory corrections:")).toBeInTheDocument();
+    expect(screen.getByText("기억해")).toBeInTheDocument();
+    expect(screen.getByText("잊어")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "기억해" }));
+    expect(screen.getByLabelText("Message input")).toHaveValue(
+      "기억해\n내용: [기억할 내용]\n현재 task: Review the local thread summary\n저장 위치: memory/MEMORY.md",
+    );
+    expect(screen.getByText(/1 approval pending/i)).toBeInTheDocument();
+    expect(screen.getByText(/1 linked sessions/i)).toBeInTheDocument();
+    expect(screen.getByText(/Latest external activity: Telegram updated/i)).toBeInTheDocument();
+    expect(screen.getByText(/Next step: review the pending approval request\./i)).toBeInTheDocument();
+  });
+
+  it("renders blocked and recent completion hints in the owner-aware summary", async () => {
+    const client = makeClient();
+
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={session("chat-a")}
+          sessions={[
+            {
+              ...session("chat-a"),
+              updatedAt: "2026-04-30T10:07:00Z",
+              metadata: {
+                continuity: {
+                  canonical_owner_id: "primary-user",
+                  channel_kind: "websocket",
+                  external_identity: "local-webui",
+                  trust_level: "trusted",
+                },
+              },
+            },
+            {
+              ...session("chat-blocked"),
+              updatedAt: "2026-04-30T10:06:00Z",
+              metadata: {
+                continuity: {
+                  canonical_owner_id: "primary-user",
+                  channel_kind: "websocket",
+                  external_identity: "local-webui",
+                  trust_level: "trusted",
+                },
+                pending_user_turn: true,
+                runtime_checkpoint: {
+                  phase: "awaiting_tools",
+                  iteration: 0,
+                  model: "smart-router",
+                },
+                task_summary: {
+                  task_id: "session:websocket:chat-blocked",
+                  canonical_owner_id: "primary-user",
+                  title: "Resume awaiting tools",
+                  status: "blocked",
+                  origin_channel: "websocket",
+                  origin_session_key: "websocket:chat-blocked",
+                  updated_at: "2026-04-30T10:06:00Z",
+                  next_step_hint: "Reopen the interrupted session and continue the task.",
+                },
+              },
+            },
+            {
+              ...telegramSession("12345"),
+              updatedAt: "2026-04-30T10:05:00Z",
+              metadata: {
+                continuity: {
+                  canonical_owner_id: "primary-user",
+                  channel_kind: "telegram",
+                  external_identity: "12345",
+                  trust_level: "linked",
+                },
+                task_summary: {
+                  task_id: "session:telegram:12345",
+                  canonical_owner_id: "primary-user",
+                  title: "Telegram session follow-up",
+                  status: "completed",
+                  origin_channel: "telegram",
+                  origin_session_key: "telegram:12345",
+                  updated_at: "2026-04-30T10:05:00Z",
+                  next_step_hint: "Review the latest completed update if follow-up is needed.",
+                },
+              },
+            },
+          ]}
+          title="Chat chat-a"
+          onToggleSidebar={() => {}}
+          onGoHome={() => {}}
+          onNewChat={vi.fn().mockResolvedValue("chat-a")}
+        />,
+      ),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Assistant summary")).toBeInTheDocument();
+    });
+    expect(screen.getByText(/1 blocked/i)).toBeInTheDocument();
+    expect(screen.getByText(/Recent completion: Telegram updated/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Next step: Reopen the interrupted session and continue the task\./i),
+    ).toBeInTheDocument();
+  });
+
+  it("renders quiet-hours suppressed proactive state in the owner-aware summary", async () => {
+    const client = makeClient();
+
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={session("chat-a")}
+          sessions={[
+            {
+              ...telegramSession("12345"),
+              updatedAt: "2026-05-01T06:00:00Z",
+              metadata: {
+                continuity: {
+                  canonical_owner_id: "primary-user",
+                  channel_kind: "telegram",
+                  external_identity: "12345",
+                  trust_level: "linked",
+                },
+                proactive_summary: {
+                  status: "suppressed",
+                  category: "briefing",
+                  title: "Morning briefing ready",
+                  summary: "오늘 일정 1개와 승인 대기 1개가 있습니다.",
+                  target_channel: "telegram",
+                  suppressed_reason: "quiet_hours",
+                  updated_at: "2026-05-01T06:00:00Z",
+                },
+              },
+            },
+          ]}
+          title="Chat chat-a"
+          onToggleSidebar={() => {}}
+          onGoHome={() => {}}
+          onNewChat={vi.fn().mockResolvedValue("chat-a")}
+        />,
+      ),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Assistant summary")).toBeInTheDocument();
+    });
+    expect(screen.getByText(/1 proactive held/i)).toBeInTheDocument();
+    expect(screen.getByText(/Quiet hours held Morning briefing ready for Telegram/i)).toBeInTheDocument();
+    expect(screen.getByText(/Next step: open WebUI to review the held proactive update\./i)).toBeInTheDocument();
+  });
+
+  it("refreshes owner defaults after a websocket memory correction reply", async () => {
+    const client = makeClient();
+    const user = userEvent.setup();
+
+    function Harness() {
+      const initialSession = {
+        ...session("chat-a"),
+        metadata: {
+          continuity: {
+            canonical_owner_id: "primary-user",
+          },
+          task_summary: {
+            task_id: "session:websocket:chat-a",
+            canonical_owner_id: "primary-user",
+            title: "Review the local thread summary",
+            status: "completed",
+            origin_channel: "websocket",
+            origin_session_key: "websocket:chat-a",
+            updated_at: "2026-04-30T10:06:00Z",
+            next_step_hint: "Review the latest completed update if follow-up is needed.",
+          },
+          owner_profile: {
+            canonical_owner_id: "primary-user",
+            preferred_language: "ko-KR",
+            timezone: "Asia/Seoul",
+            response_tone: "direct",
+            response_length: "balanced",
+          },
+          memory_correction: {
+            actions: [
+              {
+                code: "not-default",
+                phrase: "이건 기본 선호가 아님",
+                target: "owner_profile",
+                store: "USER.md",
+              },
+            ],
+          },
+        },
+      };
+      const refreshedSession = {
+        ...initialSession,
+        metadata: {
+          ...initialSession.metadata,
+          owner_profile: {
+            canonical_owner_id: "primary-user",
+            preferred_language: "ko-KR",
+            timezone: "Asia/Seoul",
+            response_tone: "technical",
+            response_length: "balanced",
+          },
+        },
+      };
+      const [activeSession, setActiveSession] = useState(initialSession);
+
+      return (
+        <ThreadShell
+          session={activeSession}
+          sessions={[activeSession]}
+          title="Chat chat-a"
+          onToggleSidebar={() => {}}
+          onGoHome={() => {}}
+          onNewChat={vi.fn().mockResolvedValue("chat-a")}
+          onRefreshSessions={async () => {
+            setActiveSession(refreshedSession);
+          }}
+        />
+      );
+    }
+
+    render(wrap(client, <Harness />));
+
+    expect(screen.getByText(/Owner defaults: ko-KR · Asia\/Seoul · direct · balanced/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "이건 기본 선호가 아님" }));
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+
+    await act(async () => {
+      client._emitChat("chat-a", {
+        event: "message",
+        chat_id: "chat-a",
+        text: "USER.md 기본 선호 보정 항목에 추가했어요: 답변 길이는 기본적으로 간결하게 유지",
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText(/Owner defaults: ko-KR · Asia\/Seoul · technical · balanced/i)).toBeInTheDocument();
+    });
+  });
+
+  it("renders the latest mail action result from session metadata in the status block", async () => {
+    const client = makeClient();
+
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={{
+            ...session("chat-a"),
+            metadata: {
+              continuity: {
+                canonical_owner_id: "primary-user",
+                channel_kind: "websocket",
+                external_identity: "local-webui",
+                trust_level: "trusted",
+              },
+              action_result: {
+                action_id: "mail-draft-1",
+                domain: "mail",
+                action: "create_draft",
+                status: "completed",
+                title: "Draft ready",
+                summary: "Draft created for alice@example.com.",
+                next_step: "Review the draft before requesting send approval.",
+                visibility: {
+                  badge: "Draft ready",
+                  inline_status: "Mail draft created",
+                },
+                details: {
+                  draft_id: "draft-1",
+                  preview: {
+                    subject: "Budget follow-up",
+                    body_preview: "Sharing the revised budget.",
+                    to_recipients: ["alice@example.com"],
+                  },
+                },
+              },
+              task_summary: {
+                task_id: "session:websocket:chat-a",
+                canonical_owner_id: "primary-user",
+                title: "Draft ready",
+                status: "completed",
+                origin_channel: "websocket",
+                origin_session_key: "websocket:chat-a",
+                updated_at: "2026-05-01T11:00:00Z",
+                next_step_hint: "Review the draft before requesting send approval.",
+              },
+            },
+          }}
+          sessions={[]}
+          title="Chat chat-a"
+          onToggleSidebar={() => {}}
+          onGoHome={() => {}}
+          onNewChat={vi.fn().mockResolvedValue("chat-a")}
+        />,
+      ),
+    );
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Draft ready").length).toBeGreaterThan(0);
+    });
+    expect(screen.getByText("Draft created for alice@example.com.")).toBeInTheDocument();
+    expect(screen.getByText("Current task")).toBeInTheDocument();
+    expect(screen.getAllByText("Completed").length).toBeGreaterThan(0);
+    expect(screen.getByText("Mail result")).toBeInTheDocument();
+    expect(screen.getByText(/To:/i)).toBeInTheDocument();
+    expect(screen.getByText(/Subject:/i)).toBeInTheDocument();
+  });
+
+  it("renders a compact mail thread summary card from action_result details", async () => {
+    const client = makeClient();
+
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={{
+            ...session("chat-a"),
+            metadata: {
+              continuity: {
+                canonical_owner_id: "primary-user",
+                channel_kind: "websocket",
+                external_identity: "local-webui",
+                trust_level: "trusted",
+              },
+              action_result: {
+                action_id: "mail-thread-1",
+                domain: "mail",
+                action: "summarize_threads",
+                status: "completed",
+                title: "Thread summaries ready",
+                summary: "Summaries were generated for 1 threads.",
+                details: {
+                  threads: [
+                    {
+                      thread_id: "thread-1",
+                      subject: "Budget follow-up",
+                      summary: "Alice is waiting for approval before noon.",
+                    },
+                  ],
+                },
+              },
+              task_summary: {
+                task_id: "session:websocket:chat-a",
+                canonical_owner_id: "primary-user",
+                title: "Thread summaries ready",
+                status: "completed",
+                origin_channel: "websocket",
+                origin_session_key: "websocket:chat-a",
+                updated_at: "2026-05-01T11:00:00Z",
+                next_step_hint: "Create a reply draft for the thread that needs follow-up.",
+              },
+            },
+          }}
+          sessions={[]}
+          title="Chat chat-a"
+          onToggleSidebar={() => {}}
+          onGoHome={() => {}}
+          onNewChat={vi.fn().mockResolvedValue("chat-a")}
+        />,
+      ),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Mail result")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Thread summary")).toBeInTheDocument();
+    expect(screen.getByText("Budget follow-up")).toBeInTheDocument();
+    expect(screen.getByText("Alice is waiting for approval before noon.")).toBeInTheDocument();
+  });
+
+  it("renders approval pending badge for a mail send action result", async () => {
+    const client = makeClient();
+
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={{
+            ...session("chat-a"),
+            metadata: {
+              continuity: {
+                canonical_owner_id: "primary-user",
+                channel_kind: "websocket",
+                external_identity: "local-webui",
+                trust_level: "trusted",
+              },
+              approval_summary: {
+                status: "pending",
+                tool_name: "mail.send_message",
+                prompt_preview: "Approval required before sending this email.",
+              },
+              action_result: {
+                action_id: "mail-send-approval-1",
+                domain: "mail",
+                action: "send_message",
+                status: "waiting_approval",
+                title: "Mail send approval required",
+                summary: "Approval required before sending 'Budget follow-up' to alice@example.com.",
+                next_step: "Approve or deny the pending mail send request.",
+                details: {
+                  draft_id: "draft-123",
+                  preview: {
+                    subject: "Budget follow-up",
+                    body_preview: "Sharing revised notes",
+                    to_recipients: ["alice@example.com"],
+                  },
+                },
+              },
+              task_summary: {
+                task_id: "session:websocket:chat-a",
+                canonical_owner_id: "primary-user",
+                title: "Mail send approval required",
+                status: "waiting-approval",
+                origin_channel: "websocket",
+                origin_session_key: "websocket:chat-a",
+                updated_at: "2026-05-01T11:00:00Z",
+                next_step_hint: "Approve or deny the pending mail send request.",
+              },
+            },
+          }}
+          sessions={[]}
+          title="Chat chat-a"
+          onToggleSidebar={() => {}}
+          onGoHome={() => {}}
+          onNewChat={vi.fn().mockResolvedValue("chat-a")}
+        />,
+      ),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Mail result")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Approval pending")).toBeInTheDocument();
+    expect(screen.getAllByText("Waiting approval").length).toBeGreaterThan(0);
+  });
+
+  it("renders a calendar event preview card from action_result details", async () => {
+    const client = makeClient();
+
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={{
+            ...session("chat-a"),
+            metadata: {
+              continuity: {
+                canonical_owner_id: "primary-user",
+                channel_kind: "websocket",
+                external_identity: "local-webui",
+                trust_level: "trusted",
+              },
+              action_result: {
+                action_id: "calendar-create-1",
+                domain: "calendar",
+                action: "create_event",
+                status: "completed",
+                title: "Calendar event created",
+                summary: "5.2. 15:00부터 5.2. 16:00까지 치과 일정을 생성했습니다.",
+                details: {
+                  event_id: "event-123",
+                  preview: {
+                    title: "치과",
+                    start_at: "2026-05-02T15:00:00+09:00",
+                    end_at: "2026-05-02T16:00:00+09:00",
+                    location: "Seoul",
+                    description: "정기 검진",
+                  },
+                },
+              },
+              task_summary: {
+                task_id: "session:websocket:chat-a",
+                canonical_owner_id: "primary-user",
+                title: "Calendar event created",
+                status: "completed",
+                origin_channel: "websocket",
+                origin_session_key: "websocket:chat-a",
+                updated_at: "2026-05-01T11:00:00Z",
+                next_step_hint: "Review the latest completed update if follow-up is needed.",
+              },
+            },
+          }}
+          sessions={[]}
+          title="Chat chat-a"
+          onToggleSidebar={() => {}}
+          onGoHome={() => {}}
+          onNewChat={vi.fn().mockResolvedValue("chat-a")}
+        />,
+      ),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Calendar result")).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Title:/i)).toBeInTheDocument();
+    expect(screen.getByText(/When:/i)).toBeInTheDocument();
+    expect(screen.getByText(/Location:/i)).toBeInTheDocument();
   });
 
   it("renders ask_user options above the composer and sends selected answers", async () => {

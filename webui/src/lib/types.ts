@@ -74,6 +74,109 @@ export interface ChatSummary {
       message_id?: string | null;
       prompt_preview?: string;
     };
+    proactive_summary?: {
+      status?: string;
+      category?: string;
+      title?: string;
+      summary?: string;
+      target_channel?: string;
+      suppressed_reason?: string | null;
+      updated_at?: string | null;
+    };
+    pending_user_turn?: boolean;
+    runtime_checkpoint?: {
+      phase?: string;
+      iteration?: number;
+      model?: string;
+    };
+    task_summary?: {
+      task_id?: string;
+      canonical_owner_id?: string;
+      title?: string;
+      status?: string;
+      origin_channel?: string;
+      origin_session_key?: string;
+      updated_at?: string | null;
+      next_step_hint?: string;
+    };
+    owner_profile?: {
+      canonical_owner_id?: string;
+      preferred_language?: string;
+      timezone?: string;
+      response_tone?: string;
+      response_length?: string;
+    };
+    memory_boundary?: {
+      owner_profile?: string;
+      project_memory?: string;
+      session_state?: string;
+      raw_history?: string;
+    };
+    memory_correction?: {
+      actions?: Array<{
+        code?: string;
+        phrase?: string;
+        target?: string;
+        store?: string;
+      }>;
+    };
+    action_result?: {
+      action_id?: string;
+      domain?: string;
+      action?: string;
+      status?: string;
+      title?: string;
+      summary?: string;
+      next_step?: string | null;
+      visibility?: {
+        badge?: string | null;
+        inline_status?: string | null;
+        linked_summary?: string | null;
+      };
+      error?: {
+        code?: string;
+        message?: string;
+      } | null;
+      details?: {
+        draft_id?: string | null;
+        message_id?: string | null;
+        event_id?: string | null;
+        preview?: {
+          subject?: string;
+          body_preview?: string;
+          to_recipients?: string[];
+          cc_recipients?: string[];
+          bcc_recipients?: string[];
+          thread_id?: string | null;
+          title?: string;
+          start_at?: string;
+          end_at?: string;
+          location?: string | null;
+          description?: string | null;
+        };
+        mailbox_label?: string | null;
+        total_candidates?: number | null;
+        summary_text?: string | null;
+        window_label?: string | null;
+        requested_start_at?: string;
+        requested_end_at?: string;
+        available?: boolean;
+        checked_window_label?: string | null;
+        reason?: string | null;
+        threads?: Array<{
+          thread_id?: string;
+          subject?: string;
+          sender_summary?: string;
+          last_update_at?: string;
+          unread?: boolean;
+          importance_hint?: string | null;
+          snippet?: string | null;
+          summary?: string | null;
+          urgency?: string | null;
+          recommended_next_action?: string | null;
+        }>;
+      };
+    };
   };
 }
 
@@ -96,6 +199,109 @@ export interface SessionMessagesResponse {
       tool_call_id?: string;
       message_id?: string | null;
       prompt_preview?: string;
+    };
+    proactive_summary?: {
+      status?: string;
+      category?: string;
+      title?: string;
+      summary?: string;
+      target_channel?: string;
+      suppressed_reason?: string | null;
+      updated_at?: string | null;
+    };
+    pending_user_turn?: boolean;
+    runtime_checkpoint?: {
+      phase?: string;
+      iteration?: number;
+      model?: string;
+    };
+    task_summary?: {
+      task_id?: string;
+      canonical_owner_id?: string;
+      title?: string;
+      status?: string;
+      origin_channel?: string;
+      origin_session_key?: string;
+      updated_at?: string | null;
+      next_step_hint?: string;
+    };
+    owner_profile?: {
+      canonical_owner_id?: string;
+      preferred_language?: string;
+      timezone?: string;
+      response_tone?: string;
+      response_length?: string;
+    };
+    memory_boundary?: {
+      owner_profile?: string;
+      project_memory?: string;
+      session_state?: string;
+      raw_history?: string;
+    };
+    memory_correction?: {
+      actions?: Array<{
+        code?: string;
+        phrase?: string;
+        target?: string;
+        store?: string;
+      }>;
+    };
+    action_result?: {
+      action_id?: string;
+      domain?: string;
+      action?: string;
+      status?: string;
+      title?: string;
+      summary?: string;
+      next_step?: string | null;
+      visibility?: {
+        badge?: string | null;
+        inline_status?: string | null;
+        linked_summary?: string | null;
+      };
+      error?: {
+        code?: string;
+        message?: string;
+      } | null;
+      details?: {
+        draft_id?: string | null;
+        message_id?: string | null;
+        event_id?: string | null;
+        preview?: {
+          subject?: string;
+          body_preview?: string;
+          to_recipients?: string[];
+          cc_recipients?: string[];
+          bcc_recipients?: string[];
+          thread_id?: string | null;
+          title?: string;
+          start_at?: string;
+          end_at?: string;
+          location?: string | null;
+          description?: string | null;
+        };
+        mailbox_label?: string | null;
+        total_candidates?: number | null;
+        summary_text?: string | null;
+        window_label?: string | null;
+        requested_start_at?: string;
+        requested_end_at?: string;
+        available?: boolean;
+        checked_window_label?: string | null;
+        reason?: string | null;
+        threads?: Array<{
+          thread_id?: string;
+          subject?: string;
+          sender_summary?: string;
+          last_update_at?: string;
+          unread?: boolean;
+          importance_hint?: string | null;
+          snippet?: string | null;
+          summary?: string | null;
+          urgency?: string | null;
+          recommended_next_action?: string | null;
+        }>;
+      };
     };
   };
   messages: Array<{

@@ -11,6 +11,12 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { relativeTime } from "@/lib/format";
+import {
+  approvalPendingBadgeLabel,
+  approvalSummaryLabel,
+  hasPendingApproval,
+  toChannelBadgeLabel,
+} from "@/lib/sessionMetadata";
 import { cn } from "@/lib/utils";
 import type { ChatSummary } from "@/lib/types";
 
@@ -34,23 +40,6 @@ function targetBadgeLabel(activeTarget: string | null | undefined): string | nul
   if (!trimmed || trimmed === "default") return null;
   if (trimmed === "smart_router") return "smart-router";
   return trimmed;
-}
-
-function channelBadgeLabel(channel: string): string | null {
-  if (!channel || channel === "websocket") return null;
-  return channel;
-}
-
-function hasPendingApproval(session: ChatSummary): boolean {
-  return session.metadata?.approval_summary?.status === "pending";
-}
-
-function approvalSummaryLabel(session: ChatSummary): string | null {
-  const summary = session.metadata?.approval_summary;
-  if (!summary || summary.status !== "pending") return null;
-  const toolName = summary.tool_name?.trim() || "tool";
-  const promptPreview = summary.prompt_preview?.trim();
-  return promptPreview ? `${toolName}: ${promptPreview}` : `${toolName} approval pending`;
 }
 
 export function ChatList({
@@ -89,7 +78,7 @@ export function ChatList({
             t("chat.fallbackTitle", { id: s.chatId.slice(0, 6) }),
           );
           const badge = targetBadgeLabel(s.activeTarget);
-          const channelBadge = channelBadgeLabel(s.channel);
+          const channelBadge = s.channel === "websocket" ? null : toChannelBadgeLabel(s.channel);
           const approvalBadge = hasPendingApproval(s);
           const approvalSummary = approvalSummaryLabel(s);
           const approvalExpanded = expandedApprovalKey === s.key;
@@ -137,7 +126,7 @@ export function ChatList({
                         aria-expanded={approvalExpanded}
                         aria-controls={approvalDetailId}
                       >
-                        Approval pending
+                        {approvalPendingBadgeLabel()}
                       </button>
                       {approvalExpanded && approvalSummary ? (
                         <div

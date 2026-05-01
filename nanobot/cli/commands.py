@@ -1,6 +1,7 @@
 """CLI commands for nanobot."""
 
 import asyncio
+from datetime import datetime
 import os
 import select
 import signal
@@ -693,6 +694,13 @@ def _run_gateway(
 
     from nanobot.agent.loop import UNIFIED_SESSION_KEY
     from nanobot.bus.events import OutboundMessage
+    from nanobot.heartbeat.proactive import (
+        HeartbeatProactivePolicy,
+        build_proactive_context,
+        classify_proactive_task,
+        decide_heartbeat_target,
+        proactive_title_for_task,
+    )
 
     def _channel_session_key(channel: str, chat_id: str) -> str:
         return (
@@ -810,21 +818,29 @@ def _run_gateway(
     # can serve the embedded webui's REST surface).
     channels = ChannelManager(config, bus, session_manager=session_manager)
 
-    def _pick_heartbeat_target() -> tuple[str, str]:
+    hb_cfg = config.gateway.heartbeat
+
+    heartbeat_policy = HeartbeatProactivePolicy(
+        webui_first=hb_cfg.webui_first,
+        max_digest_items=hb_cfg.max_digest_items,
+        quiet_hours_enabled=hb_cfg.quiet_hours_enabled,
+        quiet_hours_start_local_time=hb_cfg.quiet_hours_start_local_time,
+        quiet_hours_end_local_time=hb_cfg.quiet_hours_end_local_time,
+        quiet_hours_timezone=hb_cfg.quiet_hours_timezone,
+        quiet_hours_allow_critical=hb_cfg.quiet_hours_allow_critical,
+        quiet_hours_allowed_channels=tuple(hb_cfg.quiet_hours_allowed_channels),
+    )
+
+    def _pick_heartbeat_target(*, severity: str = "normal") -> tuple[str, str, bool, str | None]:
         """Pick a routable channel/chat target for heartbeat-triggered messages."""
-        enabled = set(channels.enabled_channels)
-        # Prefer the most recently updated non-internal session on an enabled channel.
-        for item in session_manager.list_sessions():
-            key = item.get("key") or ""
-            if ":" not in key:
-                continue
-            channel, chat_id = key.split(":", 1)
-            if channel in {"cli", "system"}:
-                continue
-            if channel in enabled and chat_id:
-                return channel, chat_id
-        # Fallback keeps prior behavior but remains explicit.
-        return "cli", "direct"
+        decision = decide_heartbeat_target(
+            session_manager.list_sessions(),
+            set(channels.enabled_channels),
+            policy=heartbeat_policy,
+            severity=severity,
+            fallback_timezone=config.agents.defaults.timezone,
+        )
+        return decision.channel, decision.chat_id, decision.suppressed, decision.reason
 
     # Create heartbeat service
     heartbeat_preamble = (
@@ -832,18 +848,52 @@ def _run_gateway(
         "Output ONLY the final user-facing message. Never reference internal "
         "files (HEARTBEAT.md, AWARENESS.md, etc.), your instructions, or your "
         "decision process. If nothing needs reporting, respond with just "
-        "'All clear.' and nothing else.]\n\n"
+        "'All clear.' and nothing else. If the task asks for a morning briefing, "
+        "produce a concise Korean briefing that starts with the highest-priority "
+        "item, then approvals or blocked work, then the single best next step.]\n\n"
     )
+    heartbeat_state: dict[str, str] = {"tasks": ""}
+
+    def _record_heartbeat_proactive_summary(
+        *,
+        channel: str,
+        chat_id: str,
+        status: str,
+        summary: str,
+        suppressed_reason: str | None = None,
+    ) -> None:
+        if channel == "cli":
+            return
+        session = session_manager.get_or_create(_channel_session_key(channel, chat_id))
+        tasks = heartbeat_state.get("tasks", "")
+        session_manager.set_proactive_summary(
+            session,
+            {
+                "status": status,
+                "category": classify_proactive_task(tasks),
+                "title": proactive_title_for_task(tasks),
+                "summary": summary,
+                "target_channel": channel,
+                "suppressed_reason": suppressed_reason,
+                "updated_at": datetime.now().isoformat(),
+            },
+        )
+        session_manager.save(session)
 
     async def on_heartbeat_execute(tasks: str) -> str:
         """Phase 2: execute heartbeat tasks through the full agent loop."""
-        channel, chat_id = _pick_heartbeat_target()
+        heartbeat_state["tasks"] = tasks
+        channel, chat_id, _suppressed, _reason = _pick_heartbeat_target()
+        proactive_context = build_proactive_context(
+            session_manager.list_sessions(),
+            max_digest_items=heartbeat_policy.max_digest_items,
+        )
 
         async def _silent(*_args, **_kwargs):
             pass
 
         resp = await agent.process_direct(
-            heartbeat_preamble + tasks,
+            heartbeat_preamble + proactive_context + tasks,
             session_key="heartbeat",
             channel=channel,
             chat_id=chat_id,
@@ -867,16 +917,32 @@ def _run_gateway(
         lands in a session that has no context about the heartbeat message
         and the agent cannot follow through.
         """
-        channel, chat_id = _pick_heartbeat_target()
+        channel, chat_id, suppressed, reason = _pick_heartbeat_target()
+        if suppressed:
+            _record_heartbeat_proactive_summary(
+                channel=channel,
+                chat_id=chat_id,
+                status="suppressed",
+                summary=response,
+                suppressed_reason=reason,
+            )
+            logger.info("Heartbeat: suppressed delivery to {}:{} ({})", channel, chat_id, reason)
+            return
         if channel == "cli":
             return  # No external channel available to deliver to
+
+        _record_heartbeat_proactive_summary(
+            channel=channel,
+            chat_id=chat_id,
+            status="delivered",
+            summary=response,
+        )
 
         await _deliver_to_channel(
             OutboundMessage(channel=channel, chat_id=chat_id, content=response),
             record=True,
         )
 
-    hb_cfg = config.gateway.heartbeat
     heartbeat = HeartbeatService(
         workspace=config.workspace_path,
         provider=provider,

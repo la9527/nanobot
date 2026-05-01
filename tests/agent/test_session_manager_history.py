@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from nanobot.automation_results import MailCreateDraftDetails, MailCreateDraftResult, MailDraftPreview
 from nanobot.session.manager import Session, SessionManager
 
 
@@ -212,6 +213,42 @@ def test_session_manager_persists_minimal_continuity_metadata(tmp_path: Path):
         "trust_level": "linked",
         "last_confirmed_at": session.updated_at.isoformat(),
     }
+
+
+def test_session_manager_persists_action_result_metadata(tmp_path: Path):
+    manager = SessionManager(tmp_path)
+    session = manager.get_or_create("websocket:mail-demo")
+
+    manager.set_action_result(
+        session,
+        MailCreateDraftResult(
+            action_id="mail-draft-1",
+            status="completed",
+            title="Draft ready",
+            summary="Draft created for alice@example.com.",
+            next_step="Review the draft before requesting send approval.",
+            details=MailCreateDraftDetails(
+                draft_id="draft-1",
+                preview=MailDraftPreview(
+                    subject="Budget follow-up",
+                    body_preview="Sharing the revised budget.",
+                    to_recipients=["alice@example.com"],
+                ),
+            ),
+        ),
+    )
+
+    manager.save(session)
+    restored = manager.read_session_file("websocket:mail-demo")
+
+    assert restored is not None
+    action_result = restored["metadata"]["action_result"]
+    assert action_result["title"] == "Draft ready"
+    assert action_result["details"]["draft_id"] == "draft-1"
+    task_summary = restored["metadata"]["task_summary"]
+    assert task_summary["title"] == "Draft ready"
+    assert task_summary["status"] == "completed"
+    assert task_summary["next_step_hint"] == "Review the draft before requesting send approval."
 
 
 def test_get_history_annotates_user_turns_but_not_assistant_turns():

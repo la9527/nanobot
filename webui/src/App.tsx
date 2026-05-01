@@ -430,10 +430,12 @@ function Shell({ onModelNameChange }: { onModelNameChange: (modelName: string | 
         ) : (
           <ThreadShell
             session={activeSession}
+            sessions={sessions}
             title={headerTitle}
             onToggleSidebar={toggleSidebar}
             onGoHome={() => setActiveKey(null)}
             onNewChat={onNewChat}
+            onRefreshSessions={refresh}
             hideSidebarToggleOnDesktop={desktopSidebarOpen}
           />
         )}

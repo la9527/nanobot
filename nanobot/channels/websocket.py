@@ -35,6 +35,10 @@ from nanobot.bus.queue import MessageBus
 from nanobot.channels.base import BaseChannel
 from nanobot.config.paths import get_media_dir
 from nanobot.config.schema import Base
+from nanobot.session.memory_corrections import (
+    apply_memory_correction,
+    parse_memory_correction_message,
+)
 from nanobot.utils.helpers import safe_filename
 from nanobot.utils.media_decode import (
     FileSizeExceeded,
@@ -1247,6 +1251,37 @@ class WebSocketChannel(BaseChannel):
         )
         return None
 
+    async def _maybe_apply_memory_correction(
+        self,
+        *,
+        chat_id: str,
+        content: str,
+        session_key: str,
+    ) -> bool:
+        if self._session_manager is None:
+            return False
+
+        request = parse_memory_correction_message(content)
+        if request is None:
+            return False
+
+        result = apply_memory_correction(self._session_manager.workspace, request)
+        session = self._session_manager.get_or_create(session_key)
+        session.add_message("user", content)
+        session.add_message("assistant", result.reply)
+        self._session_manager.save(session)
+
+        if session_key.startswith("websocket:"):
+            await self.send(
+                OutboundMessage(
+                    channel="websocket",
+                    chat_id=chat_id,
+                    content=result.reply,
+                )
+            )
+
+        return True
+
     def _serve_static(self, request_path: str) -> Response | None:
         """Resolve *request_path* against the built SPA directory; SPA fallback to index.html."""
         assert self._static_dist_path is not None
@@ -1539,6 +1574,12 @@ class WebSocketChannel(BaseChannel):
 
             # Auto-attach on first use so clients can one-shot without a separate attach.
             self._attach(connection, cid)
+            if not media_paths and await self._maybe_apply_memory_correction(
+                chat_id=cid,
+                content=content,
+                session_key=f"websocket:{cid}",
+            ):
+                return
             await self._handle_message(
                 sender_id=client_id,
                 chat_id=cid,
@@ -1580,6 +1621,13 @@ class WebSocketChannel(BaseChannel):
 
             if not content.strip() and not media_paths:
                 await self._send_event(connection, "error", detail="missing content")
+                return
+
+            if not media_paths and await self._maybe_apply_memory_correction(
+                chat_id=decoded_key,
+                content=content,
+                session_key=decoded_key,
+            ):
                 return
 
             error = await self._publish_bridged_session_message(

@@ -10,8 +10,10 @@ from typing import Any
 
 from loguru import logger
 
+from nanobot.agent.memory import MemoryStore
+from nanobot.automation_results import ActionResult
 from nanobot.config.paths import get_legacy_sessions_dir
-from nanobot.session.continuity import normalized_session_metadata
+from nanobot.session.continuity import ACTION_RESULT_METADATA_KEY, normalized_session_metadata
 from nanobot.utils.helpers import (
     ensure_dir,
     estimate_message_tokens,
@@ -247,6 +249,7 @@ class SessionManager:
         self.workspace = workspace
         self.sessions_dir = ensure_dir(self.workspace / "sessions")
         self.legacy_sessions_dir = get_legacy_sessions_dir()
+        self._memory_store = MemoryStore(workspace)
         self._cache: dict[str, Session] = {}
 
     @staticmethod
@@ -282,6 +285,7 @@ class SessionManager:
             session.key,
             session.metadata,
             last_confirmed_at=session.updated_at.isoformat(),
+            user_profile_source=self._memory_store.read_user(),
         )
 
         self._cache[key] = session
@@ -337,6 +341,7 @@ class SessionManager:
                 session.key,
                 session.metadata,
                 last_confirmed_at=session.updated_at.isoformat(),
+                user_profile_source=self._memory_store.read_user(),
             )
             return session
         except Exception as e:
@@ -405,6 +410,7 @@ class SessionManager:
                 session.key,
                 session.metadata,
                 last_confirmed_at=session.updated_at.isoformat(),
+                user_profile_source=self._memory_store.read_user(),
             )
             return session
         except Exception as e:
@@ -421,6 +427,7 @@ class SessionManager:
                 session.key,
                 session.metadata,
                 last_confirmed_at=session.updated_at.isoformat(),
+                user_profile_source=self._memory_store.read_user(),
             ),
             "messages": session.messages,
         }
@@ -441,6 +448,7 @@ class SessionManager:
             session.key,
             session.metadata,
             last_confirmed_at=session.updated_at.isoformat(),
+            user_profile_source=self._memory_store.read_user(),
         )
 
         try:
@@ -480,6 +488,40 @@ class SessionManager:
             raise
 
         self._cache[session.key] = session
+
+    def set_action_result(self, session: Session, action_result: ActionResult | dict[str, Any]) -> None:
+        """Persist the latest normalized action result on session metadata."""
+        if isinstance(action_result, ActionResult):
+            payload = action_result.model_dump(mode="json")
+        else:
+            payload = dict(action_result)
+        session.metadata[ACTION_RESULT_METADATA_KEY] = payload
+        session.updated_at = datetime.now()
+
+    def clear_action_result(self, session: Session) -> None:
+        """Remove the latest action result from session metadata."""
+        if session.metadata.pop(ACTION_RESULT_METADATA_KEY, None) is not None:
+            session.updated_at = datetime.now()
+
+    def set_approval_summary(self, session: Session, approval_summary: dict[str, Any]) -> None:
+        """Persist the latest approval summary on session metadata."""
+        session.metadata["approval_summary"] = dict(approval_summary)
+        session.updated_at = datetime.now()
+
+    def clear_approval_summary(self, session: Session) -> None:
+        """Remove the latest approval summary from session metadata."""
+        if session.metadata.pop("approval_summary", None) is not None:
+            session.updated_at = datetime.now()
+
+    def set_proactive_summary(self, session: Session, proactive_summary: dict[str, Any]) -> None:
+        """Persist the latest proactive delivery or suppression summary on session metadata."""
+        session.metadata["proactive_summary"] = dict(proactive_summary)
+        session.updated_at = datetime.now()
+
+    def clear_proactive_summary(self, session: Session) -> None:
+        """Remove the latest proactive summary from session metadata."""
+        if session.metadata.pop("proactive_summary", None) is not None:
+            session.updated_at = datetime.now()
 
     def flush_all(self) -> int:
         """Re-save every cached session with fsync for durable shutdown.
@@ -543,6 +585,7 @@ class SessionManager:
                             stored_key or key,
                             data.get("metadata", {}),
                             last_confirmed_at=data.get("updated_at"),
+                            user_profile_source=self._memory_store.read_user(),
                         )
                         created_at = data.get("created_at")
                         updated_at = data.get("updated_at")
@@ -591,6 +634,7 @@ class SessionManager:
                                     key,
                                     data.get("metadata", {}),
                                     last_confirmed_at=data.get("updated_at"),
+                                    user_profile_source=self._memory_store.read_user(),
                                 ),
                                 "path": str(path)
                             })
@@ -605,6 +649,7 @@ class SessionManager:
                             repaired.key,
                             repaired.metadata,
                             last_confirmed_at=repaired.updated_at.isoformat(),
+                            user_profile_source=self._memory_store.read_user(),
                         ),
                         "path": str(path)
                     })

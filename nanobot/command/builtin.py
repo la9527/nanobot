@@ -4,8 +4,23 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shlex
 import sys
+from typing import Any
 
+from nanobot.automation.calendar import (
+    CalendarAutomationSessionRunner,
+    CalendarCreateRequest,
+    N8NCalendarAutomationClient,
+    N8NCalendarAutomationConfig,
+)
+from nanobot.automation.mail import (
+    MailAutomationSessionRunner,
+    MailDraftRequest,
+    MailSendRequest,
+    N8NGmailAutomationClient,
+    N8NGmailAutomationConfig,
+)
 from nanobot import __version__
 from nanobot.bus.events import OutboundMessage
 from nanobot.command.router import CommandContext, CommandRouter
@@ -17,6 +32,10 @@ from nanobot.response_status import (
 )
 from nanobot.utils.helpers import build_status_content
 from nanobot.utils.restart import set_restart_notice_to_env
+
+
+CALENDAR_CREATE_INPUT_METADATA_KEY = "calendar_create_input"
+CALENDAR_CREATE_CANCEL_CHOICES = [["취소"]]
 
 
 async def cmd_stop(ctx: CommandContext) -> OutboundMessage:
@@ -541,6 +560,594 @@ async def cmd_help(ctx: CommandContext) -> OutboundMessage:
     )
 
 
+def _mail_runner_for_ctx(ctx: CommandContext) -> MailAutomationSessionRunner | None:
+    runner = getattr(ctx.loop, "mail_automation_runner", None)
+    if runner is not None:
+        return runner
+    config = N8NGmailAutomationConfig.from_env()
+    if config is None:
+        return None
+    return MailAutomationSessionRunner(
+        ctx.loop.sessions,
+        N8NGmailAutomationClient(config),
+    )
+
+
+def _calendar_runner_for_ctx(ctx: CommandContext) -> CalendarAutomationSessionRunner | None:
+    runner = getattr(ctx.loop, "calendar_automation_runner", None)
+    if runner is not None:
+        return runner
+    config = N8NCalendarAutomationConfig.from_env()
+    if config is None:
+        return None
+    return CalendarAutomationSessionRunner(
+        ctx.loop.sessions,
+        N8NCalendarAutomationClient(config),
+    )
+
+
+def _mail_command_tokens(ctx: CommandContext) -> list[str]:
+    raw = ctx.raw.strip()
+    first, sep, rest = raw.partition(" ")
+    if first.startswith("/mail@"):
+        first = first.partition("@")[0]
+        raw = first if not sep else f"{first}{sep}{rest}"
+    if raw.startswith("/mail"):
+        raw = raw[5:].strip()
+    return shlex.split(raw)
+
+
+def _mail_help_text() -> str:
+    return "\n".join([
+        "## Mail Automation",
+        "",
+        "Use one of the following:",
+        "- `/mail list [gmail-query]`",
+        "- `/mail thread <thread-id> [more-thread-ids...]`",
+        "- `/mail draft --to alice@example.com[,bob@example.com] --subject \"...\" --body \"...\" [--cc ...] [--bcc ...] [--thread thread-id]`",
+        "- `/mail send` to request approval for the latest draft in this session",
+        "- `/mail send --to alice@example.com --subject \"...\" --body \"...\"` to request approval for a new outbound email",
+        "- `/mail approve` or `/mail deny` to resolve the pending send approval",
+    ])
+
+
+def _calendar_command_tokens(ctx: CommandContext) -> list[str]:
+    raw = ctx.raw.strip()
+    first, sep, rest = raw.partition(" ")
+    if first.startswith("/calendar@"):
+        first = first.partition("@")[0]
+        raw = first if not sep else f"{first}{sep}{rest}"
+    if raw.startswith("/calendar"):
+        raw = raw[9:].strip()
+    return shlex.split(raw)
+
+
+def _calendar_help_text() -> str:
+    return "\n".join([
+        "## Calendar Automation",
+        "",
+        "Use one of the following:",
+        "- `/calendar today` to summarize today's schedule",
+        "- `/calendar check --start 2026-05-02T15:00:00+09:00 --end 2026-05-02T16:00:00+09:00`",
+        "- `/calendar create --title \"Dentist\" --start 2026-05-02T15:00:00+09:00 --end 2026-05-02T16:00:00+09:00 [--location ...] [--details ...]`",
+        "- `/calendar approve` or `/calendar deny` to resolve the pending create approval",
+    ])
+
+
+def _parse_csv_arg(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _parse_mail_options(tokens: list[str]) -> dict[str, str]:
+    parsed: dict[str, str] = {}
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if not token.startswith("--"):
+            index += 1
+            continue
+        key = token[2:]
+        value = ""
+        if index + 1 < len(tokens) and not tokens[index + 1].startswith("--"):
+            value = tokens[index + 1]
+            index += 2
+        else:
+            index += 1
+        parsed[key] = value
+    return parsed
+
+
+def _parse_flag_options(tokens: list[str]) -> dict[str, str]:
+    return _parse_mail_options(tokens)
+
+
+def _mail_threads_content(result) -> str:
+    lines = [result.title, "", result.summary]
+    threads = getattr(result.details, "threads", [])
+    if threads:
+        lines.append("")
+        for index, thread in enumerate(threads[:5], start=1):
+            label = getattr(thread, "sender_summary", None) or getattr(thread, "summary", None) or ""
+            subject = getattr(thread, "subject", "(No subject)")
+            extra = f" ({label})" if label else ""
+            lines.append(f"{index}. {subject}{extra}")
+    if result.next_step:
+        lines.extend(["", f"Next step: {result.next_step}"])
+    return "\n".join(lines)
+
+
+def _mail_draft_content(result) -> str:
+    preview = result.details.preview
+    recipients = ", ".join(preview.to_recipients)
+    lines = [result.title, "", result.summary]
+    lines.extend([
+        "",
+        f"To: {recipients}",
+        f"Subject: {preview.subject}",
+        f"Preview: {preview.body_preview}",
+    ])
+    if result.next_step:
+        lines.extend(["", f"Next step: {result.next_step}"])
+    return "\n".join(lines)
+
+
+def _mail_send_content(result) -> str:
+    preview = result.details.preview
+    recipients = ", ".join(preview.to_recipients)
+    lines = [result.title, "", result.summary]
+    if recipients or preview.subject or preview.body_preview:
+        lines.extend([
+            "",
+            f"To: {recipients or '-'}",
+            f"Subject: {preview.subject or '(No subject)'}",
+            f"Preview: {preview.body_preview or '-'}",
+        ])
+    if result.next_step:
+        lines.extend(["", f"Next step: {result.next_step}"])
+    return "\n".join(lines)
+
+
+def _calendar_result_content(result) -> str:
+    lines = [result.title, "", result.summary]
+    preview = getattr(result.details, "preview", None)
+    if preview is not None:
+        lines.extend([
+            "",
+            f"Title: {preview.title}",
+            f"When: {preview.start_at} -> {preview.end_at}",
+        ])
+        if getattr(preview, "location", None):
+            lines.append(f"Location: {preview.location}")
+        if getattr(preview, "description", None):
+            lines.append(f"Details: {preview.description}")
+    else:
+        requested_start_at = getattr(result.details, "requested_start_at", None)
+        requested_end_at = getattr(result.details, "requested_end_at", None)
+        if requested_start_at and requested_end_at:
+            lines.extend([
+                "",
+                f"When: {requested_start_at} -> {requested_end_at}",
+            ])
+        conflicting_events = getattr(result.details, "conflicting_events", []) or []
+        if conflicting_events:
+            lines.append("")
+            for index, event in enumerate(conflicting_events[:5], start=1):
+                lines.append(
+                    f"{index}. {event.title} ({event.start_at} -> {event.end_at})"
+                )
+    if result.next_step:
+        lines.extend(["", f"Next step: {result.next_step}"])
+    return "\n".join(lines)
+
+
+def _calendar_pending_input(session) -> dict[str, Any] | None:
+    payload = session.metadata.get(CALENDAR_CREATE_INPUT_METADATA_KEY)
+    return payload if isinstance(payload, dict) else None
+
+
+def _clear_calendar_pending_input(session, ctx: CommandContext | None = None) -> None:
+    if session.metadata.pop(CALENDAR_CREATE_INPUT_METADATA_KEY, None) is not None and ctx is not None:
+        ctx.loop.sessions.save(session)
+
+
+def _calendar_pending_payload(parsed: dict[str, str], expected_field: str) -> dict[str, Any]:
+    return {
+        "title": (parsed.get("title") or "").strip() or None,
+        "start_at": (parsed.get("start") or "").strip() or None,
+        "end_at": (parsed.get("end") or "").strip() or None,
+        "location": (parsed.get("location") or "").strip() or None,
+        "description": (parsed.get("details") or "").strip() or None,
+        "expected_field": expected_field,
+    }
+
+
+def _calendar_missing_required_fields(payload: dict[str, Any]) -> list[str]:
+    missing: list[str] = []
+    for field in ("title", "start_at", "end_at"):
+        if not str(payload.get(field) or "").strip():
+            missing.append(field)
+    return missing
+
+
+def _calendar_prompt_for_field(field: str) -> str:
+    if field == "title":
+        return "Calendar create needs a title. Reply with the event title, or choose 취소 to stop."
+    if field == "start_at":
+        return "Calendar create needs a start time. Reply with an ISO time like 2026-05-02T15:00:00+09:00, or choose 취소."
+    return "Calendar create needs an end time. Reply with an ISO time like 2026-05-02T16:00:00+09:00, or choose 취소."
+
+
+def _calendar_prompt_response(ctx: CommandContext, session, payload: dict[str, Any], question: str) -> OutboundMessage:
+    payload["expected_field"] = payload.get("expected_field") or _calendar_missing_required_fields(payload)[0]
+    session.metadata[CALENDAR_CREATE_INPUT_METADATA_KEY] = payload
+    session.add_message("assistant", question, buttons=CALENDAR_CREATE_CANCEL_CHOICES)
+    ctx.loop.sessions.save(session)
+    return OutboundMessage(
+        channel=ctx.msg.channel,
+        chat_id=ctx.msg.chat_id,
+        content=question,
+        buttons=CALENDAR_CREATE_CANCEL_CHOICES,
+        metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+    )
+
+
+def _normalize_calendar_datetime(value: str, timezone: str = "Asia/Seoul") -> str | None:
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    text = value.strip()
+    if not text:
+        return None
+    normalized = text.replace(" ", "T")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=ZoneInfo(timezone))
+    return parsed.isoformat()
+
+
+async def _calendar_pending_input_interceptor(ctx: CommandContext) -> OutboundMessage | None:
+    session = ctx.session
+    if session is None:
+        return None
+    pending = _calendar_pending_input(session)
+    if pending is None:
+        return None
+
+    answer = ctx.raw.strip()
+    if not answer:
+        return None
+    if answer.lower() in {"취소", "cancel", "stop", "abort"}:
+        _clear_calendar_pending_input(session, ctx)
+        session.add_message("assistant", "Calendar create input was cancelled.")
+        ctx.loop.sessions.save(session)
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content="Calendar create input was cancelled.",
+            metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+        )
+
+    expected_field = str(pending.get("expected_field") or "title")
+    if expected_field == "title":
+        pending["title"] = answer
+    elif expected_field in {"start_at", "end_at"}:
+        normalized = _normalize_calendar_datetime(answer)
+        if normalized is None:
+            return _calendar_prompt_response(
+                ctx,
+                session,
+                pending,
+                f"The {expected_field[:-3] if expected_field.endswith('_at') else expected_field} time must be ISO format, for example 2026-05-02T15:00:00+09:00.",
+            )
+        pending[expected_field] = normalized
+    else:
+        return None
+
+    if pending.get("start_at") and pending.get("end_at") and pending["end_at"] <= pending["start_at"]:
+        pending["end_at"] = None
+        pending["expected_field"] = "end_at"
+        return _calendar_prompt_response(
+            ctx,
+            session,
+            pending,
+            "Calendar create needs an end time later than the start time. Reply with a later ISO end time, or choose 취소.",
+        )
+
+    missing = _calendar_missing_required_fields(pending)
+    if missing:
+        next_field = missing[0]
+        pending["expected_field"] = next_field
+        return _calendar_prompt_response(ctx, session, pending, _calendar_prompt_for_field(next_field))
+
+    _clear_calendar_pending_input(session)
+    ctx.loop.sessions.save(session)
+    runner = _calendar_runner_for_ctx(ctx)
+    if runner is None:
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content="Calendar automation is not configured. Set N8N_BASE_URL and the Calendar webhook env vars first.",
+            metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+        )
+    result = await runner.request_create_approval(
+        ctx.key,
+        CalendarCreateRequest(
+            title=str(pending.get("title") or "").strip(),
+            start_at=str(pending.get("start_at") or "").strip(),
+            end_at=str(pending.get("end_at") or "").strip(),
+            location=str(pending.get("location") or "").strip() or None,
+            description=str(pending.get("description") or "").strip() or None,
+        ),
+    )
+    return OutboundMessage(
+        channel=ctx.msg.channel,
+        chat_id=ctx.msg.chat_id,
+        content=_calendar_result_content(result),
+        metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+    )
+
+
+async def cmd_mail(ctx: CommandContext) -> OutboundMessage:
+    """Run phase-1 Gmail pilot actions through the mail automation runner."""
+    runner = _mail_runner_for_ctx(ctx)
+    if runner is None:
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content="Mail automation is not configured. Set N8N_BASE_URL and the Gmail webhook env vars first.",
+            metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+        )
+
+    tokens = _mail_command_tokens(ctx)
+    if not tokens:
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content=_mail_help_text(),
+            metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+        )
+
+    subcommand = tokens[0].lower()
+    if subcommand == "list":
+        query = " ".join(tokens[1:]).strip() or "newer_than:7d"
+        result = await runner.list_important_threads(ctx.key, search_query=query, limit=5)
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content=_mail_threads_content(result),
+            metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+        )
+
+    if subcommand == "thread":
+        thread_ids = [token for token in tokens[1:] if token.strip()]
+        if not thread_ids:
+            content = "Usage: /mail thread <thread-id> [more-thread-ids...]"
+        else:
+            result = await runner.summarize_threads(ctx.key, thread_ids=thread_ids)
+            content = _mail_threads_content(result)
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content=content,
+            metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+        )
+
+    if subcommand == "draft":
+        parsed = _parse_mail_options(tokens[1:])
+        to_recipients = _parse_csv_arg(parsed.get("to"))
+        subject = (parsed.get("subject") or "").strip()
+        body = (parsed.get("body") or "").strip()
+        if not to_recipients or not subject or not body:
+            content = (
+                "Usage: /mail draft --to alice@example.com --subject \"Budget follow-up\" "
+                "--body \"Sharing the revised budget\" [--cc ...] [--bcc ...] [--thread thread-id]"
+            )
+        else:
+            result = await runner.create_draft(
+                ctx.key,
+                MailDraftRequest(
+                    to_recipients=to_recipients,
+                    cc_recipients=_parse_csv_arg(parsed.get("cc")),
+                    bcc_recipients=_parse_csv_arg(parsed.get("bcc")),
+                    subject=subject,
+                    body=body,
+                    thread_id=(parsed.get("thread") or "").strip() or None,
+                ),
+            )
+            content = _mail_draft_content(result)
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content=content,
+            metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+        )
+
+    if subcommand == "send":
+        parsed = _parse_mail_options(tokens[1:])
+        has_explicit_payload = any(parsed.get(key) for key in ("to", "subject", "body"))
+        if has_explicit_payload:
+            to_recipients = _parse_csv_arg(parsed.get("to"))
+            subject = (parsed.get("subject") or "").strip()
+            body = (parsed.get("body") or "").strip()
+            if not to_recipients or not subject or not body:
+                content = (
+                    "Usage: /mail send --to alice@example.com --subject \"Budget follow-up\" "
+                    "--body \"Sharing the revised budget\" [--cc ...] [--bcc ...] [--thread thread-id]"
+                )
+            else:
+                result = await runner.request_send_approval(
+                    ctx.key,
+                    MailSendRequest(
+                        to_recipients=to_recipients,
+                        cc_recipients=_parse_csv_arg(parsed.get("cc")),
+                        bcc_recipients=_parse_csv_arg(parsed.get("bcc")),
+                        subject=subject,
+                        body=body,
+                        thread_id=(parsed.get("thread") or "").strip() or None,
+                        draft_id=(parsed.get("draft") or "").strip() or None,
+                    ),
+                )
+                content = _mail_send_content(result)
+        else:
+            result = await runner.request_send_from_latest_draft(ctx.key)
+            content = _mail_send_content(result)
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content=content,
+            metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+        )
+
+    if subcommand == "approve":
+        result = await runner.approve_send(ctx.key)
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content=_mail_send_content(result),
+            metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+        )
+
+    if subcommand == "deny":
+        result = await runner.deny_send(ctx.key)
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content=_mail_send_content(result),
+            metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+        )
+
+    return OutboundMessage(
+        channel=ctx.msg.channel,
+        chat_id=ctx.msg.chat_id,
+        content=_mail_help_text(),
+        metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+    )
+
+
+async def cmd_calendar(ctx: CommandContext) -> OutboundMessage:
+    """Run phase-1 calendar list/conflict/create actions through the calendar automation runner."""
+    runner = _calendar_runner_for_ctx(ctx)
+    if runner is None:
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content="Calendar automation is not configured. Set N8N_BASE_URL and the Calendar webhook env vars first.",
+            metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+        )
+
+    tokens = _calendar_command_tokens(ctx)
+    if not tokens:
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content=_calendar_help_text(),
+            metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+        )
+
+    subcommand = tokens[0].lower()
+    if subcommand in {"today", "list"}:
+        result = await runner.list_events(ctx.key)
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content=_calendar_result_content(result),
+            metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+        )
+
+    if subcommand == "check":
+        parsed = _parse_flag_options(tokens[1:])
+        start_at = (parsed.get("start") or "").strip()
+        end_at = (parsed.get("end") or "").strip()
+        if not start_at or not end_at:
+            content = "Usage: /calendar check --start 2026-05-02T15:00:00+09:00 --end 2026-05-02T16:00:00+09:00"
+        else:
+            result = await runner.find_conflicts(ctx.key, start_at=start_at, end_at=end_at)
+            content = _calendar_result_content(result)
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content=content,
+            metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+        )
+
+    if subcommand == "create":
+        parsed = _parse_flag_options(tokens[1:])
+        title = (parsed.get("title") or "").strip()
+        start_at = _normalize_calendar_datetime((parsed.get("start") or "").strip() or "") or (parsed.get("start") or "").strip()
+        end_at = _normalize_calendar_datetime((parsed.get("end") or "").strip() or "") or (parsed.get("end") or "").strip()
+        if not title or not start_at or not end_at:
+            payload = _calendar_pending_payload(
+                {
+                    "title": title,
+                    "start": start_at,
+                    "end": end_at,
+                    "location": (parsed.get("location") or "").strip(),
+                    "details": (parsed.get("details") or "").strip(),
+                },
+                expected_field=_calendar_missing_required_fields(
+                    {
+                        "title": title,
+                        "start_at": start_at,
+                        "end_at": end_at,
+                    }
+                )[0],
+            )
+            return _calendar_prompt_response(
+                ctx,
+                ctx.session or ctx.loop.sessions.get_or_create(ctx.key),
+                payload,
+                _calendar_prompt_for_field(payload["expected_field"]),
+            )
+        else:
+            result = await runner.request_create_approval(
+                ctx.key,
+                CalendarCreateRequest(
+                    title=title,
+                    start_at=start_at,
+                    end_at=end_at,
+                    location=(parsed.get("location") or "").strip() or None,
+                    description=(parsed.get("details") or "").strip() or None,
+                ),
+            )
+            content = _calendar_result_content(result)
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content=content,
+            metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+        )
+
+    if subcommand == "approve":
+        result = await runner.approve_create(ctx.key)
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content=_calendar_result_content(result),
+            metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+        )
+
+    if subcommand == "deny":
+        result = await runner.deny_create(ctx.key)
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content=_calendar_result_content(result),
+            metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+        )
+
+    return OutboundMessage(
+        channel=ctx.msg.channel,
+        chat_id=ctx.msg.chat_id,
+        content=_calendar_help_text(),
+        metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+    )
+
+
 def build_help_text() -> str:
     """Build canonical help text shared across channels."""
     lines = [
@@ -551,6 +1158,9 @@ def build_help_text() -> str:
         "/model — Show or change the active model target",
         "/status — Show bot status",
         "/usage — Show or change the reply footer mode",
+        "/mail — Run Gmail pilot read-only and draft actions",
+        "/mail send|approve|deny — Resolve Gmail send approval flow",
+        "/calendar — Run Calendar pilot read, check, and create approval actions",
         "/history [n] — Show the last N conversation messages (default 10)",
         "/usage — Show or change the reply footer mode",
         "/history [n] — Show the last N conversation messages (default 10)",
@@ -573,6 +1183,11 @@ def register_builtin_commands(router: CommandRouter) -> None:
     router.exact("/status", cmd_status)
     router.exact("/usage", cmd_usage)
     router.prefix("/usage ", cmd_usage)
+    router.exact("/mail", cmd_mail)
+    router.prefix("/mail ", cmd_mail)
+    router.exact("/calendar", cmd_calendar)
+    router.prefix("/calendar ", cmd_calendar)
+    router.intercept(_calendar_pending_input_interceptor)
     router.exact("/history", cmd_history)
     router.prefix("/history ", cmd_history)
     router.exact("/usage", cmd_usage)

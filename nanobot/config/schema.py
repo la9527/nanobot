@@ -300,6 +300,14 @@ class HeartbeatConfig(Base):
     enabled: bool = True
     interval_s: int = 30 * 60  # 30 minutes
     keep_recent_messages: int = 8
+    webui_first: bool = True
+    max_digest_items: int = Field(default=3, ge=1, le=10)
+    quiet_hours_enabled: bool = False
+    quiet_hours_start_local_time: str = Field(default="22:30", pattern=r"^\d{2}:\d{2}$")
+    quiet_hours_end_local_time: str = Field(default="07:30", pattern=r"^\d{2}:\d{2}$")
+    quiet_hours_timezone: str | None = None
+    quiet_hours_allow_critical: bool = False
+    quiet_hours_allowed_channels: list[str] = Field(default_factory=lambda: ["websocket"])
 
 
 class ApiConfig(Base):

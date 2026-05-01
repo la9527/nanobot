@@ -9,6 +9,8 @@ If this file has no tasks (only headers and comments), the agent will skip the h
 
 <!-- Add your periodic tasks below this line -->
 
+- [ ] Morning briefing: review today's calendar, pending approvals, blocked tasks, and important inbox follow-ups. Deliver a short Korean summary with the single most important next step.
+
 
 ## Completed
 

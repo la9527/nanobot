@@ -94,6 +94,8 @@ interface ThreadComposerProps {
   onSend: (content: string, images?: SendImage[]) => void;
   disabled?: boolean;
   placeholder?: string;
+  injectedDraft?: string | null;
+  injectedDraftNonce?: number;
   modelLabel?: string | null;
   activeTarget?: string | null;
   modelTargets?: ModelTargetOption[];
@@ -106,6 +108,8 @@ export function ThreadComposer({
   onSend,
   disabled,
   placeholder,
+  injectedDraft = null,
+  injectedDraftNonce = 0,
   modelLabel = null,
   activeTarget = null,
   modelTargets = [],
@@ -166,6 +170,21 @@ export function ThreadComposer({
     const id = requestAnimationFrame(() => el.focus());
     return () => cancelAnimationFrame(id);
   }, [disabled]);
+
+  useEffect(() => {
+    if (!injectedDraftNonce || typeof injectedDraft !== "string") return;
+    setHistoryIndex(null);
+    draftBeforeHistoryRef.current = injectedDraft;
+    setValue(injectedDraft);
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      resizeTextarea(el);
+      const pos = injectedDraft.length;
+      el.focus();
+      el.setSelectionRange(pos, pos);
+    });
+  }, [injectedDraft, injectedDraftNonce]);
 
   const readyImages = useMemo(
     () => images.filter((img): img is AttachedImage & { dataUrl: string } =>

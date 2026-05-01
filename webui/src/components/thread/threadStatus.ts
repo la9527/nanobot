@@ -1,4 +1,5 @@
 import type { StreamError } from "@/lib/nanobot-client";
+import type { DerivedActionResult } from "@/lib/sessionMetadata";
 import type { UIMessage } from "@/lib/types";
 
 import type { ThreadStatusTone } from "@/components/thread/ThreadStatusBlock";
@@ -18,6 +19,7 @@ export function deriveThreadStatus(params: {
   remoteReplyPending: boolean;
   booting: boolean;
   modelTargetPending: boolean;
+  actionResult?: DerivedActionResult | null;
 }): DerivedThreadStatus | null {
   const {
     messages,
@@ -28,6 +30,7 @@ export function deriveThreadStatus(params: {
     remoteReplyPending,
     booting,
     modelTargetPending,
+    actionResult,
   } = params;
 
   if (streamError) {
@@ -60,6 +63,30 @@ export function deriveThreadStatus(params: {
           : remoteReplyPending
             ? "Waiting for the linked external session to return a reply."
             : "Streaming the current assistant response.",
+    };
+  }
+
+  if (actionResult?.title || actionResult?.summary) {
+    const status = actionResult.status;
+    const tone: ThreadStatusTone =
+      status === "running"
+        ? "running"
+        : status === "waiting_approval"
+          ? "waiting-approval"
+          : status === "failed" || status === "blocked" || status === "rejected"
+            ? "failed"
+            : "completed";
+    return {
+      tone,
+      title: actionResult.title || "Latest assistant action is ready",
+      body: summarizeStatusText(
+        actionResult.summary
+          || actionResult.inlineStatus
+          || actionResult.errorMessage
+          || actionResult.nextStep
+          || "The latest assistant action finished.",
+        "The latest assistant action finished.",
+      ),
     };
   }
 

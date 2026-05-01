@@ -164,6 +164,95 @@ class MailSummarizeThreadsResult(ActionResult):
     details: MailThreadSummariesDetails
 
 
+class MailDraftPreview(_AutomationModel):
+    subject: str
+    body_preview: str
+    to_recipients: list[str] = Field(default_factory=list)
+    cc_recipients: list[str] = Field(default_factory=list)
+    bcc_recipients: list[str] = Field(default_factory=list)
+    thread_id: str | None = None
+
+
+class MailCreateDraftDetails(_AutomationModel):
+    draft_id: str | None = None
+    preview: MailDraftPreview
+
+
+class MailCreateDraftResult(ActionResult):
+    domain: Literal["mail"] = "mail"
+    action: Literal["create_draft"] = "create_draft"
+    details: MailCreateDraftDetails
+
+
+class MailSendMessageDetails(_AutomationModel):
+    draft_id: str | None = None
+    message_id: str | None = None
+    preview: MailDraftPreview
+
+
+class MailSendMessageResult(ActionResult):
+    domain: Literal["mail"] = "mail"
+    action: Literal["send_message"] = "send_message"
+    details: MailSendMessageDetails
+
+
+class CalendarEventPreview(_AutomationModel):
+    title: str
+    start_at: str
+    end_at: str
+    location: str | None = None
+    description: str | None = None
+
+
+class CalendarEventSummary(_AutomationModel):
+    event_id: str | None = None
+    title: str
+    start_at: str
+    end_at: str
+    all_day: bool = False
+    location: str | None = None
+
+
+class CalendarListEventsDetails(_AutomationModel):
+    window_label: str | None = None
+    summary_text: str | None = None
+    total_candidates: int | None = None
+    events: list[CalendarEventSummary] = Field(default_factory=list)
+
+
+class CalendarListEventsResult(ActionResult):
+    domain: Literal["calendar"] = "calendar"
+    action: Literal["list_events"] = "list_events"
+    details: CalendarListEventsDetails
+
+
+class CalendarFindConflictsDetails(_AutomationModel):
+    requested_start_at: str
+    requested_end_at: str
+    available: bool = False
+    checked_window_label: str | None = None
+    reason: str | None = None
+    total_candidates: int | None = None
+    conflicting_events: list[CalendarEventSummary] = Field(default_factory=list)
+
+
+class CalendarFindConflictsResult(ActionResult):
+    domain: Literal["calendar"] = "calendar"
+    action: Literal["find_conflicts"] = "find_conflicts"
+    details: CalendarFindConflictsDetails
+
+
+class CalendarCreateEventDetails(_AutomationModel):
+    event_id: str | None = None
+    preview: CalendarEventPreview
+
+
+class CalendarCreateEventResult(ActionResult):
+    domain: Literal["calendar"] = "calendar"
+    action: Literal["create_event"] = "create_event"
+    details: CalendarCreateEventDetails
+
+
 __all__ = [
     "ACTION_FAILURE_CODES",
     "ACTION_RESULT_STATUSES",
@@ -172,8 +261,21 @@ __all__ = [
     "ActionReferences",
     "ActionResult",
     "ActionVisibility",
+    "CalendarCreateEventDetails",
+    "CalendarCreateEventResult",
+    "CalendarEventPreview",
+    "CalendarEventSummary",
+    "CalendarFindConflictsDetails",
+    "CalendarFindConflictsResult",
+    "CalendarListEventsDetails",
+    "CalendarListEventsResult",
     "MailImportantThreadsDetails",
     "MailImportantThreadsResult",
+    "MailCreateDraftDetails",
+    "MailCreateDraftResult",
+    "MailDraftPreview",
+    "MailSendMessageDetails",
+    "MailSendMessageResult",
     "MailSummarizeThreadsResult",
     "MailThreadDigest",
     "MailThreadSummariesDetails",

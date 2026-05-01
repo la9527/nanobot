@@ -36,6 +36,7 @@ describe("ChatList", () => {
     );
 
     expect(screen.getByText("Approval pending")).toBeInTheDocument();
+    expect(screen.getByText("Telegram")).toBeInTheDocument();
     expect(screen.getByText("Telegram approval")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Approval pending" }));
