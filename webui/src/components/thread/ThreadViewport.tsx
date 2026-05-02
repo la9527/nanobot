@@ -129,23 +129,23 @@ export function ThreadViewport({
         )}
       >
         {hasMessages ? (
-          <div ref={contentRef} className="mx-auto flex min-h-full w-full max-w-[64rem] flex-col">
-            <div className="flex-1 px-4 pt-4" style={{ paddingBottom: composerHeight + 12 }}>
+          <div ref={contentRef} className="mx-auto flex min-h-full w-full max-w-[60rem] flex-col">
+            <div className="flex-1 px-3 pt-3" style={{ paddingBottom: composerHeight + 10 }}>
               <ThreadMessages messages={messages} onApprovalResponse={onApprovalResponse} />
             </div>
 
             <div ref={composerWrapRef} className="sticky bottom-0 z-10 mt-auto bg-background/95 backdrop-blur-sm">
-              <div className="px-4 pb-3">
+              <div className="px-3 pb-2">
                 {composer}
               </div>
             </div>
           </div>
         ) : (
-          <div className="mx-auto flex min-h-full w-full max-w-[64rem] flex-col px-4">
-            <div className="flex w-full flex-1 justify-center pb-16 pt-14 md:pt-[3.5rem]">
-              <div className="flex w-full max-w-[40rem] flex-col gap-5">
+          <div className="mx-auto flex min-h-full w-full max-w-[60rem] flex-col px-3">
+            <div className="flex w-full flex-1 justify-center pb-8 pt-7 md:pt-8">
+              <div className="flex w-full max-w-[36rem] flex-col gap-3">
                 {emptyState}
-                <div className="w-full">{composer}</div>
+                {composer ? <div className="w-full">{composer}</div> : null}
               </div>
             </div>
           </div>

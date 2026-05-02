@@ -7,7 +7,6 @@ import { cn } from "@/lib/utils";
 interface ThreadHeaderProps {
   title: string;
   onToggleSidebar: () => void;
-  onGoHome: () => void;
   hideSidebarToggleOnDesktop?: boolean;
   statusBadges?: Array<{
     label: string;
@@ -18,7 +17,6 @@ interface ThreadHeaderProps {
 export function ThreadHeader({
   title,
   onToggleSidebar,
-  onGoHome,
   hideSidebarToggleOnDesktop = false,
   statusBadges = [],
 }: ThreadHeaderProps) {
@@ -39,11 +37,7 @@ export function ThreadHeader({
           <PanelLeftOpen className="h-3.5 w-3.5" />
         </Button>
         <div className="min-w-0 flex-1">
-          <button
-            type="button"
-            onClick={onGoHome}
-            className="flex min-w-0 items-center gap-2 rounded-md px-1.5 py-1 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-accent/35 hover:text-foreground"
-          >
+          <div className="flex min-w-0 items-center gap-2 px-1.5 py-1 text-[12px] font-medium text-muted-foreground">
             <img
               src="/brand/nanobot_icon.png"
               alt=""
@@ -51,7 +45,7 @@ export function ThreadHeader({
               aria-hidden
             />
             <span className="max-w-[min(60vw,32rem)] truncate">{title}</span>
-          </button>
+          </div>
 
           {statusBadges.length > 0 ? (
             <div className="mt-1.5 flex flex-wrap items-center gap-1.5 px-1.5">

@@ -1,4 +1,4 @@
-import { Moon, PanelLeftClose, RefreshCcw, Settings, SquarePen, Sun } from "lucide-react";
+import { LayoutDashboard, Moon, PanelLeftClose, RefreshCcw, Settings, SquarePen, Sun } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { ChatList } from "@/components/ChatList";
@@ -15,6 +15,7 @@ interface SidebarProps {
   theme: "light" | "dark";
   onToggleTheme: () => void;
   onNewChat: () => void;
+  onGoHome: () => void;
   onSelect: (key: string) => void;
   onRefresh: () => void;
   onRequestDelete: (key: string, label: string) => void;
@@ -63,6 +64,14 @@ export function Sidebar(props: SidebarProps) {
         </div>
       </div>
       <div className="px-2 pb-2">
+        <Button
+          onClick={props.onGoHome}
+          className="mb-1.5 h-9 w-full justify-start gap-2 rounded-full px-3 text-[13px] font-medium"
+          variant={props.activeView === "chat" && props.activeKey === null ? "secondary" : "ghost"}
+        >
+          <LayoutDashboard className="h-3.5 w-3.5" />
+          Dashboard
+        </Button>
         <Button
           onClick={props.onNewChat}
           className="h-9 w-full justify-start gap-2 rounded-full px-3 text-[13px] font-medium text-sidebar-foreground/90 hover:bg-sidebar-accent hover:text-sidebar-foreground"

@@ -9,7 +9,7 @@ from nanobot.agent.tools.ask import AskUserInterrupt, AskUserTool
 from nanobot.agent.tools.base import Tool, tool_parameters
 from nanobot.agent.tools.registry import ToolRegistry
 from nanobot.agent.tools.schema import tool_parameters_schema
-from nanobot.bus.events import InboundMessage
+from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.providers.base import GenerationSettings, LLMResponse, ToolCallRequest
 
@@ -239,3 +239,36 @@ async def test_ask_user_keeps_buttons_for_websocket(tmp_path):
     assert response is not None
     assert response.content == "Install the optional package?"
     assert response.buttons == [["Install", "Skip"]]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_mirrors_buttons_to_websocket_for_telegram_sessions(tmp_path):
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=_make_provider(lambda **kwargs: LLMResponse(content="ok", usage={})),
+        workspace=tmp_path,
+        model="test-model",
+    )
+
+    async def _fake_process_message(*args, **kwargs):
+        return OutboundMessage(
+            channel="telegram",
+            chat_id="123",
+            content="Choose how to continue.",
+            buttons=[["Install", "Skip"]],
+        )
+
+    loop._process_message = _fake_process_message  # type: ignore[method-assign]
+
+    await loop._dispatch(
+        InboundMessage(channel="telegram", sender_id="user", chat_id="123", content="set it up")
+    )
+
+    first = await loop.bus.consume_outbound()
+    second = await loop.bus.consume_outbound()
+
+    assert first.channel == "telegram"
+    assert first.buttons == [["Install", "Skip"]]
+    assert second.channel == "websocket"
+    assert second.chat_id == "telegram:123"
+    assert second.buttons == [["Install", "Skip"]]

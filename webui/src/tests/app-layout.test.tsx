@@ -75,6 +75,18 @@ vi.mock("@/lib/nanobot-client", () => {
 
 import App from "@/App";
 
+async function findSidebarButton(name: RegExp) {
+  const buttons = await screen.findAllByRole("button", { name });
+  expect(buttons.length).toBeGreaterThan(0);
+  return buttons[0];
+}
+
+function getSidebarButton(name: RegExp) {
+  const buttons = screen.getAllByRole("button", { name });
+  expect(buttons.length).toBeGreaterThan(0);
+  return buttons[0];
+}
+
 describe("App layout", () => {
   beforeEach(() => {
     mockSessions = [];
@@ -165,8 +177,32 @@ describe("App layout", () => {
     await waitFor(() => expect(connectSpy).toHaveBeenCalled());
     fireEvent.click(screen.getByRole("button", { name: "Toggle sidebar" }));
 
-    expect(await screen.findByRole("dialog", { name: "Navigation sidebar" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /^First chat$/ })).toBeInTheDocument();
+    expect(await findSidebarButton(/^Dashboard$/)).toBeInTheDocument();
+    expect(getSidebarButton(/^First chat\b/)).toBeInTheDocument();
+  });
+
+  it("shows a fixed Dashboard entry in the sidebar and returns to dashboard home", async () => {
+    mockSessions = [
+      {
+        key: "websocket:chat-a",
+        channel: "websocket",
+        chatId: "chat-a",
+        createdAt: "2026-04-16T10:00:00Z",
+        updatedAt: "2026-05-01T11:00:00Z",
+        preview: "First chat",
+        activeTarget: null,
+      },
+    ];
+
+    render(<App />);
+
+    await waitFor(() => expect(connectSpy).toHaveBeenCalled());
+    expect(await findSidebarButton(/^First chat\b/)).toBeInTheDocument();
+
+    fireEvent.click(getSidebarButton(/^Dashboard$/));
+
+    expect(await screen.findByText("Assistant dashboard")).toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "메시지 입력" })).not.toBeInTheDocument();
   });
 
   it("switches to the next session when deleting the active chat", async () => {
@@ -194,9 +230,7 @@ describe("App layout", () => {
     render(<App />);
 
     await waitFor(() => expect(connectSpy).toHaveBeenCalled());
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: /^First chat$/ })).toBeInTheDocument(),
-    );
+    expect(await findSidebarButton(/^First chat\b/)).toBeInTheDocument();
     expect(screen.getByText("smart-router")).toBeInTheDocument();
 
     fireEvent.pointerDown(screen.getByLabelText("Chat actions for First chat"), {
@@ -213,9 +247,7 @@ describe("App layout", () => {
       expect(deleteChatSpy).toHaveBeenCalledWith("websocket:chat-a"),
     );
     await waitFor(() =>
-      expect(
-        screen.getByRole("button", { name: /^Second chat$/ }),
-      ).toBeInTheDocument(),
+      expect(getSidebarButton(/^Second chat\b/)).toBeInTheDocument(),
     );
     expect(screen.queryByText('Delete “First chat”?')).not.toBeInTheDocument();
     expect(document.body.style.pointerEvents).not.toBe("none");

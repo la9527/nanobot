@@ -35,7 +35,15 @@ from nanobot.utils.restart import set_restart_notice_to_env
 
 
 CALENDAR_CREATE_INPUT_METADATA_KEY = "calendar_create_input"
+CALENDAR_CONFLICT_REVIEW_METADATA_KEY = "calendar_conflict_review"
+CALENDAR_PENDING_INTERACTION_METADATA_KEY = "calendar_pending_interaction"
 CALENDAR_CREATE_CANCEL_CHOICES = [["취소"]]
+CALENDAR_CONFLICT_FORCE_CREATE_LABEL = "그래도 생성 승인 요청"
+CALENDAR_CONFLICT_RESCHEDULE_LABEL = "새 시간 다시 입력"
+CALENDAR_CONFLICT_REVIEW_CHOICES = [
+    [CALENDAR_CONFLICT_FORCE_CREATE_LABEL, CALENDAR_CONFLICT_RESCHEDULE_LABEL],
+    ["취소"],
+]
 
 
 async def cmd_stop(ctx: CommandContext) -> OutboundMessage:
@@ -630,8 +638,84 @@ def _calendar_help_text() -> str:
         "- `/calendar today` to summarize today's schedule",
         "- `/calendar check --start 2026-05-02T15:00:00+09:00 --end 2026-05-02T16:00:00+09:00`",
         "- `/calendar create --title \"Dentist\" --start 2026-05-02T15:00:00+09:00 --end 2026-05-02T16:00:00+09:00 [--location ...] [--details ...]`",
-        "- `/calendar approve` or `/calendar deny` to resolve the pending create approval",
+        "- `/calendar approve` to create the pending event",
+        "- `/calendar deny` or `/calendar cancel` to cancel the pending create approval",
     ])
+
+
+def _calendar_runner_config(runner: CalendarAutomationSessionRunner | None) -> N8NCalendarAutomationConfig | None:
+    client = getattr(runner, "client", None)
+    config = getattr(client, "config", None)
+    return config if isinstance(config, N8NCalendarAutomationConfig) else None
+
+
+def _calendar_config_status_lines(runner: CalendarAutomationSessionRunner | None) -> list[str]:
+    config = _calendar_runner_config(runner)
+    if config is not None:
+        return [
+            "- Automation: configured",
+            f"- Base URL: {config.base_url}",
+            f"- Summary webhook path: {config.summary_path}",
+            f"- Create webhook path: {config.create_path}",
+            f"- Timezone: {config.timezone}",
+            f"- Webhook token: {'configured' if config.webhook_token else 'not set'}",
+        ]
+    if runner is not None:
+        return [
+            "- Automation: available",
+            "- Configuration: provided by the active runtime runner",
+        ]
+    base_url = str(os.environ.get("N8N_BASE_URL") or os.environ.get("N8N_EDITOR_BASE_URL") or "").strip()
+    return [
+        "- Automation: not configured",
+        f"- Base URL: {base_url or 'missing'}",
+        "- Missing: set N8N_BASE_URL or N8N_EDITOR_BASE_URL",
+        f"- Timezone: {str(os.environ.get('CALENDAR_TIMEZONE') or 'Asia/Seoul').strip() or 'Asia/Seoul'}",
+    ]
+
+
+def _calendar_pending_status_lines(session) -> list[str]:
+    pending_input = _calendar_pending_input(session)
+    if pending_input is not None:
+        expected = str(pending_input.get("expected_field") or "next field")
+        title = str(pending_input.get("title") or "(title pending)").strip() or "(title pending)"
+        return [
+            "- Pending: create input",
+            f"- Event title: {title}",
+            f"- Waiting for: {expected}",
+        ]
+
+    conflict = _calendar_conflict_review(session)
+    if conflict is not None:
+        request = conflict.get("request") if isinstance(conflict, dict) else None
+        title = request.get("title") if isinstance(request, dict) else None
+        return [
+            "- Pending: conflict review",
+            f"- Event title: {str(title or '(unknown)').strip() or '(unknown)'}",
+            "- Choices: 그래도 생성 승인 요청 / 새 시간 다시 입력 / 취소",
+        ]
+
+    approval = session.metadata.get("calendar_create_approval")
+    if isinstance(approval, dict):
+        return [
+            "- Pending: create approval",
+            f"- Event title: {str(approval.get('title') or '(unknown)').strip() or '(unknown)'}",
+            f"- Start: {str(approval.get('start_at') or '-').strip() or '-'}",
+            f"- End: {str(approval.get('end_at') or '-').strip() or '-'}",
+            "- Resolve with: /calendar approve or /calendar cancel",
+        ]
+
+    return ["- Pending: none"]
+
+
+def _calendar_status_text(ctx: CommandContext, runner: CalendarAutomationSessionRunner | None) -> str:
+    session = ctx.session or ctx.loop.sessions.get_or_create(ctx.key)
+    lines = _calendar_help_text().splitlines()
+    lines.extend(["", "## Current status"])
+    lines.extend(_calendar_config_status_lines(runner))
+    lines.extend(["", "## Session state"])
+    lines.extend(_calendar_pending_status_lines(session))
+    return "\n".join(lines)
 
 
 def _parse_csv_arg(value: str | None) -> list[str]:
@@ -747,8 +831,57 @@ def _calendar_pending_input(session) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
+def _calendar_conflict_review(session) -> dict[str, Any] | None:
+    payload = session.metadata.get(CALENDAR_CONFLICT_REVIEW_METADATA_KEY)
+    return payload if isinstance(payload, dict) else None
+
+
+def _calendar_pending_interaction(session) -> dict[str, Any] | None:
+    payload = session.metadata.get(CALENDAR_PENDING_INTERACTION_METADATA_KEY)
+    return payload if isinstance(payload, dict) else None
+
+
+def _calendar_interaction_id(prefix: str) -> str:
+    from uuid import uuid4
+
+    return f"{prefix}-{uuid4().hex[:10]}"
+
+
+def _calendar_timestamp() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _set_calendar_pending_interaction(session, payload: dict[str, Any]) -> None:
+    now = _calendar_timestamp()
+    current = _calendar_pending_interaction(session) or {}
+    interaction = {
+        **payload,
+        "id": payload.get("id") or current.get("id") or _calendar_interaction_id("calendar-interaction"),
+        "status": payload.get("status") or "pending",
+        "created_at": payload.get("created_at") or current.get("created_at") or now,
+        "updated_at": now,
+    }
+    session.metadata[CALENDAR_PENDING_INTERACTION_METADATA_KEY] = interaction
+
+
+def _clear_calendar_pending_interaction(session, ctx: CommandContext | None = None) -> None:
+    if session.metadata.pop(CALENDAR_PENDING_INTERACTION_METADATA_KEY, None) is not None and ctx is not None:
+        ctx.loop.sessions.save(session)
+
+
 def _clear_calendar_pending_input(session, ctx: CommandContext | None = None) -> None:
-    if session.metadata.pop(CALENDAR_CREATE_INPUT_METADATA_KEY, None) is not None and ctx is not None:
+    changed = session.metadata.pop(CALENDAR_CREATE_INPUT_METADATA_KEY, None) is not None
+    changed = session.metadata.pop(CALENDAR_PENDING_INTERACTION_METADATA_KEY, None) is not None or changed
+    if changed and ctx is not None:
+        ctx.loop.sessions.save(session)
+
+
+def _clear_calendar_conflict_review(session, ctx: CommandContext | None = None) -> None:
+    changed = session.metadata.pop(CALENDAR_CONFLICT_REVIEW_METADATA_KEY, None) is not None
+    changed = session.metadata.pop(CALENDAR_PENDING_INTERACTION_METADATA_KEY, None) is not None or changed
+    if changed and ctx is not None:
         ctx.loop.sessions.save(session)
 
 
@@ -782,6 +915,19 @@ def _calendar_prompt_for_field(field: str) -> str:
 def _calendar_prompt_response(ctx: CommandContext, session, payload: dict[str, Any], question: str) -> OutboundMessage:
     payload["expected_field"] = payload.get("expected_field") or _calendar_missing_required_fields(payload)[0]
     session.metadata[CALENDAR_CREATE_INPUT_METADATA_KEY] = payload
+    _set_calendar_pending_interaction(session, {
+        "kind": "collect_input",
+        "question": question,
+        "buttons": CALENDAR_CREATE_CANCEL_CHOICES,
+        "request": {
+            "title": payload.get("title"),
+            "start_at": payload.get("start_at"),
+            "end_at": payload.get("end_at"),
+            "location": payload.get("location"),
+            "description": payload.get("description"),
+        },
+        "expected_field": payload.get("expected_field"),
+    })
     session.add_message("assistant", question, buttons=CALENDAR_CREATE_CANCEL_CHOICES)
     ctx.loop.sessions.save(session)
     return OutboundMessage(
@@ -789,6 +935,60 @@ def _calendar_prompt_response(ctx: CommandContext, session, payload: dict[str, A
         chat_id=ctx.msg.chat_id,
         content=question,
         buttons=CALENDAR_CREATE_CANCEL_CHOICES,
+        metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+    )
+
+
+def _persist_calendar_result(ctx: CommandContext, session, result, *, add_message: bool = True) -> None:
+    ctx.loop.sessions.set_action_result(session, result)
+    if add_message and result.summary:
+        session.add_message("assistant", result.summary)
+    ctx.loop.sessions.save(session)
+
+
+def _calendar_conflict_review_question(result) -> str:
+    lines = [
+        result.title,
+        "",
+        result.summary,
+    ]
+    conflicting_events = getattr(result.details, "conflicting_events", []) or []
+    if conflicting_events:
+        lines.extend(["", "Conflicting events:"])
+        for index, event in enumerate(conflicting_events[:5], start=1):
+            lines.append(f"{index}. {event.title} ({event.start_at} -> {event.end_at})")
+    lines.extend([
+        "",
+        "Choose how to continue before approval.",
+    ])
+    return "\n".join(lines)
+
+
+def _calendar_conflict_review_response(ctx: CommandContext, session, request: CalendarCreateRequest, result) -> OutboundMessage:
+    question = _calendar_conflict_review_question(result)
+    conflicting_events = getattr(result.details, "conflicting_events", []) or []
+    session.metadata[CALENDAR_CONFLICT_REVIEW_METADATA_KEY] = {
+        "request": request.model_dump(mode="json"),
+        "question": question,
+    }
+    _set_calendar_pending_interaction(session, {
+        "kind": "conflict_review",
+        "question": question,
+        "buttons": CALENDAR_CONFLICT_REVIEW_CHOICES,
+        "request": request.model_dump(mode="json"),
+        "conflicts": [
+            event.model_dump(mode="json") if hasattr(event, "model_dump") else dict(event)
+            for event in conflicting_events
+        ],
+    })
+    _persist_calendar_result(ctx, session, result, add_message=False)
+    session.add_message("assistant", question, buttons=CALENDAR_CONFLICT_REVIEW_CHOICES)
+    ctx.loop.sessions.save(session)
+    return OutboundMessage(
+        channel=ctx.msg.channel,
+        chat_id=ctx.msg.chat_id,
+        content=question,
+        buttons=CALENDAR_CONFLICT_REVIEW_CHOICES,
         metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
     )
 
@@ -888,6 +1088,89 @@ async def _calendar_pending_input_interceptor(ctx: CommandContext) -> OutboundMe
         channel=ctx.msg.channel,
         chat_id=ctx.msg.chat_id,
         content=_calendar_result_content(result),
+        metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+    )
+
+
+async def _calendar_conflict_review_interceptor(ctx: CommandContext) -> OutboundMessage | None:
+    session = ctx.session
+    if session is None:
+        return None
+    pending = _calendar_conflict_review(session)
+    if pending is None:
+        return None
+
+    answer = ctx.raw.strip()
+    if not answer:
+        return None
+
+    request_payload = pending.get("request")
+    if not isinstance(request_payload, dict):
+        _clear_calendar_conflict_review(session, ctx)
+        return None
+
+    try:
+        request = CalendarCreateRequest.model_validate(request_payload)
+    except Exception:
+        _clear_calendar_conflict_review(session, ctx)
+        return None
+
+    normalized = answer.strip().lower()
+    if normalized in {"취소", "cancel", "stop", "abort"}:
+        _clear_calendar_conflict_review(session)
+        session.add_message("assistant", "Calendar create request was cancelled before approval.")
+        ctx.loop.sessions.save(session)
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content="Calendar create request was cancelled before approval.",
+            metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+        )
+
+    if answer == CALENDAR_CONFLICT_FORCE_CREATE_LABEL:
+        _clear_calendar_conflict_review(session)
+        ctx.loop.sessions.save(session)
+        runner = _calendar_runner_for_ctx(ctx)
+        if runner is None:
+            return OutboundMessage(
+                channel=ctx.msg.channel,
+                chat_id=ctx.msg.chat_id,
+                content="Calendar automation is not configured. Set N8N_BASE_URL and the Calendar webhook env vars first.",
+                metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+            )
+        result = await runner.request_create_approval(ctx.key, request)
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content=_calendar_result_content(result),
+            metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+        )
+
+    if answer == CALENDAR_CONFLICT_RESCHEDULE_LABEL:
+        _clear_calendar_conflict_review(session)
+        payload = {
+            "title": request.title,
+            "start_at": None,
+            "end_at": None,
+            "location": request.location,
+            "description": request.description,
+            "expected_field": "start_at",
+        }
+        return _calendar_prompt_response(
+            ctx,
+            session,
+            payload,
+            _calendar_prompt_for_field("start_at"),
+        )
+
+    question = str(pending.get("question") or "Choose how to continue before approval.")
+    session.add_message("assistant", question, buttons=CALENDAR_CONFLICT_REVIEW_CHOICES)
+    ctx.loop.sessions.save(session)
+    return OutboundMessage(
+        channel=ctx.msg.channel,
+        chat_id=ctx.msg.chat_id,
+        content=question,
+        buttons=CALENDAR_CONFLICT_REVIEW_CHOICES,
         metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
     )
 
@@ -1031,25 +1314,49 @@ async def cmd_mail(ctx: CommandContext) -> OutboundMessage:
 
 async def cmd_calendar(ctx: CommandContext) -> OutboundMessage:
     """Run phase-1 calendar list/conflict/create actions through the calendar automation runner."""
-    runner = _calendar_runner_for_ctx(ctx)
-    if runner is None:
-        return OutboundMessage(
-            channel=ctx.msg.channel,
-            chat_id=ctx.msg.chat_id,
-            content="Calendar automation is not configured. Set N8N_BASE_URL and the Calendar webhook env vars first.",
-            metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
-        )
-
     tokens = _calendar_command_tokens(ctx)
-    if not tokens:
+    runner = _calendar_runner_for_ctx(ctx)
+    if not tokens or tokens[0].lower() in {"help", "status", "config", "settings"}:
         return OutboundMessage(
             channel=ctx.msg.channel,
             chat_id=ctx.msg.chat_id,
-            content=_calendar_help_text(),
+            content=_calendar_status_text(ctx, runner),
             metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
         )
 
     subcommand = tokens[0].lower()
+    session = ctx.session or ctx.loop.sessions.get_or_create(ctx.key)
+
+    if subcommand in {"cancel", "취소"}:
+        if _calendar_pending_input(session) is not None:
+            _clear_calendar_pending_input(session, ctx)
+            session.add_message("assistant", "Calendar create input was cancelled.")
+            ctx.loop.sessions.save(session)
+            return OutboundMessage(
+                channel=ctx.msg.channel,
+                chat_id=ctx.msg.chat_id,
+                content="Calendar create input was cancelled.",
+                metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+            )
+        if _calendar_conflict_review(session) is not None:
+            _clear_calendar_conflict_review(session, ctx)
+            session.add_message("assistant", "Calendar create request was cancelled before approval.")
+            ctx.loop.sessions.save(session)
+            return OutboundMessage(
+                channel=ctx.msg.channel,
+                chat_id=ctx.msg.chat_id,
+                content="Calendar create request was cancelled before approval.",
+                metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+            )
+
+    if runner is None:
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content=_calendar_status_text(ctx, runner),
+            metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+        )
+
     if subcommand in {"today", "list"}:
         result = await runner.list_events(ctx.key)
         return OutboundMessage(
@@ -1104,17 +1411,29 @@ async def cmd_calendar(ctx: CommandContext) -> OutboundMessage:
                 _calendar_prompt_for_field(payload["expected_field"]),
             )
         else:
-            result = await runner.request_create_approval(
-                ctx.key,
-                CalendarCreateRequest(
-                    title=title,
-                    start_at=start_at,
-                    end_at=end_at,
-                    location=(parsed.get("location") or "").strip() or None,
-                    description=(parsed.get("details") or "").strip() or None,
-                ),
+            request = CalendarCreateRequest(
+                title=title,
+                start_at=start_at,
+                end_at=end_at,
+                location=(parsed.get("location") or "").strip() or None,
+                description=(parsed.get("details") or "").strip() or None,
             )
-            content = _calendar_result_content(result)
+            conflict = await runner.client.find_conflicts(
+                start_at=request.start_at,
+                end_at=request.end_at,
+                channel=ctx.key.split(":", 1)[0] if ":" in ctx.key else "websocket",
+                session_id=ctx.key,
+                user_id="primary-user",
+            )
+            session = ctx.session or ctx.loop.sessions.get_or_create(ctx.key)
+            if getattr(conflict.details, "available", False):
+                result = await runner.request_create_approval(ctx.key, request)
+                content = _calendar_result_content(result)
+            elif getattr(conflict.details, "reason", None) == "overlap_detected":
+                return _calendar_conflict_review_response(ctx, session, request, conflict)
+            else:
+                _persist_calendar_result(ctx, session, conflict)
+                content = _calendar_result_content(conflict)
         return OutboundMessage(
             channel=ctx.msg.channel,
             chat_id=ctx.msg.chat_id,
@@ -1131,7 +1450,7 @@ async def cmd_calendar(ctx: CommandContext) -> OutboundMessage:
             metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
         )
 
-    if subcommand == "deny":
+    if subcommand in {"deny", "cancel", "취소"}:
         result = await runner.deny_create(ctx.key)
         return OutboundMessage(
             channel=ctx.msg.channel,
@@ -1143,7 +1462,7 @@ async def cmd_calendar(ctx: CommandContext) -> OutboundMessage:
     return OutboundMessage(
         channel=ctx.msg.channel,
         chat_id=ctx.msg.chat_id,
-        content=_calendar_help_text(),
+        content=_calendar_status_text(ctx, runner),
         metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
     )
 
@@ -1187,6 +1506,7 @@ def register_builtin_commands(router: CommandRouter) -> None:
     router.prefix("/mail ", cmd_mail)
     router.exact("/calendar", cmd_calendar)
     router.prefix("/calendar ", cmd_calendar)
+    router.intercept(_calendar_conflict_review_interceptor)
     router.intercept(_calendar_pending_input_interceptor)
     router.exact("/history", cmd_history)
     router.prefix("/history ", cmd_history)

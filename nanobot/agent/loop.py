@@ -1195,6 +1195,7 @@ class AgentLoop:
                                 reply_to=response.reply_to,
                                 media=response.media,
                                 metadata=dict(response.metadata or {}),
+                                buttons=response.buttons,
                             ))
                     elif msg.channel == "cli":
                         await self.bus.publish_outbound(OutboundMessage(
@@ -1398,6 +1399,17 @@ class AgentLoop:
         raw = msg.content.strip()
         ctx = CommandContext(msg=msg, session=session, key=key, raw=raw, loop=self)
         if result := await self.commands.dispatch(ctx):
+            media_paths = [p for p in (msg.media or []) if isinstance(p, str) and p]
+            user_extra: dict[str, Any] = {"media": list(media_paths)} if media_paths else {}
+            session.add_message("user", msg.content if isinstance(msg.content, str) else "", **user_extra)
+            assistant_extra: dict[str, Any] = {}
+            if result.buttons:
+                assistant_extra["buttons"] = result.buttons
+            if result.metadata:
+                assistant_extra["metadata"] = dict(result.metadata)
+            session.add_message("assistant", result.content, **assistant_extra)
+            self._clear_pending_user_turn(session)
+            self.sessions.save(session)
             return result
 
         await self.consolidator.maybe_consolidate_by_tokens(

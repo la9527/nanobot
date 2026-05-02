@@ -1764,6 +1764,16 @@ def test_buttons_as_text_format_preserves_rows_and_labels() -> None:
     assert TelegramChannel._buttons_as_text([[], ["A"]]) == "[A]"  # empty rows skipped
 
 
+def test_normalize_visible_button_reply_strips_single_bracketed_label() -> None:
+    assert TelegramChannel._normalize_visible_button_reply("[그래도 생성 승인 요청]") == "그래도 생성 승인 요청"
+    assert TelegramChannel._normalize_visible_button_reply("  [Cancel]  ") == "Cancel"
+
+
+def test_normalize_visible_button_reply_keeps_non_button_brackets() -> None:
+    assert TelegramChannel._normalize_visible_button_reply("[location: 37.1, 127.1]") == "[location: 37.1, 127.1]"
+    assert TelegramChannel._normalize_visible_button_reply("[Yes] [No]") == "[Yes] [No]"
+
+
 @pytest.mark.asyncio
 async def test_send_falls_back_buttons_to_inline_text_when_flag_off() -> None:
     """Buttons are semantic options; with ``inline_keyboards=False`` we must

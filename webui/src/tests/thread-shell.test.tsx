@@ -215,10 +215,37 @@ describe("ThreadShell", () => {
       );
     });
 
+    expect(screen.queryByText("delete me cleanly")).not.toBeInTheDocument();
+    expect(screen.getByText("Assistant dashboard")).toBeInTheDocument();
+    expect(screen.queryByText("Latest assistant update is ready")).not.toBeInTheDocument();
+
     await waitFor(() => {
       expect(screen.queryByText("delete me cleanly")).not.toBeInTheDocument();
     });
-    expect(screen.getByPlaceholderText("What's on your mind?")).toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "메시지 입력" })).not.toBeInTheDocument();
+  });
+
+  it("does not use the thread title as dashboard navigation anymore", async () => {
+    const client = makeClient();
+    const onGoHome = vi.fn();
+
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={session("chat-a")}
+          title="Chat chat-a"
+          onToggleSidebar={() => {}}
+          onGoHome={onGoHome}
+          onNewChat={vi.fn().mockResolvedValue("chat-a")}
+        />,
+      ),
+    );
+
+    const title = await screen.findByText("Chat chat-a");
+    await userEvent.click(title);
+
+    expect(onGoHome).not.toHaveBeenCalled();
   });
 
   it("does not leak the previous thread when opening a brand-new chat", async () => {
@@ -677,7 +704,8 @@ describe("ThreadShell", () => {
       ),
     );
 
-    expect(await screen.findByText("Linked external session")).toBeInTheDocument();
+    await userEvent.setup().click(await screen.findByRole("button", { name: "Assistant details" }));
+    expect(screen.getByText("Linked external session")).toBeInTheDocument();
     expect(screen.getByText(/attached to the current Telegram conversation/i)).toBeInTheDocument();
     expect(screen.getByText("Linked session")).toBeInTheDocument();
   });
@@ -718,6 +746,7 @@ describe("ThreadShell", () => {
     );
 
     expect(await screen.findByText("Latest assistant update is ready")).toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole("button", { name: "Assistant details" }));
     expect(screen.getByText("Linked external session")).toBeInTheDocument();
   });
 
@@ -773,7 +802,8 @@ describe("ThreadShell", () => {
       ),
     );
 
-    expect(await screen.findByText("Linked external session")).toBeInTheDocument();
+    await userEvent.setup().click(await screen.findByRole("button", { name: "Assistant details" }));
+    expect(screen.getByText("Linked external session")).toBeInTheDocument();
     expect(screen.getByText(/owner primary-user/i)).toBeInTheDocument();
     expect(screen.getByText(/Linked identity: 12345\./i)).toBeInTheDocument();
     expect(screen.getByText(/Trust: linked\./i)).toBeInTheDocument();
@@ -913,24 +943,25 @@ describe("ThreadShell", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText("Assistant summary")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Assistant details" })).toBeInTheDocument();
     });
+    expect(screen.getByText(/Approval pending/i)).toBeInTheDocument();
+    expect(screen.getByText(/Linked 1/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/Review the pending approval request\./i).length).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole("button", { name: "Assistant details" }));
+    expect(screen.getByText("Assistant overview")).toBeInTheDocument();
     expect(screen.getByText("Current task")).toBeInTheDocument();
     expect(screen.getByText("Review the local thread summary")).toBeInTheDocument();
-    expect(screen.getByText("Completed")).toBeInTheDocument();
-    expect(screen.getByText(/Origin WebUI/i)).toBeInTheDocument();
-    expect(screen.getByText(/Owner defaults: ko-KR · Asia\/Seoul · direct · balanced/i)).toBeInTheDocument();
-    expect(screen.getByText("Memory corrections:")).toBeInTheDocument();
-    expect(screen.getByText("기억해")).toBeInTheDocument();
-    expect(screen.getByText("잊어")).toBeInTheDocument();
+    expect(screen.getByText(/Owner defaults/i)).toBeInTheDocument();
+    expect(screen.getByText(/ko-KR · Asia\/Seoul · direct · balanced/i)).toBeInTheDocument();
+    expect(screen.getByText("Memory tools")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "기억해" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "잊어" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "기억해" }));
     expect(screen.getByLabelText("Message input")).toHaveValue(
       "기억해\n내용: [기억할 내용]\n현재 task: Review the local thread summary\n저장 위치: memory/MEMORY.md",
     );
-    expect(screen.getByText(/1 approval pending/i)).toBeInTheDocument();
-    expect(screen.getByText(/1 linked sessions/i)).toBeInTheDocument();
-    expect(screen.getByText(/Latest external activity: Telegram updated/i)).toBeInTheDocument();
-    expect(screen.getByText(/Next step: review the pending approval request\./i)).toBeInTheDocument();
   });
 
   it("renders blocked and recent completion hints in the owner-aware summary", async () => {
@@ -1014,9 +1045,9 @@ describe("ThreadShell", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText("Assistant summary")).toBeInTheDocument();
+      expect(screen.getByText(/^Blocked$/i)).toBeInTheDocument();
     });
-    expect(screen.getByText(/1 blocked/i)).toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole("button", { name: "Assistant details" }));
     expect(screen.getByText(/Recent completion: Telegram updated/i)).toBeInTheDocument();
     expect(
       screen.getByText(/Next step: Reopen the interrupted session and continue the task\./i),
@@ -1063,9 +1094,9 @@ describe("ThreadShell", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText("Assistant summary")).toBeInTheDocument();
+      expect(screen.getByText(/Held 1/i)).toBeInTheDocument();
     });
-    expect(screen.getByText(/1 proactive held/i)).toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole("button", { name: "Assistant details" }));
     expect(screen.getByText(/Quiet hours held Morning briefing ready for Telegram/i)).toBeInTheDocument();
     expect(screen.getByText(/Next step: open WebUI to review the held proactive update\./i)).toBeInTheDocument();
   });
@@ -1142,7 +1173,8 @@ describe("ThreadShell", () => {
 
     render(wrap(client, <Harness />));
 
-    expect(screen.getByText(/Owner defaults: ko-KR · Asia\/Seoul · direct · balanced/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Assistant details" }));
+    expect(screen.getByText(/ko-KR · Asia\/Seoul · direct · balanced/i)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "이건 기본 선호가 아님" }));
     await user.click(screen.getByRole("button", { name: "Send message" }));
 
@@ -1154,8 +1186,9 @@ describe("ThreadShell", () => {
       });
     });
 
+    await user.click(screen.getByRole("button", { name: "Assistant details" }));
     await waitFor(() => {
-      expect(screen.getByText(/Owner defaults: ko-KR · Asia\/Seoul · technical · balanced/i)).toBeInTheDocument();
+      expect(screen.getByText(/ko-KR · Asia\/Seoul · technical · balanced/i)).toBeInTheDocument();
     });
   });
 
@@ -1218,12 +1251,11 @@ describe("ThreadShell", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getAllByText("Draft ready").length).toBeGreaterThan(0);
+      expect(screen.getByText(/Draft ready/)).toBeInTheDocument();
     });
-    expect(screen.getByText("Draft created for alice@example.com.")).toBeInTheDocument();
-    expect(screen.getByText("Current task")).toBeInTheDocument();
-    expect(screen.getAllByText("Completed").length).toBeGreaterThan(0);
+    expect(screen.getByText(/Draft created for alice@example.com./)).toBeInTheDocument();
     expect(screen.getByText("Mail result")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
     expect(screen.getByText(/To:/i)).toBeInTheDocument();
     expect(screen.getByText(/Subject:/i)).toBeInTheDocument();
   });
@@ -1286,6 +1318,7 @@ describe("ThreadShell", () => {
       expect(screen.getByText("Mail result")).toBeInTheDocument();
     });
     expect(screen.getByText("Thread summary")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
     expect(screen.getByText("Budget follow-up")).toBeInTheDocument();
     expect(screen.getByText("Alice is waiting for approval before noon.")).toBeInTheDocument();
   });
@@ -1352,8 +1385,57 @@ describe("ThreadShell", () => {
     await waitFor(() => {
       expect(screen.getByText("Mail result")).toBeInTheDocument();
     });
-    expect(screen.getByText("Approval pending")).toBeInTheDocument();
-    expect(screen.getAllByText("Waiting approval").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Approval pending").length).toBeGreaterThan(0);
+    expect(screen.getByText(/Mail send approval required/)).toBeInTheDocument();
+  });
+
+  it("renders dashboard home when no session is active and opens priority items", async () => {
+    const client = makeClient();
+    const openSession = vi.fn();
+
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={null}
+          sessions={[
+            {
+              ...telegramSession("12345"),
+              updatedAt: "2026-05-01T11:00:00Z",
+              metadata: {
+                approval_summary: {
+                  status: "pending",
+                  tool_name: "mail.send_message",
+                  prompt_preview: "Approval required before sending this email.",
+                },
+                task_summary: {
+                  task_id: "session:telegram:12345",
+                  canonical_owner_id: "primary-user",
+                  title: "Mail send approval required",
+                  status: "waiting-approval",
+                  origin_channel: "telegram",
+                  origin_session_key: "telegram:12345",
+                  updated_at: "2026-05-01T11:00:00Z",
+                  next_step_hint: "Review the pending approval request.",
+                },
+              },
+            },
+          ]}
+          title="nanobot"
+          onToggleSidebar={() => {}}
+          onGoHome={() => {}}
+          onOpenSession={openSession}
+          onNewChat={vi.fn().mockResolvedValue("chat-a")}
+        />,
+      ),
+    );
+
+    expect(await screen.findByText("Assistant dashboard")).toBeInTheDocument();
+    expect(screen.getByText(/오늘 바로 처리할 항목/i)).toBeInTheDocument();
+    expect(screen.getByText("Priority queue")).toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "메시지 입력" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "승인 열기" }));
+    expect(openSession).toHaveBeenCalledWith("telegram:12345");
   });
 
   it("renders a calendar event preview card from action_result details", async () => {
@@ -1414,9 +1496,137 @@ describe("ThreadShell", () => {
     await waitFor(() => {
       expect(screen.getByText("Calendar result")).toBeInTheDocument();
     });
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
     expect(screen.getByText(/Title:/i)).toBeInTheDocument();
     expect(screen.getByText(/When:/i)).toBeInTheDocument();
     expect(screen.getByText(/Location:/i)).toBeInTheDocument();
+  });
+
+  it("renders conflicting calendar events in the inline result card", async () => {
+    const client = makeClient();
+
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={{
+            ...session("chat-a"),
+            metadata: {
+              action_result: {
+                action_id: "calendar-conflicts-1",
+                domain: "calendar",
+                action: "find_conflicts",
+                status: "blocked",
+                title: "Conflicts found",
+                summary: "The requested slot overlaps with 프로젝트 리뷰.",
+                details: {
+                  requested_start_at: "2026-05-02T15:00:00+09:00",
+                  requested_end_at: "2026-05-02T16:00:00+09:00",
+                  reason: "overlap_detected",
+                  conflicting_events: [
+                    {
+                      event_id: "event-1",
+                      title: "프로젝트 리뷰",
+                      start_at: "2026-05-02T15:00:00+09:00",
+                      end_at: "2026-05-02T15:30:00+09:00",
+                      location: "회의실 A",
+                    },
+                  ],
+                },
+              },
+            },
+          }}
+          sessions={[]}
+          title="Chat chat-a"
+          onToggleSidebar={() => {}}
+          onGoHome={() => {}}
+          onNewChat={vi.fn().mockResolvedValue("chat-a")}
+        />,
+      ),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/Conflicts found/)).toBeInTheDocument();
+    });
+    expect(screen.queryByText("회의실 A")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+    expect(screen.getByText("프로젝트 리뷰")).toBeInTheDocument();
+    expect(screen.getByText("회의실 A")).toBeInTheDocument();
+  });
+
+  it("renders calendar pending interaction prompts from session metadata", async () => {
+    const client = makeClient();
+
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={{
+            ...session("chat-a"),
+            metadata: {
+              calendar_pending_interaction: {
+                id: "calendar-interaction-1",
+                kind: "conflict_review",
+                status: "pending",
+                question: "Choose how to continue before approval.",
+                buttons: [["그래도 생성 승인 요청", "새 시간 다시 입력"], ["취소"]],
+              },
+            },
+          }}
+          sessions={[]}
+          title="Chat chat-a"
+          onToggleSidebar={() => {}}
+          onGoHome={() => {}}
+          onNewChat={vi.fn().mockResolvedValue("chat-a")}
+        />,
+      ),
+    );
+
+    expect(await screen.findByRole("group", { name: "Question" })).toHaveTextContent(
+      "Choose how to continue before approval.",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "새 시간 다시 입력" }));
+    expect(client.sendMessage).toHaveBeenCalledWith("chat-a", "새 시간 다시 입력", undefined);
+  });
+
+  it("does not duplicate a failed status block when an action result card is already shown", async () => {
+    const client = makeClient();
+
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={{
+            ...session("chat-a"),
+            metadata: {
+              action_result: {
+                action_id: "calendar-conflicts-1",
+                domain: "calendar",
+                action: "find_conflicts",
+                status: "blocked",
+                title: "Conflicts found",
+                summary: "The requested slot overlaps with 프로젝트 리뷰.",
+                details: {
+                  requested_start_at: "2026-05-02T15:00:00+09:00",
+                  requested_end_at: "2026-05-02T16:00:00+09:00",
+                  reason: "overlap_detected",
+                },
+              },
+            },
+          }}
+          sessions={[]}
+          title="Chat chat-a"
+          onToggleSidebar={() => {}}
+          onGoHome={() => {}}
+          onNewChat={vi.fn().mockResolvedValue("chat-a")}
+        />,
+      ),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Calendar result")).toBeInTheDocument();
+    });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("renders ask_user options above the composer and sends selected answers", async () => {
@@ -1461,6 +1671,51 @@ describe("ThreadShell", () => {
     });
   });
 
+  it("sends ask_user answers through session_message for linked telegram sessions", async () => {
+    const client = makeClient();
+
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={telegramSession("12345")}
+          title="Telegram 12345"
+          onToggleSidebar={() => {}}
+          onGoHome={() => {}}
+          onNewChat={vi.fn().mockResolvedValue("chat-a")}
+        />,
+      ),
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      client._emitChat("telegram:12345", {
+        event: "message",
+        chat_id: "telegram:12345",
+        text: "Choose how to continue before approval.",
+        buttons: [["그래도 생성 승인 요청", "새 시간 다시 입력"], ["취소"]],
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("group", { name: "Question" })).toHaveTextContent(
+        "Choose how to continue before approval.",
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "그래도 생성 승인 요청" }));
+
+    expect(client.sendSessionMessage).toHaveBeenCalledWith(
+      "telegram:12345",
+      "그래도 생성 승인 요청",
+      undefined,
+    );
+    expect(client.sendMessage).not.toHaveBeenCalled();
+  });
+
   it("shows waiting approval status for approval messages and header badges", async () => {
     const client = makeClient();
 
@@ -1486,7 +1741,7 @@ describe("ThreadShell", () => {
       });
     });
 
-    expect(screen.getByText("Approval pending")).toBeInTheDocument();
+    expect(screen.getAllByText("Approval pending").length).toBeGreaterThan(0);
     const status = screen.getByRole("status");
     expect(status).toHaveTextContent("Assistant is waiting for confirmation");
     expect(status).toHaveTextContent("Approve sending the report email to finance?");

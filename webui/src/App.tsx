@@ -347,6 +347,11 @@ function Shell({ onModelNameChange }: { onModelNameChange: (modelName: string | 
     loading,
     theme,
     onToggleTheme: toggle,
+    onGoHome: () => {
+      setView("chat");
+      setActiveKey(null);
+      setMobileSidebarOpen(false);
+    },
     onNewChat: () => {
       void onNewChat();
     },
@@ -434,6 +439,7 @@ function Shell({ onModelNameChange }: { onModelNameChange: (modelName: string | 
             title={headerTitle}
             onToggleSidebar={toggleSidebar}
             onGoHome={() => setActiveKey(null)}
+            onOpenSession={onSelectChat}
             onNewChat={onNewChat}
             onRefreshSessions={refresh}
             hideSidebarToggleOnDesktop={desktopSidebarOpen}

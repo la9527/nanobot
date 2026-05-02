@@ -318,6 +318,18 @@ class TelegramChannel(BaseChannel):
             return content.replace("/dream_restore", "/dream-restore", 1)
         return content
 
+    @staticmethod
+    def _normalize_visible_button_reply(content: str) -> str:
+        """Accept Telegram's text fallback button labels as direct replies."""
+        stripped = content.strip()
+        match = re.fullmatch(r"\[([^\[\]]+)\]", stripped)
+        if not match:
+            return content
+        label = match.group(1).strip()
+        if not label or ":" in label:
+            return content
+        return label
+
     async def start(self) -> None:
         """Start the Telegram bot with long polling."""
         if not self.config.token:
@@ -1056,7 +1068,7 @@ class TelegramChannel(BaseChannel):
 
         # Text content
         if message.text:
-            content_parts.append(message.text)
+            content_parts.append(self._normalize_visible_button_reply(message.text))
         if message.caption:
             content_parts.append(message.caption)
 

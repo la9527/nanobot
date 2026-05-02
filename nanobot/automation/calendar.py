@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, time, timedelta
+from datetime import datetime, time, timedelta, timezone
 from typing import Any, Mapping
 from zoneinfo import ZoneInfo
 
@@ -25,6 +25,7 @@ from nanobot.session.manager import SessionManager
 
 
 CALENDAR_CREATE_APPROVAL_METADATA_KEY = "calendar_create_approval"
+CALENDAR_PENDING_INTERACTION_METADATA_KEY = "calendar_pending_interaction"
 
 
 class _CalendarAutomationModel(BaseModel):
@@ -519,6 +520,17 @@ class CalendarAutomationSessionRunner:
         )
         session = self.sessions.get_or_create(session_key)
         session.metadata[CALENDAR_CREATE_APPROVAL_METADATA_KEY] = request.model_dump(mode="json")
+        pending_updated_at = datetime.now(timezone.utc).isoformat()
+        session.metadata[CALENDAR_PENDING_INTERACTION_METADATA_KEY] = {
+            "id": result.action_id,
+            "kind": "create_approval",
+            "status": "pending",
+            "question": result.summary,
+            "buttons": [["승인", "취소"]],
+            "request": request.model_dump(mode="json"),
+            "created_at": pending_updated_at,
+            "updated_at": pending_updated_at,
+        }
         self.sessions.set_action_result(session, result)
         self.sessions.set_approval_summary(
             session,
@@ -560,6 +572,7 @@ class CalendarAutomationSessionRunner:
         result = await self.client.create_event(request)
         session = self.sessions.get_or_create(session_key)
         session.metadata.pop(CALENDAR_CREATE_APPROVAL_METADATA_KEY, None)
+        session.metadata.pop(CALENDAR_PENDING_INTERACTION_METADATA_KEY, None)
         self.sessions.clear_approval_summary(session)
         self.sessions.set_action_result(session, result)
         session.add_message("assistant", result.summary)
@@ -569,7 +582,25 @@ class CalendarAutomationSessionRunner:
     async def deny_create(self, session_key: str) -> CalendarCreateEventResult:
         request = self._pending_create_request(session_key)
         if request is None:
-            return await self.approve_create(session_key)
+            return self._persist_ephemeral_result(
+                session_key,
+                CalendarCreateEventResult(
+                    action_id=self.client._action_id("calendar-create-no-pending-cancel"),
+                    status="blocked",
+                    title="No pending calendar approval",
+                    summary="There is no pending calendar create approval to cancel in this session.",
+                    next_step="Request calendar create approval first.",
+                    visibility=ActionVisibility(surfaces=["thread", "sidebar"], badge="Calendar blocked"),
+                    details=CalendarCreateEventDetails(
+                        preview=CalendarEventPreview(title="(Untitled)", start_at="", end_at=""),
+                    ),
+                    error=ActionFailure(
+                        code="not_found",
+                        message="No pending calendar approval is available.",
+                        retryable=False,
+                    ),
+                ),
+            )
         preview = CalendarEventPreview(
             title=request.title,
             start_at=request.start_at,
@@ -593,6 +624,7 @@ class CalendarAutomationSessionRunner:
         )
         session = self.sessions.get_or_create(session_key)
         session.metadata.pop(CALENDAR_CREATE_APPROVAL_METADATA_KEY, None)
+        session.metadata.pop(CALENDAR_PENDING_INTERACTION_METADATA_KEY, None)
         self.sessions.clear_approval_summary(session)
         self.sessions.set_action_result(session, result)
         session.add_message("assistant", result.summary)

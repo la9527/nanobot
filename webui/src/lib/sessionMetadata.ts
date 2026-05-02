@@ -51,6 +51,15 @@ export interface DerivedProactiveSummary {
   updatedAt: string | null;
 }
 
+export interface DerivedPendingInteraction {
+  id: string | null;
+  domain: "calendar";
+  kind: string | null;
+  status: string | null;
+  question: string | null;
+  buttons: string[][];
+}
+
 export function toChannelBadgeLabel(channel: string | null | undefined): string {
   if (!channel) return "WebUI";
   if (channel === "websocket") return "WebUI";
@@ -74,8 +83,43 @@ export function approvalSummaryLabel(session: ChatSummary | null | undefined): s
   if (!summary || summary.status !== "pending") return null;
 
   const toolName = summary.tool_name?.trim() || "tool";
+  if (toolName === "calendar.create_event") {
+    const request = session?.metadata?.calendar_create_approval;
+    const pendingRequest = session?.metadata?.calendar_pending_interaction?.request;
+    const pending = pendingRequest && typeof pendingRequest === "object" ? pendingRequest as Record<string, unknown> : null;
+    const title = request?.title?.trim() || (typeof pending?.title === "string" ? pending.title.trim() : "");
+    const startAt = request?.start_at?.trim() || (typeof pending?.start_at === "string" ? pending.start_at.trim() : "");
+    const endAt = request?.end_at?.trim() || (typeof pending?.end_at === "string" ? pending.end_at.trim() : "");
+    if (title && startAt && endAt) {
+      return `Calendar create approval pending: ${title} (${startAt} -> ${endAt})`;
+    }
+    if (title) return `Calendar create approval pending: ${title}`;
+    return "Calendar create approval pending.";
+  }
   const promptPreview = summary.prompt_preview?.trim();
   return promptPreview ? `${toolName}: ${promptPreview}` : `${toolName} approval pending`;
+}
+
+export function getCalendarPendingInteraction(
+  session: ChatSummary | null | undefined,
+): DerivedPendingInteraction | null {
+  const pending = session?.metadata?.calendar_pending_interaction;
+  if (!pending || pending.status !== "pending") return null;
+  const buttons = Array.isArray(pending.buttons)
+    ? pending.buttons
+      .filter((row): row is string[] => Array.isArray(row))
+      .map((row) => row.filter((option) => typeof option === "string" && option.trim()))
+      .filter((row) => row.length > 0)
+    : [];
+  if (buttons.length === 0) return null;
+  return {
+    id: pending.id?.trim() || null,
+    domain: "calendar",
+    kind: pending.kind?.trim() || null,
+    status: pending.status?.trim() || null,
+    question: pending.question?.trim() || null,
+    buttons,
+  };
 }
 
 export function getTaskSummary(

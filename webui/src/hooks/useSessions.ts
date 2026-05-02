@@ -41,6 +41,9 @@ export function hydrateSessionMessages(body: SessionMessagesResponse): UIMessage
         createdAt: m.timestamp ? Date.parse(m.timestamp) : Date.now(),
         ...(images ? { images } : {}),
         ...(media ? { media } : {}),
+        ...(Array.isArray(m.buttons) && m.buttons.some((row) => row.length > 0)
+          ? { buttons: m.buttons }
+          : {}),
       },
     ];
   });

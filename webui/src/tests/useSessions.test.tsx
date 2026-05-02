@@ -195,6 +195,60 @@ describe("useSessions", () => {
     ]);
   });
 
+  it("preserves historical ask-user buttons for polled telegram sessions", async () => {
+    vi.useFakeTimers();
+    vi.mocked(api.fetchSessionMessages)
+      .mockResolvedValueOnce({
+        key: "telegram:12345",
+        created_at: "2026-04-20T10:00:00Z",
+        updated_at: "2026-04-20T10:05:00Z",
+        messages: [
+          {
+            role: "assistant",
+            content: "How should I continue?",
+            timestamp: "2026-04-20T10:00:00Z",
+            buttons: [["Force create", "Reschedule"], ["Cancel"]],
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        key: "telegram:12345",
+        created_at: "2026-04-20T10:00:00Z",
+        updated_at: "2026-04-20T10:05:01Z",
+        messages: [
+          {
+            role: "assistant",
+            content: "How should I continue?",
+            timestamp: "2026-04-20T10:00:00Z",
+            buttons: [["Force create", "Reschedule"], ["Cancel"]],
+          },
+        ],
+      });
+
+    const { result } = renderHook(() => useSessionHistory("telegram:12345"), {
+      wrapper: wrap(fakeClient()),
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(result.current.loading).toBe(false);
+    expect(result.current.messages[0]?.buttons).toEqual([
+      ["Force create", "Reschedule"],
+      ["Cancel"],
+    ]);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+
+    expect(result.current.messages[0]?.buttons).toEqual([
+      ["Force create", "Reschedule"],
+      ["Cancel"],
+    ]);
+  });
+
   it("hydrates historical assistant video media_urls into media attachments", async () => {
     vi.mocked(api.fetchSessionMessages).mockResolvedValue({
       key: "websocket:chat-video",

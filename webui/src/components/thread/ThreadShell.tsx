@@ -1,9 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { AssistantDashboard } from "@/components/home/AssistantDashboard";
+import { ThreadAssistantDetailsSheet } from "@/components/thread/ThreadAssistantDetailsSheet";
 import { AskUserPrompt } from "@/components/thread/AskUserPrompt";
 import { ThreadComposer } from "@/components/thread/ThreadComposer";
 import { ThreadHeader } from "@/components/thread/ThreadHeader";
+import { ThreadInlineActionResult } from "@/components/thread/ThreadInlineActionResult";
+import { ThreadStatusRail } from "@/components/thread/ThreadStatusRail";
 import { ThreadStatusBlock } from "@/components/thread/ThreadStatusBlock";
 import type { ThreadStatusTone } from "@/components/thread/ThreadStatusBlock";
 import { ThreadViewport } from "@/components/thread/ThreadViewport";
@@ -14,6 +18,7 @@ import { ApiError, fetchSessionMessages, fetchSessionModelTarget, selectSessionM
 import { relativeTime } from "@/lib/format";
 import {
   approvalPendingBadgeLabel,
+  getCalendarPendingInteraction,
   getActionResult,
   getMemoryCorrectionActions,
   getOwnerProfile,
@@ -22,7 +27,6 @@ import {
   hasPendingApproval,
   isCompletedSession,
   isBlockedSession,
-  taskStatusLabel,
   toChannelBadgeLabel,
 } from "@/lib/sessionMetadata";
 import type { ChatSummary, ModelTargetOption, SessionModelTargetResponse, UIMessage } from "@/lib/types";
@@ -35,6 +39,7 @@ interface ThreadShellProps {
   title: string;
   onToggleSidebar: () => void;
   onGoHome: () => void;
+  onOpenSession?: (key: string) => void;
   onNewChat: () => Promise<string | null>;
   onRefreshSessions?: () => Promise<void> | void;
   hideSidebarToggleOnDesktop?: boolean;
@@ -167,6 +172,11 @@ function deriveOwnerAwareSummary(params: {
 }): {
   title: string;
   body: string;
+  approvalPendingCount: number;
+  blockedCount: number;
+  linkedSessionCount: number;
+  suppressedProactiveCount: number;
+  nextStepHint: string | null;
 } | null {
   const { session, sessions, assistantActive, currentThreadTone } = params;
   if (!session) return null;
@@ -309,6 +319,11 @@ function deriveOwnerAwareSummary(params: {
   return {
     title: "Assistant summary",
     body: bodyParts.join(" "),
+    approvalPendingCount,
+    blockedCount,
+    linkedSessionCount,
+    suppressedProactiveCount,
+    nextStepHint: nextTaskHint ?? null,
   };
 }
 
@@ -338,7 +353,7 @@ export function ThreadShell({
   sessions = [],
   title,
   onToggleSidebar,
-  onGoHome,
+  onOpenSession,
   onNewChat,
   onRefreshSessions,
   hideSidebarToggleOnDesktop = false,
@@ -361,6 +376,7 @@ export function ThreadShell({
   const [booting, setBooting] = useState(false);
   const [modelTargetPending, setModelTargetPending] = useState(false);
   const [remoteReplyPending, setRemoteReplyPending] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const [composerDraft, setComposerDraft] = useState<string | null>(null);
   const [composerDraftNonce, setComposerDraftNonce] = useState(0);
   const pendingFirstRef = useRef<string | null>(null);
@@ -387,7 +403,7 @@ export function ThreadShell({
     dismissStreamError,
   } = useNanobotStream(chatId ?? historyKey, initial, chatId);
   const showHeroComposer = messages.length === 0 && !loading;
-  const pendingAsk = useMemo(() => {
+  const messagePendingAsk = useMemo(() => {
     for (let index = messages.length - 1; index >= 0; index -= 1) {
       const message = messages[index];
       if (message.kind === "trace") continue;
@@ -402,6 +418,15 @@ export function ThreadShell({
     }
     return null;
   }, [messages]);
+  const metadataPendingAsk = useMemo(() => {
+    const pending = getCalendarPendingInteraction(session);
+    if (!pending) return null;
+    return {
+      question: pending.question || "Choose how to continue.",
+      buttons: pending.buttons,
+    };
+  }, [session]);
+  const pendingAsk = metadataPendingAsk ?? messagePendingAsk;
 
   const pendingApprovalMessage = useMemo(() => {
     for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -467,6 +492,7 @@ export function ThreadShell({
   const currentTaskSummary = useMemo(() => getTaskSummary(session), [session]);
   const currentOwnerProfile = useMemo(() => getOwnerProfile(session), [session]);
   const memoryCorrectionActions = useMemo(() => getMemoryCorrectionActions(session), [session]);
+  const actionResult = useMemo(() => getActionResult(session), [session]);
   const currentActionDetails = session?.metadata?.action_result?.details;
   const currentActionStatus = session?.metadata?.action_result?.status;
   const currentActionDomain = session?.metadata?.action_result?.domain;
@@ -479,15 +505,71 @@ export function ThreadShell({
           requestedStartAt: currentActionDetails.requested_start_at,
           requestedEndAt: currentActionDetails.requested_end_at,
           reason: currentActionDetails.reason,
+          conflictingEvents: Array.isArray(currentActionDetails.conflicting_events)
+            ? currentActionDetails.conflicting_events
+            : [],
         }
       : null;
   const currentActionThreads = Array.isArray(currentActionDetails?.threads)
     ? currentActionDetails.threads.slice(0, 3)
     : [];
+  const hasInlineActionResult = Boolean(
+    actionResult?.title
+    || actionResult?.summary
+    || currentActionDraftPreview
+    || currentCalendarPreview
+    || currentCalendarConflict
+    || currentActionThreads.length,
+  );
+  const shouldShowThreadStatus = Boolean(threadStatus) && !(
+    hasInlineActionResult
+    && !pendingAsk
+    && !pendingApprovalMessage
+    && !streamError
+    && !booting
+    && !remoteReplyPending
+    && !isStreaming
+    && !modelTargetPending
+  );
   const handleMemoryCorrectionClick = useCallback((phrase: string) => {
     setComposerDraft(buildMemoryCorrectionDraft(phrase, currentTaskSummary?.title ?? null));
     setComposerDraftNonce((value) => value + 1);
+    setDetailsOpen(false);
   }, [currentTaskSummary?.title]);
+
+  const statusRailItems = useMemo(() => {
+    const items: string[] = [];
+    if (ownerAwareSummary?.approvalPendingCount) {
+      items.push(ownerAwareSummary.approvalPendingCount === 1 ? "Approval pending" : `Approvals ${ownerAwareSummary.approvalPendingCount}`);
+    }
+    if (ownerAwareSummary?.blockedCount) {
+      items.push(ownerAwareSummary.blockedCount === 1 ? "Blocked" : `Blocked ${ownerAwareSummary.blockedCount}`);
+    }
+    if (ownerAwareSummary?.suppressedProactiveCount) {
+      items.push(`Held ${ownerAwareSummary.suppressedProactiveCount}`);
+    }
+    if (ownerAwareSummary?.linkedSessionCount) {
+      items.push(`Linked ${ownerAwareSummary.linkedSessionCount}`);
+    }
+    if (session?.channel && session.channel !== "websocket") {
+      items.push(`Linked ${toChannelBadgeLabel(session.channel)}`);
+    }
+    const updatedLabel = relativeTime(session?.updatedAt ?? session?.createdAt);
+    if (updatedLabel) {
+      items.push(`Updated ${updatedLabel}`);
+    }
+    return items.slice(0, 4);
+  }, [ownerAwareSummary?.approvalPendingCount, ownerAwareSummary?.blockedCount, ownerAwareSummary?.suppressedProactiveCount, session?.channel, session?.createdAt, session?.updatedAt]);
+
+  const statusRailCaption = useMemo(() => {
+    if (currentTaskSummary?.status === "waiting-approval" || currentTaskSummary?.status === "blocked") {
+      return currentTaskSummary.nextStepHint || currentTaskSummary.title || null;
+    }
+    if (ownerAwareSummary?.nextStepHint) {
+      return ownerAwareSummary.nextStepHint;
+    }
+    return null;
+  }, [currentTaskSummary?.nextStepHint, currentTaskSummary?.status, currentTaskSummary?.title, ownerAwareSummary?.nextStepHint]);
 
   const refreshSessionsIfNeeded = useCallback(async () => {
     if (!pendingSessionRefreshRef.current || !onRefreshSessions) return;
@@ -511,8 +593,9 @@ export function ThreadShell({
 
   useEffect(() => {
     if (chatId) return;
+    if (remoteReplyPending) return;
     setMessages(historical);
-  }, [chatId, historical, setMessages]);
+  }, [chatId, historical, remoteReplyPending, setMessages]);
 
   useEffect(() => {
     if (!chatId) return;
@@ -711,8 +794,8 @@ export function ThreadShell({
     <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
       {t("thread.loadingConversation")}
     </div>
-  ) : (
-    <div className="flex w-full max-w-[40rem] flex-col gap-2 text-left animate-in fade-in-0 slide-in-from-bottom-2 duration-500">
+  ) : session ? (
+    <div className="flex w-full max-w-[36rem] flex-col gap-2 text-left animate-in fade-in-0 slide-in-from-bottom-2 duration-500">
       <div className="inline-flex items-center gap-2 text-[11px] font-medium text-muted-foreground">
         <img
           src="/brand/nanobot_icon.png"
@@ -727,149 +810,50 @@ export function ThreadShell({
         {t("thread.empty.description")}
       </p>
     </div>
+  ) : (
+    <AssistantDashboard
+      sessions={sessions}
+      onOpenSession={onOpenSession}
+      onNewChat={onNewChat}
+    />
   );
+  const viewportMessages = session ? messages : [];
+  const viewportStreaming = Boolean(session) && (isStreaming || remoteReplyPending);
 
   return (
     <section className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
       <ThreadHeader
         title={title}
         onToggleSidebar={onToggleSidebar}
-        onGoHome={onGoHome}
         hideSidebarToggleOnDesktop={hideSidebarToggleOnDesktop}
         statusBadges={headerStatusBadges}
       />
-      {ownerAwareSummary ? (
-        <div className="px-3 pb-2">
-          <div className="rounded-[16px] border border-border/60 bg-muted/35 px-3 py-2.5 text-sm text-muted-foreground">
-            <p className="font-medium text-foreground/80">{ownerAwareSummary.title}</p>
-            <p className="mt-1 text-[12px] leading-5">{ownerAwareSummary.body}</p>
-          </div>
-        </div>
-      ) : null}
-      {currentTaskSummary ? (
-        <div className="px-3 pb-2">
-          <div className="rounded-[16px] border border-border/60 bg-background/80 px-3 py-2.5 text-sm text-muted-foreground">
-            <div className="flex flex-wrap items-center gap-2">
-              <p className="font-medium text-foreground/85">Current task</p>
-              <span className="inline-flex items-center rounded-full border border-border/60 bg-muted/50 px-2 py-0.5 text-[10px] font-medium tracking-wide text-muted-foreground">
-                {taskStatusLabel(currentTaskSummary.status)}
-              </span>
-              {currentTaskSummary.originChannel ? (
-                <span className="inline-flex items-center rounded-full border border-border/60 bg-muted/50 px-2 py-0.5 text-[10px] font-medium tracking-wide text-muted-foreground">
-                  Origin {toChannelBadgeLabel(currentTaskSummary.originChannel)}
-                </span>
-              ) : null}
-            </div>
-            {currentTaskSummary.title ? (
-              <p className="mt-1 text-[12px] leading-5 text-foreground/82">{currentTaskSummary.title}</p>
-            ) : null}
-            {currentTaskSummary.nextStepHint ? (
-              <p className="mt-1 text-[12px] leading-5">Next step: {currentTaskSummary.nextStepHint}</p>
-            ) : null}
-            {currentOwnerProfile ? (
-              <p className="mt-1 text-[11px] leading-5 text-muted-foreground/90">
-                Owner defaults: {currentOwnerProfile.preferredLanguage || "unknown language"} · {currentOwnerProfile.timezone || "unknown timezone"} · {currentOwnerProfile.responseTone || "default tone"} · {currentOwnerProfile.responseLength || "default length"}
-              </p>
-            ) : null}
-            {memoryCorrectionActions.length ? (
-              <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                <span className="text-[11px] leading-5 text-muted-foreground/90">Memory corrections:</span>
-                {memoryCorrectionActions.map((action) => (
-                  <button
-                    type="button"
-                    key={action.code || action.phrase}
-                    onClick={() => handleMemoryCorrectionClick(action.phrase || "")}
-                    className="inline-flex items-center rounded-full border border-border/60 bg-muted/45 px-2 py-0.5 text-[10px] font-medium tracking-wide text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                    title={action.store || undefined}
-                  >
-                    {action.phrase}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-          </div>
-        </div>
-      ) : null}
-      {currentActionDraftPreview || currentActionThreads.length || currentCalendarPreview || currentCalendarConflict ? (
-        <div className="px-3 pb-2">
-          <div className="rounded-[16px] border border-border/60 bg-muted/20 px-3 py-2.5 text-sm text-muted-foreground">
-            <div className="flex flex-wrap items-center gap-2">
-              <p className="font-medium text-foreground/85">{currentActionDomain === "calendar" ? "Calendar result" : "Mail result"}</p>
-              {currentActionDraftPreview ? (
-                <span className="inline-flex items-center rounded-full border border-border/60 bg-muted/50 px-2 py-0.5 text-[10px] font-medium tracking-wide text-muted-foreground">
-                  {currentActionStatus === "waiting_approval" ? "Approval pending" : "Draft preview"}
-                </span>
-              ) : null}
-              {currentCalendarPreview ? (
-                <span className="inline-flex items-center rounded-full border border-border/60 bg-muted/50 px-2 py-0.5 text-[10px] font-medium tracking-wide text-muted-foreground">
-                  {currentActionStatus === "waiting_approval" ? "Approval pending" : "Event preview"}
-                </span>
-              ) : null}
-              {currentCalendarConflict ? (
-                <span className="inline-flex items-center rounded-full border border-border/60 bg-muted/50 px-2 py-0.5 text-[10px] font-medium tracking-wide text-muted-foreground">
-                  Conflict check
-                </span>
-              ) : null}
-              {!currentActionDraftPreview && currentActionThreads.length ? (
-                <span className="inline-flex items-center rounded-full border border-border/60 bg-muted/50 px-2 py-0.5 text-[10px] font-medium tracking-wide text-muted-foreground">
-                  Thread summary
-                </span>
-              ) : null}
-            </div>
-            {currentActionDraftPreview ? (
-              <div className="mt-2 space-y-1 text-[12px] leading-5">
-                <p><span className="font-medium text-foreground/82">To:</span> {(currentActionDraftPreview.to_recipients || []).join(", ") || "-"}</p>
-                <p><span className="font-medium text-foreground/82">Subject:</span> {currentActionDraftPreview.subject || "(No subject)"}</p>
-                <p><span className="font-medium text-foreground/82">Preview:</span> {currentActionDraftPreview.body_preview || "-"}</p>
-              </div>
-            ) : null}
-            {currentCalendarPreview ? (
-              <div className="mt-2 space-y-1 text-[12px] leading-5">
-                <p><span className="font-medium text-foreground/82">Title:</span> {currentCalendarPreview.title || "(Untitled)"}</p>
-                <p><span className="font-medium text-foreground/82">When:</span> {currentCalendarPreview.start_at || "-"} -&gt; {currentCalendarPreview.end_at || "-"}</p>
-                {currentCalendarPreview.location ? (
-                  <p><span className="font-medium text-foreground/82">Location:</span> {currentCalendarPreview.location}</p>
-                ) : null}
-                {currentCalendarPreview.description ? (
-                  <p><span className="font-medium text-foreground/82">Details:</span> {currentCalendarPreview.description}</p>
-                ) : null}
-              </div>
-            ) : null}
-            {currentCalendarConflict ? (
-              <div className="mt-2 space-y-1 text-[12px] leading-5">
-                <p><span className="font-medium text-foreground/82">When:</span> {currentCalendarConflict.requestedStartAt} -&gt; {currentCalendarConflict.requestedEndAt}</p>
-                {currentCalendarConflict.reason ? (
-                  <p><span className="font-medium text-foreground/82">Reason:</span> {currentCalendarConflict.reason}</p>
-                ) : null}
-              </div>
-            ) : null}
-            {!currentActionDraftPreview && currentActionThreads.length ? (
-              <div className="mt-2 space-y-2 text-[12px] leading-5">
-                {currentActionThreads.map((thread, index) => (
-                  <div key={thread.thread_id || `${index}-${thread.subject || "thread"}`} className="rounded-[12px] border border-border/50 bg-background/70 px-2.5 py-2">
-                    <p className="font-medium text-foreground/85">{thread.subject || "(No subject)"}</p>
-                    <p className="text-muted-foreground/95">{thread.summary || thread.sender_summary || thread.snippet || "No summary available."}</p>
-                  </div>
-                ))}
-              </div>
-            ) : null}
-          </div>
-        </div>
+      {(session && (statusRailItems.length > 0 || statusRailCaption || ownerAwareSummary || currentTaskSummary || continuityPlaceholder || memoryCorrectionActions.length > 0)) ? (
+        <ThreadStatusRail
+          items={statusRailItems}
+          caption={statusRailCaption}
+          onOpenDetails={() => setDetailsOpen(true)}
+        />
       ) : null}
       <ThreadViewport
-        messages={messages}
-        isStreaming={isStreaming || remoteReplyPending}
+        messages={viewportMessages}
+        isStreaming={viewportStreaming}
         onApprovalResponse={handleApprovalResponse}
         emptyState={emptyState}
         composer={
-          <>
-            {continuityPlaceholder ? (
-              <div className="mb-2 rounded-[16px] border border-border/60 bg-muted/35 px-3 py-2.5 text-sm text-muted-foreground">
-                <p className="font-medium text-foreground/80">{continuityPlaceholder.title}</p>
-                <p className="mt-1 text-[12px] leading-5">{continuityPlaceholder.body}</p>
-              </div>
+          session ? <>
+            {session ? (
+              <ThreadInlineActionResult
+                domain={currentActionDomain}
+                status={currentActionStatus}
+                title={actionResult?.title}
+                summary={actionResult?.summary}
+                preview={currentActionDomain === "mail" ? currentActionDraftPreview : currentCalendarPreview}
+                conflict={currentCalendarConflict}
+                threads={currentActionThreads}
+              />
             ) : null}
-            {threadStatus ? (
+            {session && threadStatus && shouldShowThreadStatus ? (
               <ThreadStatusBlock
                 tone={threadStatus.tone}
                 title={threadStatus.title}
@@ -877,11 +861,11 @@ export function ThreadShell({
                 onDismiss={threadStatus.tone === "failed" ? dismissStreamError : undefined}
               />
             ) : null}
-            {pendingAsk ? (
+            {session && pendingAsk ? (
               <AskUserPrompt
                 question={pendingAsk.question}
                 buttons={pendingAsk.buttons}
-                onAnswer={send}
+                onAnswer={isWebSocketSession ? handleWebSocketSend : handleBridgedSessionSend}
               />
             ) : null}
             {session ? (
@@ -921,8 +905,19 @@ export function ThreadShell({
                 variant="hero"
               />
             )}
-          </>
+          </> : null
         }
+      />
+      <ThreadAssistantDetailsSheet
+        open={detailsOpen}
+        onOpenChange={setDetailsOpen}
+        ownerSummaryBody={ownerAwareSummary?.body}
+        continuityTitle={continuityPlaceholder?.title}
+        continuityBody={continuityPlaceholder?.body}
+        currentTask={currentTaskSummary}
+        ownerProfile={currentOwnerProfile}
+        memoryActions={memoryCorrectionActions}
+        onMemoryAction={handleMemoryCorrectionClick}
       />
     </section>
   );

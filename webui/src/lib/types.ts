@@ -74,6 +74,25 @@ export interface ChatSummary {
       message_id?: string | null;
       prompt_preview?: string;
     };
+    calendar_pending_interaction?: {
+      id?: string;
+      kind?: string;
+      status?: string;
+      question?: string;
+      buttons?: string[][];
+      request?: Record<string, unknown>;
+      conflicts?: Array<Record<string, unknown>>;
+      expected_field?: string | null;
+      created_at?: string | null;
+      updated_at?: string | null;
+    };
+    calendar_create_approval?: {
+      title?: string;
+      start_at?: string;
+      end_at?: string;
+      description?: string | null;
+      location?: string | null;
+    };
     proactive_summary?: {
       status?: string;
       category?: string;
@@ -163,6 +182,14 @@ export interface ChatSummary {
         available?: boolean;
         checked_window_label?: string | null;
         reason?: string | null;
+        conflicting_events?: Array<{
+          event_id?: string | null;
+          title?: string;
+          start_at?: string;
+          end_at?: string;
+          all_day?: boolean;
+          location?: string | null;
+        }>;
         threads?: Array<{
           thread_id?: string;
           subject?: string;
@@ -199,6 +226,18 @@ export interface SessionMessagesResponse {
       tool_call_id?: string;
       message_id?: string | null;
       prompt_preview?: string;
+    };
+    calendar_pending_interaction?: {
+      id?: string;
+      kind?: string;
+      status?: string;
+      question?: string;
+      buttons?: string[][];
+      request?: Record<string, unknown>;
+      conflicts?: Array<Record<string, unknown>>;
+      expected_field?: string | null;
+      created_at?: string | null;
+      updated_at?: string | null;
     };
     proactive_summary?: {
       status?: string;
@@ -311,6 +350,7 @@ export interface SessionMessagesResponse {
     tool_calls?: unknown;
     tool_call_id?: string;
     name?: string;
+    buttons?: string[][];
     media_urls?: {
       url: string;
       name?: string;
