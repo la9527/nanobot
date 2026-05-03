@@ -25,6 +25,7 @@ from nanobot.automation_results import (
     CalendarUpdateEventDetails,
     CalendarUpdateEventResult,
 )
+from nanobot.i18n import translate as _t
 from nanobot.session.manager import SessionManager
 
 
@@ -47,6 +48,7 @@ class N8NCalendarAutomationConfig(_CalendarAutomationModel):
     delete_path: str = "webhook/assistant-calendar-delete"
     timeout_s: float = 20.0
     timezone: str = "Asia/Seoul"
+    locale: str = "ko-KR"
 
     @classmethod
     def from_env(
@@ -65,6 +67,7 @@ class N8NCalendarAutomationConfig(_CalendarAutomationModel):
             update_path=str(scope.get("N8N_CALENDAR_UPDATE_WEBHOOK_PATH") or "webhook/assistant-calendar-update").strip(),
             delete_path=str(scope.get("N8N_CALENDAR_DELETE_WEBHOOK_PATH") or "webhook/assistant-calendar-delete").strip(),
             timezone=str(scope.get("CALENDAR_TIMEZONE") or "Asia/Seoul").strip() or "Asia/Seoul",
+            locale=str(scope.get("CALENDAR_LOCALE") or scope.get("NANOBOT_LOCALE") or "ko-KR").strip() or "ko-KR",
         )
 
 
@@ -102,7 +105,7 @@ class N8NCalendarAutomationClient:
     async def list_events(
         self,
         *,
-        message: str = "오늘 일정 요약해줘",
+        message: str | None = None,
         channel: str = "websocket",
         session_id: str | None = None,
         user_id: str | None = None,
@@ -115,7 +118,7 @@ class N8NCalendarAutomationClient:
             payload = await self._post_json(
                 self.config.summary_path,
                 {
-                    "message": message,
+                    "message": message or _t("calendar.webhook.summary_request", locale=self.config.locale),
                     "channel": channel,
                     "session_id": session_id,
                     "user_id": user_id,
@@ -132,7 +135,7 @@ class N8NCalendarAutomationClient:
         count = self._coerce_int(payload.get("count")) if isinstance(payload, dict) else None
         events = self._parse_event_summaries(payload.get("events")) if isinstance(payload, dict) else []
         has_events = bool(count)
-        summary = reply or "오늘 일정 요약을 가져오지 못했습니다."
+        summary = reply or _t("calendar.webhook.summary_unavailable", locale=self.config.locale)
         return CalendarListEventsResult(
             action_id=action_id,
             status="completed",
@@ -158,7 +161,7 @@ class N8NCalendarAutomationClient:
         *,
         start_at: str,
         end_at: str,
-        message: str = "오늘 일정 요약해줘",
+        message: str | None = None,
         channel: str = "websocket",
         session_id: str | None = None,
         user_id: str | None = None,
@@ -243,7 +246,7 @@ class N8NCalendarAutomationClient:
             )
 
         conflict_titles = ", ".join(event.title for event in conflicts[:3])
-        extra = "" if len(conflicts) <= 3 else f" 외 {len(conflicts) - 3}건"
+        extra = "" if len(conflicts) <= 3 else _t("calendar.conflict.extra_count", locale=self.config.locale, count=len(conflicts) - 3)
         return CalendarFindConflictsResult(
             action_id=self._action_id("calendar-conflicts"),
             status="blocked",
@@ -611,7 +614,7 @@ class N8NCalendarAutomationClient:
             try:
                 events.append(CalendarEventSummary(
                     event_id=self._coerce_text(item.get("event_id") or item.get("id")),
-                    title=self._coerce_text(item.get("title") or item.get("summary")) or "제목 없는 일정",
+                    title=self._coerce_text(item.get("title") or item.get("summary")) or _t("calendar.event.untitled", locale=self.config.locale),
                     start_at=self._coerce_text(item.get("start_at")) or "",
                     end_at=self._coerce_text(item.get("end_at")) or "",
                     all_day=bool(item.get("all_day")),
@@ -707,12 +710,16 @@ class CalendarAutomationSessionRunner:
         session = self.sessions.get_or_create(session_key)
         session.metadata[CALENDAR_CREATE_APPROVAL_METADATA_KEY] = request.model_dump(mode="json")
         pending_updated_at = datetime.now(timezone.utc).isoformat()
+        locale = self._locale()
         session.metadata[CALENDAR_PENDING_INTERACTION_METADATA_KEY] = {
             "id": result.action_id,
             "kind": "create_approval",
             "status": "pending",
             "question": result.summary,
-            "buttons": [["승인", "취소"]],
+            "buttons": [[
+                _t("calendar.buttons.approve", locale=locale),
+                _t("calendar.buttons.cancel", locale=locale),
+            ]],
             "request": request.model_dump(mode="json"),
             "created_at": pending_updated_at,
             "updated_at": pending_updated_at,
@@ -732,6 +739,11 @@ class CalendarAutomationSessionRunner:
         session.add_message("assistant", result.summary)
         self.sessions.save(session)
         return result
+
+    def _locale(self) -> str:
+        config = getattr(self.client, "config", None)
+        locale = getattr(config, "locale", None)
+        return str(locale or "ko-KR")
 
     async def approve_create(self, session_key: str) -> CalendarCreateEventResult:
         request = self._pending_create_request(session_key)
@@ -854,12 +866,16 @@ class CalendarAutomationSessionRunner:
             "target": target.model_dump(mode="json") if target is not None else None,
         }
         pending_updated_at = datetime.now(timezone.utc).isoformat()
+        locale = self._locale()
         session.metadata[CALENDAR_PENDING_INTERACTION_METADATA_KEY] = {
             "id": result.action_id,
             "kind": "update_approval",
             "status": "pending",
             "question": result.summary,
-            "buttons": [["승인", "취소"]],
+            "buttons": [[
+                _t("calendar.buttons.approve", locale=locale),
+                _t("calendar.buttons.cancel", locale=locale),
+            ]],
             "request": request.model_dump(mode="json"),
             "target": target.model_dump(mode="json") if target is not None else None,
             "created_at": pending_updated_at,
@@ -910,12 +926,16 @@ class CalendarAutomationSessionRunner:
             "target": target.model_dump(mode="json"),
         }
         pending_updated_at = datetime.now(timezone.utc).isoformat()
+        locale = self._locale()
         session.metadata[CALENDAR_PENDING_INTERACTION_METADATA_KEY] = {
             "id": result.action_id,
             "kind": "delete_approval",
             "status": "pending",
             "question": result.summary,
-            "buttons": [["승인", "취소"]],
+            "buttons": [[
+                _t("calendar.buttons.approve", locale=locale),
+                _t("calendar.buttons.cancel", locale=locale),
+            ]],
             "request": request.model_dump(mode="json"),
             "target": target.model_dump(mode="json"),
             "created_at": pending_updated_at,
