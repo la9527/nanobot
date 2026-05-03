@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 
 import { AssistantDashboard } from "@/components/home/AssistantDashboard";
@@ -45,12 +46,8 @@ interface ThreadShellProps {
   hideSidebarToggleOnDesktop?: boolean;
 }
 
-const MEMORY_CORRECTION_PHRASES = [
-  "기억해",
-  "잊어",
-  "이건 기본 선호가 아님",
-  "이 프로젝트는 끝났어",
-];
+const MEMORY_CORRECTION_KEYS = ["remember", "forget", "notPreference", "projectDone"] as const;
+type MemoryCorrectionKey = typeof MEMORY_CORRECTION_KEYS[number];
 
 function toModelBadgeLabel(
   modelName: string | null,
@@ -109,52 +106,67 @@ function formatContinuitySummary(session: ChatSummary | null): {
   };
 }
 
-function buildMemoryCorrectionDraft(phrase: string, taskTitle: string | null): string {
-  if (phrase === "기억해") {
+function memoryCorrectionKeyForPhrase(phrase: string, t: TFunction): MemoryCorrectionKey | null {
+  for (const key of MEMORY_CORRECTION_KEYS) {
+    const translationKey = `thread.memoryCorrection.phrases.${key}`;
+    if (phrase === t(translationKey) || phrase === t(translationKey, { lng: "ko" })) {
+      return key;
+    }
+  }
+  return null;
+}
+
+function buildMemoryCorrectionDraft(phrase: string, taskTitle: string | null, t: TFunction): string {
+  const key = memoryCorrectionKeyForPhrase(phrase, t);
+  if (key === "remember") {
     return [
-      "기억해",
-      "내용: [기억할 내용]",
-      taskTitle ? `현재 task: ${taskTitle}` : null,
-      "저장 위치: memory/MEMORY.md",
+      phrase,
+      t("thread.memoryCorrection.draft.rememberContent"),
+      taskTitle ? t("thread.memoryCorrection.draft.currentTask", { title: taskTitle }) : null,
+      t("thread.memoryCorrection.draft.storeMemory"),
     ].filter(Boolean).join("\n");
   }
-  if (phrase === "잊어") {
+  if (key === "forget") {
     return [
-      "잊어",
-      "내용: [지울 내용]",
-      taskTitle ? `현재 task: ${taskTitle}` : null,
-      "저장 위치: USER.md 또는 memory/MEMORY.md",
+      phrase,
+      t("thread.memoryCorrection.draft.forgetContent"),
+      taskTitle ? t("thread.memoryCorrection.draft.currentTask", { title: taskTitle }) : null,
+      t("thread.memoryCorrection.draft.storeUserOrMemory"),
     ].filter(Boolean).join("\n");
   }
-  if (phrase === "이건 기본 선호가 아님") {
+  if (key === "notPreference") {
     return [
-      "이건 기본 선호가 아님",
-      "수정할 기본 선호: [바꿀 선호]",
-      taskTitle ? `현재 task: ${taskTitle}` : null,
-      "저장 위치: USER.md",
+      phrase,
+      t("thread.memoryCorrection.draft.preferenceContent"),
+      taskTitle ? t("thread.memoryCorrection.draft.currentTask", { title: taskTitle }) : null,
+      t("thread.memoryCorrection.draft.storeUser"),
     ].filter(Boolean).join("\n");
   }
-  if (phrase === "이 프로젝트는 끝났어") {
+  if (key === "projectDone") {
     return [
-      "이 프로젝트는 끝났어",
-      "프로젝트 메모: [남길 종료 메모]",
-      taskTitle ? `현재 task: ${taskTitle}` : null,
-      "저장 위치: memory/MEMORY.md",
+      phrase,
+      t("thread.memoryCorrection.draft.projectMemo"),
+      taskTitle ? t("thread.memoryCorrection.draft.currentTask", { title: taskTitle }) : null,
+      t("thread.memoryCorrection.draft.storeMemory"),
     ].filter(Boolean).join("\n");
   }
-  return [phrase, "내용: [정리할 내용]"]
+  return [phrase, t("thread.memoryCorrection.draft.genericContent")]
     .filter(Boolean)
     .join("\n");
 }
 
-function isMemoryCorrectionDraft(content: string): boolean {
+function isMemoryCorrectionDraft(content: string, t: TFunction): boolean {
   const lines = content
     .split(/\r?\n/u)
     .map((line) => line.trim())
     .filter(Boolean);
   if (lines.length === 0) return false;
   const header = lines[0];
-  return MEMORY_CORRECTION_PHRASES.some(
+  const phrases = MEMORY_CORRECTION_KEYS.flatMap((key) => {
+    const translationKey = `thread.memoryCorrection.phrases.${key}`;
+    return [t(translationKey), t(translationKey, { lng: "ko" })];
+  });
+  return phrases.some(
     (phrase) => header === phrase || header.startsWith(`${phrase}:`),
   );
 }
@@ -532,10 +544,10 @@ export function ThreadShell({
     && !modelTargetPending
   );
   const handleMemoryCorrectionClick = useCallback((phrase: string) => {
-    setComposerDraft(buildMemoryCorrectionDraft(phrase, currentTaskSummary?.title ?? null));
+    setComposerDraft(buildMemoryCorrectionDraft(phrase, currentTaskSummary?.title ?? null, t));
     setComposerDraftNonce((value) => value + 1);
     setDetailsOpen(false);
-  }, [currentTaskSummary?.title]);
+  }, [currentTaskSummary?.title, t]);
 
   const statusRailItems = useMemo(() => {
     const items: string[] = [];
@@ -700,7 +712,7 @@ export function ThreadShell({
       if (!session || !historyKey || remoteReplyPending) return;
       const hasImages = !!images && images.length > 0;
       if (!hasImages && !content.trim()) return;
-      pendingSessionRefreshRef.current = isMemoryCorrectionDraft(content);
+      pendingSessionRefreshRef.current = isMemoryCorrectionDraft(content, t);
 
       const optimisticAssistantId = createUuid();
       setMessages((prev) => [
@@ -757,15 +769,15 @@ export function ThreadShell({
         await new Promise((resolve) => window.setTimeout(resolve, 1000));
       }
     },
-    [client, historical.length, historyKey, remoteReplyPending, session, setMessages],
+    [client, historical.length, historyKey, remoteReplyPending, session, setMessages, t],
   );
 
   const handleWebSocketSend = useCallback(
     (content: string, images?: SendImage[]) => {
-      pendingSessionRefreshRef.current = isMemoryCorrectionDraft(content);
+      pendingSessionRefreshRef.current = isMemoryCorrectionDraft(content, t);
       send(content, images);
     },
-    [send],
+    [send, t],
   );
 
   const handleSelectModelTarget = useCallback(

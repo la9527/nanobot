@@ -84,7 +84,72 @@
         "io": "Couldn't read this file"
       }
     },
+    "memoryCorrection": {
+      "phrases": {
+        "remember": "Remember this",
+        "forget": "Forget this",
+        "notPreference": "This is not a default preference",
+        "projectDone": "This project is done"
+      },
+      "draft": {
+        "rememberContent": "Content: [thing to remember]",
+        "forgetContent": "Content: [thing to remove]",
+        "preferenceContent": "Default preference to revise: [preference]",
+        "projectMemo": "Project note: [closing note]",
+        "genericContent": "Content: [thing to clean up]",
+        "currentTask": "Current task: {{title}}",
+        "storeMemory": "Store: memory/MEMORY.md",
+        "storeUser": "Store: USER.md",
+        "storeUserOrMemory": "Store: USER.md or memory/MEMORY.md"
+      }
+    },
     "scrollToBottom": "Scroll to bottom"
+  },
+  "dashboard": {
+    "hero": {
+      "title": "What needs attention today and recent assistant status",
+      "hasItems": "There are {{total}} items to handle today: {{approvals}} approvals, {{blocked}} blocked items, and {{held}} held updates.",
+      "empty": "The urgent queue is empty. Review recent results or start a new task."
+    },
+    "sections": {
+      "priorityQueue": "Priority queue",
+      "todayBrief": "Today brief",
+      "quickActions": "Quick actions",
+      "recentOutcomes": "Recent outcomes",
+      "linkedChannels": "Linked channels"
+    },
+    "cta": {
+      "openApproval": "Open approval",
+      "continueConversation": "Continue conversation",
+      "continueInput": "Continue input",
+      "reviewInWebUI": "Review in WebUI",
+      "openThread": "Open thread"
+    },
+    "priority": {
+      "empty": "There is no queue to triage right now."
+    },
+    "todayBrief": {
+      "calendarFallback": "A recent calendar summary is available.",
+      "calendarEmpty": "No calendar briefing data is available yet.",
+      "mailFallback": "A recent mail summary is available.",
+      "mailEmpty": "No important mail summary data is available yet."
+    },
+    "quickActions": {
+      "approvals": "View approvals",
+      "calendar": "View today's calendar",
+      "mail": "View recent mail",
+      "newChat": "Start new chat"
+    },
+    "recentOutcomes": {
+      "summaryFallback": "This task completed recently.",
+      "empty": "There are no completed assistant results yet."
+    },
+    "linkedChannels": {
+      "proactiveUpdate": "Proactive update",
+      "held": "{{title}} is being held in WebUI.",
+      "connected": "Connected and available for cross-thread follow-up.",
+      "empty": "There are no external channel states beyond WebUI right now."
+    }
   },
   "message": {
     "streaming": "streaming",

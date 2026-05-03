@@ -10,6 +10,7 @@ import {
   toChannelBadgeLabel,
 } from "@/lib/sessionMetadata";
 import type { ChatSummary } from "@/lib/types";
+import { useTranslation } from "react-i18next";
 
 interface AssistantDashboardProps {
   sessions: ChatSummary[];
@@ -60,6 +61,7 @@ function compactMetaChip(label: string) {
 }
 
 export function AssistantDashboard({ sessions, onOpenSession, onNewChat }: AssistantDashboardProps) {
+  const { t } = useTranslation();
   const priorityItems: DashboardPriorityItem[] = sessions
     .map<DashboardPriorityItem | null>((session) => {
       const task = getTaskSummary(session);
@@ -75,7 +77,7 @@ export function AssistantDashboard({ sessions, onOpenSession, onNewChat }: Assis
           updatedLabel,
           updatedAtMs,
           priority: 0,
-          cta: "승인 열기",
+          cta: t("dashboard.cta.openApproval"),
         };
       }
       if (isBlockedSession(session)) {
@@ -87,7 +89,7 @@ export function AssistantDashboard({ sessions, onOpenSession, onNewChat }: Assis
           updatedLabel,
           updatedAtMs,
           priority: 1,
-          cta: "대화 이어가기",
+          cta: t("dashboard.cta.continueConversation"),
         };
       }
       if (session.metadata?.pending_user_turn) {
@@ -99,7 +101,7 @@ export function AssistantDashboard({ sessions, onOpenSession, onNewChat }: Assis
           updatedLabel,
           updatedAtMs,
           priority: 2,
-          cta: "입력 계속",
+          cta: t("dashboard.cta.continueInput"),
         };
       }
       if (proactive?.status === "suppressed") {
@@ -111,7 +113,7 @@ export function AssistantDashboard({ sessions, onOpenSession, onNewChat }: Assis
           updatedLabel: relativeTime(proactive.updatedAt ?? session.updatedAt ?? session.createdAt),
           updatedAtMs,
           priority: 3,
-          cta: "WebUI에서 검토",
+          cta: t("dashboard.cta.reviewInWebUI"),
         };
       }
       return null;
@@ -142,8 +144,13 @@ export function AssistantDashboard({ sessions, onOpenSession, onNewChat }: Assis
     .slice(0, 4);
 
   const heroText = approvalCount > 0 || blockedCount > 0 || heldCount > 0
-    ? `오늘 바로 처리할 항목 ${approvalCount + blockedCount + heldCount}개가 있습니다. 승인 ${approvalCount}건, 막힘 ${blockedCount}건, held update ${heldCount}건입니다.`
-    : "지금 급한 queue 는 비어 있습니다. 최근 결과를 확인하거나 새 작업을 시작할 수 있습니다.";
+    ? t("dashboard.hero.hasItems", {
+      total: approvalCount + blockedCount + heldCount,
+      approvals: approvalCount,
+      blocked: blockedCount,
+      held: heldCount,
+    })
+    : t("dashboard.hero.empty");
 
   const openFirst = (predicate: (session: ChatSummary) => boolean) => {
     const candidate = sessions.find(predicate);
@@ -158,11 +165,11 @@ export function AssistantDashboard({ sessions, onOpenSession, onNewChat }: Assis
     <div className="w-full max-w-[52rem] space-y-3 animate-in fade-in-0 slide-in-from-bottom-2 duration-500">
       <section className="rounded-[18px] border border-border/50 bg-muted/15 p-3.5">
         <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">Assistant dashboard</p>
-        <h1 className="mt-1.5 text-[22px] font-semibold leading-tight text-foreground">오늘 처리할 것과 최근 assistant 상태</h1>
+        <h1 className="mt-1.5 text-[22px] font-semibold leading-tight text-foreground">{t("dashboard.hero.title")}</h1>
         <p className="mt-2 max-w-[38rem] text-[13px] leading-6 text-muted-foreground">{heroText}</p>
       </section>
 
-      {sectionCard("Priority queue", priorityItems.length ? (
+      {sectionCard(t("dashboard.sections.priorityQueue"), priorityItems.length ? (
         <div className="space-y-1.5">
           {priorityItems.map((item) => (
             <div key={item.key} className="rounded-[12px] border border-border/40 bg-background/65 px-2.5 py-2">
@@ -189,37 +196,37 @@ export function AssistantDashboard({ sessions, onOpenSession, onNewChat }: Assis
           ))}
         </div>
       ) : (
-        <p>지금 바로 triage 할 queue 는 없습니다.</p>
+        <p>{t("dashboard.priority.empty")}</p>
       ), "strong")}
 
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
-        {sectionCard("Today brief", (
+        {sectionCard(t("dashboard.sections.todayBrief"), (
           <div className="space-y-1.5">
             <p className="text-[12px] leading-5">
               {latestCalendar
-                ? getActionResult(latestCalendar)?.summary || "최근 일정 요약이 있습니다."
-                : "오늘 일정 브리핑 데이터가 아직 없습니다."}
+                ? getActionResult(latestCalendar)?.summary || t("dashboard.todayBrief.calendarFallback")
+                : t("dashboard.todayBrief.calendarEmpty")}
             </p>
             <p className="text-[12px] leading-5">
               {latestMail
-                ? getActionResult(latestMail)?.summary || "최근 메일 요약이 있습니다."
-                : "중요 메일 요약 데이터가 아직 없습니다."}
+                ? getActionResult(latestMail)?.summary || t("dashboard.todayBrief.mailFallback")
+                : t("dashboard.todayBrief.mailEmpty")}
             </p>
           </div>
         ))}
 
-        {sectionCard("Quick actions", (
+        {sectionCard(t("dashboard.sections.quickActions"), (
           <div className="flex flex-wrap gap-1.5">
-            <Button type="button" size="sm" className="h-8 px-3 text-[12px]" variant="outline" onClick={() => openFirst((session) => hasPendingApproval(session))}>승인 대기 보기</Button>
-            <Button type="button" size="sm" className="h-8 px-3 text-[12px]" variant="outline" onClick={() => openFirst((session) => getActionResult(session)?.domain === "calendar")}>오늘 일정 보기</Button>
-            <Button type="button" size="sm" className="h-8 px-3 text-[12px]" variant="outline" onClick={() => openFirst((session) => getActionResult(session)?.domain === "mail")}>최근 메일 보기</Button>
-            <Button type="button" size="sm" className="h-8 px-3 text-[12px]" onClick={() => void onNewChat()}>새 채팅 시작</Button>
+            <Button type="button" size="sm" className="h-8 px-3 text-[12px]" variant="outline" onClick={() => openFirst((session) => hasPendingApproval(session))}>{t("dashboard.quickActions.approvals")}</Button>
+            <Button type="button" size="sm" className="h-8 px-3 text-[12px]" variant="outline" onClick={() => openFirst((session) => getActionResult(session)?.domain === "calendar")}>{t("dashboard.quickActions.calendar")}</Button>
+            <Button type="button" size="sm" className="h-8 px-3 text-[12px]" variant="outline" onClick={() => openFirst((session) => getActionResult(session)?.domain === "mail")}>{t("dashboard.quickActions.mail")}</Button>
+            <Button type="button" size="sm" className="h-8 px-3 text-[12px]" onClick={() => void onNewChat()}>{t("dashboard.quickActions.newChat")}</Button>
           </div>
         ))}
       </div>
 
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
-        {sectionCard("Recent outcomes", recentOutcomes.length ? (
+        {sectionCard(t("dashboard.sections.recentOutcomes"), recentOutcomes.length ? (
           <div className="space-y-2">
             {recentOutcomes.map((session) => {
               const result = getActionResult(session);
@@ -231,19 +238,19 @@ export function AssistantDashboard({ sessions, onOpenSession, onNewChat }: Assis
                       {toChannelBadgeLabel(session.channel)}
                     </span>
                   </div>
-                  <p className="mt-1 text-[12px] leading-5">{result?.summary || "최근 완료된 작업입니다."}</p>
+                  <p className="mt-1 text-[12px] leading-5">{result?.summary || t("dashboard.recentOutcomes.summaryFallback")}</p>
                   <div className="mt-2">
-                    <Button type="button" size="sm" className="h-7 px-2.5 text-[11px]" variant="outline" onClick={() => onOpenSession?.(session.key)}>해당 thread 열기</Button>
+                    <Button type="button" size="sm" className="h-7 px-2.5 text-[11px]" variant="outline" onClick={() => onOpenSession?.(session.key)}>{t("dashboard.cta.openThread")}</Button>
                   </div>
                 </div>
               );
             })}
           </div>
         ) : (
-          <p>최근 완료된 assistant 결과가 아직 없습니다.</p>
+          <p>{t("dashboard.recentOutcomes.empty")}</p>
         ))}
 
-        {sectionCard("Linked channels", linkedChannels.length ? (
+        {sectionCard(t("dashboard.sections.linkedChannels"), linkedChannels.length ? (
           <div className="space-y-2">
             {linkedChannels.map((session) => {
               const proactive = getProactiveSummary(session);
@@ -257,15 +264,15 @@ export function AssistantDashboard({ sessions, onOpenSession, onNewChat }: Assis
                   </div>
                   <p className="mt-1 text-[12px] leading-5">
                     {proactive?.status === "suppressed"
-                      ? `${proactive.title || "Proactive update"} is being held in WebUI.`
-                      : "Connected and available for cross-thread follow-up."}
+                      ? t("dashboard.linkedChannels.held", { title: proactive.title || t("dashboard.linkedChannels.proactiveUpdate") })
+                      : t("dashboard.linkedChannels.connected")}
                   </p>
                 </div>
               );
             })}
           </div>
         ) : (
-          <p>현재 WebUI 외 연결된 외부 채널 상태가 없습니다.</p>
+          <p>{t("dashboard.linkedChannels.empty")}</p>
         ))}
       </div>
     </div>

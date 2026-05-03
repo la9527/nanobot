@@ -84,7 +84,72 @@
         "io": "이 파일을 읽을 수 없습니다"
       }
     },
+    "memoryCorrection": {
+      "phrases": {
+        "remember": "기억해",
+        "forget": "잊어",
+        "notPreference": "이건 기본 선호가 아님",
+        "projectDone": "이 프로젝트는 끝났어"
+      },
+      "draft": {
+        "rememberContent": "내용: [기억할 내용]",
+        "forgetContent": "내용: [지울 내용]",
+        "preferenceContent": "수정할 기본 선호: [바꿀 선호]",
+        "projectMemo": "프로젝트 메모: [남길 종료 메모]",
+        "genericContent": "내용: [정리할 내용]",
+        "currentTask": "현재 task: {{title}}",
+        "storeMemory": "저장 위치: memory/MEMORY.md",
+        "storeUser": "저장 위치: USER.md",
+        "storeUserOrMemory": "저장 위치: USER.md 또는 memory/MEMORY.md"
+      }
+    },
     "scrollToBottom": "맨 아래로 스크롤"
+  },
+  "dashboard": {
+    "hero": {
+      "title": "오늘 처리할 것과 최근 assistant 상태",
+      "hasItems": "오늘 바로 처리할 항목 {{total}}개가 있습니다. 승인 {{approvals}}건, 막힘 {{blocked}}건, held update {{held}}건입니다.",
+      "empty": "지금 급한 queue 는 비어 있습니다. 최근 결과를 확인하거나 새 작업을 시작할 수 있습니다."
+    },
+    "sections": {
+      "priorityQueue": "Priority queue",
+      "todayBrief": "Today brief",
+      "quickActions": "Quick actions",
+      "recentOutcomes": "Recent outcomes",
+      "linkedChannels": "Linked channels"
+    },
+    "cta": {
+      "openApproval": "승인 열기",
+      "continueConversation": "대화 이어가기",
+      "continueInput": "입력 계속",
+      "reviewInWebUI": "WebUI에서 검토",
+      "openThread": "해당 thread 열기"
+    },
+    "priority": {
+      "empty": "지금 바로 triage 할 queue 는 없습니다."
+    },
+    "todayBrief": {
+      "calendarFallback": "최근 일정 요약이 있습니다.",
+      "calendarEmpty": "오늘 일정 브리핑 데이터가 아직 없습니다.",
+      "mailFallback": "최근 메일 요약이 있습니다.",
+      "mailEmpty": "중요 메일 요약 데이터가 아직 없습니다."
+    },
+    "quickActions": {
+      "approvals": "승인 대기 보기",
+      "calendar": "오늘 일정 보기",
+      "mail": "최근 메일 보기",
+      "newChat": "새 채팅 시작"
+    },
+    "recentOutcomes": {
+      "summaryFallback": "최근 완료된 작업입니다.",
+      "empty": "최근 완료된 assistant 결과가 아직 없습니다."
+    },
+    "linkedChannels": {
+      "proactiveUpdate": "Proactive update",
+      "held": "{{title}} 항목이 WebUI에 보류되어 있습니다.",
+      "connected": "연결되어 있으며 cross-thread 후속 작업에 사용할 수 있습니다.",
+      "empty": "현재 WebUI 외 연결된 외부 채널 상태가 없습니다."
+    }
   },
   "message": {
     "streaming": "생성 중",

@@ -960,7 +960,7 @@ describe("ThreadShell", () => {
     expect(screen.getByRole("button", { name: "잊어" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "기억해" }));
     expect(screen.getByLabelText("Message input")).toHaveValue(
-      "기억해\n내용: [기억할 내용]\n현재 task: Review the local thread summary\n저장 위치: memory/MEMORY.md",
+      "기억해\nContent: [thing to remember]\nCurrent task: Review the local thread summary\nStore: memory/MEMORY.md",
     );
   });
 
@@ -1431,10 +1431,10 @@ describe("ThreadShell", () => {
     );
 
     expect(await screen.findByText("Assistant dashboard")).toBeInTheDocument();
-    expect(screen.getByText(/오늘 바로 처리할 항목/i)).toBeInTheDocument();
+    expect(screen.getByText(/There are 1 items to handle today/i)).toBeInTheDocument();
     expect(screen.getByText("Priority queue")).toBeInTheDocument();
     expect(screen.queryByRole("textbox", { name: "메시지 입력" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "승인 열기" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open approval" }));
     expect(openSession).toHaveBeenCalledWith("telegram:12345");
   });
 
