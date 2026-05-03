@@ -5,21 +5,12 @@ from pathlib import Path
 import re
 
 from nanobot.agent.memory import MemoryStore
+from nanobot.i18n import translate as _t
+from nanobot.session.memory_correction_nlp import memory_correction_nlp_pack
 
 
-_ACTION_BY_PHRASE = {
-    "기억해": "remember",
-    "잊어": "forget",
-    "이건 기본 선호가 아님": "not-default",
-    "이 프로젝트는 끝났어": "project-complete",
-}
-
-_DETAIL_FIELDS = {
-    "remember": "내용",
-    "forget": "내용",
-    "not-default": "수정할 기본 선호",
-    "project-complete": "프로젝트 메모",
-}
+MEMORY_CORRECTION_DEFAULT_LOCALE = "ko-KR"
+MEMORY_CORRECTION_NLP = memory_correction_nlp_pack(MEMORY_CORRECTION_DEFAULT_LOCALE)
 
 
 @dataclass(frozen=True)
@@ -53,12 +44,12 @@ def parse_memory_correction_message(content: str) -> MemoryCorrectionRequest | N
         key, value = line.split(":", 1)
         fields[key.strip()] = value.strip()
 
-    detail_field = _DETAIL_FIELDS[action]
+    detail_field = MEMORY_CORRECTION_NLP.detail_fields[action]
     detail = inline_detail or fields.get(detail_field)
     if detail and _is_placeholder(detail):
         detail = None
 
-    task_title = fields.get("현재 task") or None
+    task_title = fields.get(MEMORY_CORRECTION_NLP.task_title_field) or None
     if task_title and _is_placeholder(task_title):
         task_title = None
 
@@ -70,31 +61,36 @@ def parse_memory_correction_message(content: str) -> MemoryCorrectionRequest | N
     )
 
 
-def apply_memory_correction(workspace: Path, request: MemoryCorrectionRequest) -> MemoryCorrectionResult:
+def apply_memory_correction(
+    workspace: Path,
+    request: MemoryCorrectionRequest,
+    *,
+    locale: str | None = MEMORY_CORRECTION_DEFAULT_LOCALE,
+) -> MemoryCorrectionResult:
     store = MemoryStore(workspace)
 
     if request.action == "remember":
         if not request.detail:
             return MemoryCorrectionResult(
-                reply="`내용:` 뒤에 기억할 내용을 적어주면 memory/MEMORY.md 에 반영할게요.",
+                reply=_t("memory_correction.remember.missing_detail", locale=locale),
                 applied=False,
             )
         updated, changed = _append_memory_entry(store.read_memory(), request.detail)
         if changed:
             store.write_memory(updated)
             return MemoryCorrectionResult(
-                reply=f"memory/MEMORY.md 에 반영했어요: {request.detail}",
+                reply=_t("memory_correction.remember.applied", locale=locale, detail=request.detail),
                 applied=True,
             )
         return MemoryCorrectionResult(
-            reply=f"같은 항목이 이미 memory/MEMORY.md 에 있어요: {request.detail}",
+            reply=_t("memory_correction.remember.duplicate", locale=locale, detail=request.detail),
             applied=False,
         )
 
     if request.action == "forget":
         if not request.detail:
             return MemoryCorrectionResult(
-                reply="`내용:` 뒤에 지울 항목을 적어주면 USER.md 와 memory/MEMORY.md 에서 찾아볼게요.",
+                reply=_t("memory_correction.forget.missing_detail", locale=locale),
                 applied=False,
             )
         user_content = store.read_user()
@@ -113,59 +109,59 @@ def apply_memory_correction(workspace: Path, request: MemoryCorrectionRequest) -
                 targets.append("memory/MEMORY.md")
             joined = ", ".join(targets)
             return MemoryCorrectionResult(
-                reply=f"{joined} 에서 항목을 제거했어요: {request.detail}",
+                reply=_t("memory_correction.forget.removed", locale=locale, targets=joined, detail=request.detail),
                 applied=True,
             )
         return MemoryCorrectionResult(
-            reply=f"정확히 일치하는 항목을 찾지 못했어요: {request.detail}",
+            reply=_t("memory_correction.forget.not_found", locale=locale, detail=request.detail),
             applied=False,
         )
 
     if request.action == "not-default":
         if not request.detail:
             return MemoryCorrectionResult(
-                reply="`수정할 기본 선호:` 뒤에 바로잡을 선호를 적어주면 USER.md 에 반영할게요.",
+                reply=_t("memory_correction.not_default.missing_detail", locale=locale),
                 applied=False,
             )
         updated, changed = _append_special_instruction(store.read_user(), request.detail)
         if changed:
             store.write_user(updated)
             return MemoryCorrectionResult(
-                reply=f"USER.md 기본 선호 보정 항목에 추가했어요: {request.detail}",
+                reply=_t("memory_correction.not_default.applied", locale=locale, detail=request.detail),
                 applied=True,
             )
         return MemoryCorrectionResult(
-            reply=f"같은 기본 선호 보정 항목이 이미 USER.md 에 있어요: {request.detail}",
+            reply=_t("memory_correction.not_default.duplicate", locale=locale, detail=request.detail),
             applied=False,
         )
 
     if request.action == "project-complete":
         detail = request.detail
         if not detail and request.task_title:
-            detail = f"{request.task_title} 완료"
+            detail = f"{request.task_title} {MEMORY_CORRECTION_NLP.project_complete_suffix}"
         if not detail:
             return MemoryCorrectionResult(
-                reply="`프로젝트 메모:` 뒤에 남길 종료 메모를 적어주면 memory/MEMORY.md 에 반영할게요.",
+                reply=_t("memory_correction.project_complete.missing_detail", locale=locale),
                 applied=False,
             )
-        entry = f"프로젝트 종료: {detail}"
+        entry = f"{MEMORY_CORRECTION_NLP.project_complete_entry_prefix}: {detail}"
         updated, changed = _append_memory_entry(store.read_memory(), entry)
         if changed:
             store.write_memory(updated)
             return MemoryCorrectionResult(
-                reply=f"memory/MEMORY.md 에 프로젝트 종료 메모를 남겼어요: {detail}",
+                reply=_t("memory_correction.project_complete.applied", locale=locale, detail=detail),
                 applied=True,
             )
         return MemoryCorrectionResult(
-            reply=f"같은 프로젝트 종료 메모가 이미 memory/MEMORY.md 에 있어요: {detail}",
+            reply=_t("memory_correction.project_complete.duplicate", locale=locale, detail=detail),
             applied=False,
         )
 
-    return MemoryCorrectionResult(reply="지원하지 않는 memory correction 요청입니다.", applied=False)
+    return MemoryCorrectionResult(reply=_t("memory_correction.unsupported", locale=locale), applied=False)
 
 
 def _match_header(header: str) -> tuple[str | None, str | None, str | None]:
-    for phrase, action in _ACTION_BY_PHRASE.items():
+    for phrase, action in MEMORY_CORRECTION_NLP.action_by_phrase.items():
         if header == phrase:
             return phrase, action, None
         if header.startswith(f"{phrase}:"):

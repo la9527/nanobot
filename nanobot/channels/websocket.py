@@ -1265,8 +1265,14 @@ class WebSocketChannel(BaseChannel):
         if request is None:
             return False
 
-        result = apply_memory_correction(self._session_manager.workspace, request)
         session = self._session_manager.get_or_create(session_key)
+        owner_profile = session.metadata.get("owner_profile") if isinstance(session.metadata, dict) else None
+        locale = None
+        if isinstance(owner_profile, dict):
+            preferred_language = owner_profile.get("preferred_language")
+            if isinstance(preferred_language, str) and preferred_language.strip():
+                locale = preferred_language.strip()
+        result = apply_memory_correction(self._session_manager.workspace, request, locale=locale or "ko-KR")
         session.add_message("user", content)
         session.add_message("assistant", result.reply)
         self._session_manager.save(session)

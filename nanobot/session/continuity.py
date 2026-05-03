@@ -11,6 +11,8 @@ from copy import deepcopy
 import re
 from typing import Any
 
+from nanobot.session.memory_correction_nlp import memory_correction_actions
+
 PRIMARY_OWNER_ID = "primary-user"
 CONTINUITY_METADATA_KEY = "continuity"
 TASK_SUMMARY_METADATA_KEY = "task_summary"
@@ -144,34 +146,7 @@ def _normalized_memory_boundary() -> dict[str, str]:
 
 
 def _normalized_memory_correction() -> dict[str, Any]:
-    return {
-        "actions": [
-            {
-                "code": "remember",
-                "phrase": "기억해",
-                "target": "owner_profile_or_project_memory",
-                "store": "USER.md or memory/MEMORY.md",
-            },
-            {
-                "code": "forget",
-                "phrase": "잊어",
-                "target": "owner_profile_or_project_memory",
-                "store": "USER.md or memory/MEMORY.md",
-            },
-            {
-                "code": "not-default",
-                "phrase": "이건 기본 선호가 아님",
-                "target": "owner_profile",
-                "store": "USER.md",
-            },
-            {
-                "code": "project-complete",
-                "phrase": "이 프로젝트는 끝났어",
-                "target": "project_memory_or_task_summary",
-                "store": "memory/MEMORY.md or session.metadata",
-            },
-        ]
-    }
+    return {"actions": memory_correction_actions("ko-KR")}
 
 
 def _task_title_from_metadata(base: dict[str, Any], channel_kind: str) -> str:
