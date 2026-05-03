@@ -700,6 +700,7 @@ def _run_gateway(
         classify_proactive_task,
         decide_heartbeat_target,
         proactive_title_for_task,
+        should_suppress_repeated_proactive_delivery,
     )
 
     def _channel_session_key(channel: str, chat_id: str) -> str:
@@ -888,6 +889,9 @@ def _run_gateway(
             session_manager.list_sessions(),
             max_digest_items=heartbeat_policy.max_digest_items,
         )
+        if not proactive_context.strip():
+            logger.info("Heartbeat: no actionable proactive context, skipping execution")
+            return ""
 
         async def _silent(*_args, **_kwargs):
             pass
@@ -930,6 +934,23 @@ def _run_gateway(
             return
         if channel == "cli":
             return  # No external channel available to deliver to
+
+        session = session_manager.get_or_create(_channel_session_key(channel, chat_id))
+        category = classify_proactive_task(heartbeat_state.get("tasks", ""))
+        if should_suppress_repeated_proactive_delivery(
+            session.metadata.get("proactive_summary") if isinstance(session.metadata, dict) else None,
+            response=response,
+            category=category,
+        ):
+            _record_heartbeat_proactive_summary(
+                channel=channel,
+                chat_id=chat_id,
+                status="suppressed",
+                summary=response,
+                suppressed_reason="duplicate",
+            )
+            logger.info("Heartbeat: suppressed duplicate delivery to {}:{}", channel, chat_id)
+            return
 
         _record_heartbeat_proactive_summary(
             channel=channel,

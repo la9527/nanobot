@@ -253,6 +253,29 @@ class CalendarCreateEventResult(ActionResult):
     details: CalendarCreateEventDetails
 
 
+class CalendarUpdateEventDetails(_AutomationModel):
+    event_id: str | None = None
+    target: CalendarEventSummary | None = None
+    preview: CalendarEventPreview
+
+
+class CalendarUpdateEventResult(ActionResult):
+    domain: Literal["calendar"] = "calendar"
+    action: Literal["update_event"] = "update_event"
+    details: CalendarUpdateEventDetails
+
+
+class CalendarDeleteEventDetails(_AutomationModel):
+    event_id: str | None = None
+    target: CalendarEventSummary
+
+
+class CalendarDeleteEventResult(ActionResult):
+    domain: Literal["calendar"] = "calendar"
+    action: Literal["delete_event"] = "delete_event"
+    details: CalendarDeleteEventDetails
+
+
 __all__ = [
     "ACTION_FAILURE_CODES",
     "ACTION_RESULT_STATUSES",
@@ -263,12 +286,16 @@ __all__ = [
     "ActionVisibility",
     "CalendarCreateEventDetails",
     "CalendarCreateEventResult",
+    "CalendarDeleteEventDetails",
+    "CalendarDeleteEventResult",
     "CalendarEventPreview",
     "CalendarEventSummary",
     "CalendarFindConflictsDetails",
     "CalendarFindConflictsResult",
     "CalendarListEventsDetails",
     "CalendarListEventsResult",
+    "CalendarUpdateEventDetails",
+    "CalendarUpdateEventResult",
     "MailImportantThreadsDetails",
     "MailImportantThreadsResult",
     "MailCreateDraftDetails",

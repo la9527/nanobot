@@ -1,6 +1,14 @@
 from pathlib import Path
 
-from nanobot.automation_results import MailCreateDraftDetails, MailCreateDraftResult, MailDraftPreview
+from nanobot.automation_results import (
+    ActionFailure,
+    CalendarCreateEventDetails,
+    CalendarCreateEventResult,
+    CalendarEventPreview,
+    MailCreateDraftDetails,
+    MailCreateDraftResult,
+    MailDraftPreview,
+)
 from nanobot.session.manager import Session, SessionManager
 
 
@@ -249,6 +257,41 @@ def test_session_manager_persists_action_result_metadata(tmp_path: Path):
     assert task_summary["title"] == "Draft ready"
     assert task_summary["status"] == "completed"
     assert task_summary["next_step_hint"] == "Review the draft before requesting send approval."
+
+
+def test_rejected_approval_action_does_not_become_blocked_task(tmp_path: Path) -> None:
+    manager = SessionManager(tmp_path)
+    session = manager.get_or_create("telegram:calendar-demo")
+
+    manager.set_action_result(
+        session,
+        CalendarCreateEventResult(
+            action_id="calendar-create-denied-1",
+            status="rejected",
+            title="Calendar create cancelled",
+            summary="The pending calendar create request was cancelled.",
+            next_step="Review the proposed event and request approval again when ready.",
+            details=CalendarCreateEventDetails(
+                preview=CalendarEventPreview(
+                    title="Nanobot webui calendar validation",
+                    start_at="2026-05-04T14:00:00+09:00",
+                    end_at="2026-05-04T14:30:00+09:00",
+                ),
+            ),
+            error=ActionFailure(
+                code="approval_rejected",
+                message="The pending calendar create request was cancelled.",
+            ),
+        ),
+    )
+
+    manager.save(session)
+    restored = manager.read_session_file("telegram:calendar-demo")
+
+    assert restored is not None
+    task_summary = restored["metadata"]["task_summary"]
+    assert task_summary["title"] == "Calendar create cancelled"
+    assert task_summary["status"] == "completed"
 
 
 def test_get_history_annotates_user_turns_but_not_assistant_turns():

@@ -14,17 +14,23 @@ from nanobot.automation_results import (
     ActionVisibility,
     CalendarCreateEventDetails,
     CalendarCreateEventResult,
+    CalendarDeleteEventDetails,
+    CalendarDeleteEventResult,
     CalendarEventPreview,
     CalendarEventSummary,
     CalendarFindConflictsDetails,
     CalendarFindConflictsResult,
     CalendarListEventsDetails,
     CalendarListEventsResult,
+    CalendarUpdateEventDetails,
+    CalendarUpdateEventResult,
 )
 from nanobot.session.manager import SessionManager
 
 
 CALENDAR_CREATE_APPROVAL_METADATA_KEY = "calendar_create_approval"
+CALENDAR_UPDATE_APPROVAL_METADATA_KEY = "calendar_update_approval"
+CALENDAR_DELETE_APPROVAL_METADATA_KEY = "calendar_delete_approval"
 CALENDAR_PENDING_INTERACTION_METADATA_KEY = "calendar_pending_interaction"
 
 
@@ -37,6 +43,8 @@ class N8NCalendarAutomationConfig(_CalendarAutomationModel):
     webhook_token: str | None = None
     summary_path: str = "webhook/assistant-automation"
     create_path: str = "webhook/assistant-calendar-create"
+    update_path: str = "webhook/assistant-calendar-update"
+    delete_path: str = "webhook/assistant-calendar-delete"
     timeout_s: float = 20.0
     timezone: str = "Asia/Seoul"
 
@@ -54,6 +62,8 @@ class N8NCalendarAutomationConfig(_CalendarAutomationModel):
             webhook_token=str(scope.get("N8N_WEBHOOK_TOKEN") or "").strip() or None,
             summary_path=str(scope.get("N8N_WEBHOOK_PATH") or "webhook/assistant-automation").strip(),
             create_path=str(scope.get("N8N_CALENDAR_CREATE_WEBHOOK_PATH") or "webhook/assistant-calendar-create").strip(),
+            update_path=str(scope.get("N8N_CALENDAR_UPDATE_WEBHOOK_PATH") or "webhook/assistant-calendar-update").strip(),
+            delete_path=str(scope.get("N8N_CALENDAR_DELETE_WEBHOOK_PATH") or "webhook/assistant-calendar-delete").strip(),
             timezone=str(scope.get("CALENDAR_TIMEZONE") or "Asia/Seoul").strip() or "Asia/Seoul",
         )
 
@@ -64,6 +74,23 @@ class CalendarCreateRequest(_CalendarAutomationModel):
     end_at: str = Field(min_length=1)
     description: str | None = None
     location: str | None = None
+
+
+class CalendarUpdateRequest(_CalendarAutomationModel):
+    search_title: str = Field(min_length=1)
+    new_title: str | None = None
+    start_at: str = Field(min_length=1)
+    end_at: str = Field(min_length=1)
+    search_time_min: str = Field(min_length=1)
+    search_time_max: str = Field(min_length=1)
+    event_id: str | None = None
+
+
+class CalendarDeleteRequest(_CalendarAutomationModel):
+    search_title: str = Field(min_length=1)
+    search_time_min: str = Field(min_length=1)
+    search_time_max: str = Field(min_length=1)
+    event_id: str | None = None
 
 
 class N8NCalendarAutomationClient:
@@ -263,6 +290,18 @@ class N8NCalendarAutomationClient:
         except httpx.HTTPError as exc:
             return self._create_failure_result(action_id, preview, exc)
 
+        payload_failure = self._payload_failure(payload)
+        if payload_failure is not None:
+            return CalendarCreateEventResult(
+                action_id=action_id,
+                status="blocked" if payload_failure.code in {"authentication_needed", "not_found"} else "failed",
+                title="Calendar create failed",
+                summary=payload_failure.message,
+                visibility=ActionVisibility(surfaces=["thread"], badge="Calendar failed"),
+                details=CalendarCreateEventDetails(preview=preview),
+                error=payload_failure,
+            )
+
         event_id = self._coerce_text(payload.get("event_id")) if isinstance(payload, dict) else None
         summary = self._coerce_text(payload.get("reply")) if isinstance(payload, dict) else None
         return CalendarCreateEventResult(
@@ -278,6 +317,103 @@ class N8NCalendarAutomationClient:
             ),
             references=ActionReferences(message_id=event_id),
             details=CalendarCreateEventDetails(event_id=event_id, preview=preview),
+        )
+
+    async def update_event(self, request: CalendarUpdateRequest, target: CalendarEventSummary | None = None) -> CalendarUpdateEventResult:
+        action_id = self._action_id("calendar-update")
+        preview = CalendarEventPreview(
+            title=request.new_title or request.search_title,
+            start_at=request.start_at,
+            end_at=request.end_at,
+        )
+        try:
+            payload = await self._post_json(
+                self.config.update_path,
+                {
+                    "search_title": request.search_title,
+                    "new_title": request.new_title or request.search_title,
+                    "start_at": request.start_at,
+                    "end_at": request.end_at,
+                    "search_time_min": request.search_time_min,
+                    "search_time_max": request.search_time_max,
+                    "event_id": request.event_id or "",
+                },
+            )
+        except httpx.HTTPError as exc:
+            return self._update_failure_result(action_id, preview, target, exc)
+
+        payload_failure = self._payload_failure(payload)
+        if payload_failure is not None:
+            return CalendarUpdateEventResult(
+                action_id=action_id,
+                status="blocked" if payload_failure.code in {"authentication_needed", "not_found"} else "failed",
+                title="Calendar update failed",
+                summary=payload_failure.message,
+                visibility=ActionVisibility(surfaces=["thread"], badge="Calendar failed"),
+                details=CalendarUpdateEventDetails(target=target, preview=preview),
+                error=payload_failure,
+            )
+
+        event_id = self._coerce_text(payload.get("event_id")) if isinstance(payload, dict) else None
+        summary = self._coerce_text(payload.get("reply")) if isinstance(payload, dict) else None
+        return CalendarUpdateEventResult(
+            action_id=action_id,
+            status="completed",
+            title="Calendar event updated",
+            summary=summary or f"Updated calendar event '{request.search_title}'.",
+            visibility=ActionVisibility(
+                surfaces=["thread", "sidebar", "linked_session"],
+                badge="Calendar updated",
+                inline_status="Calendar event updated",
+                linked_summary=request.search_title,
+            ),
+            references=ActionReferences(message_id=event_id or request.event_id),
+            details=CalendarUpdateEventDetails(event_id=event_id or request.event_id, target=target, preview=preview),
+        )
+
+    async def delete_event(self, request: CalendarDeleteRequest, target: CalendarEventSummary) -> CalendarDeleteEventResult:
+        action_id = self._action_id("calendar-delete")
+        try:
+            payload = await self._post_json(
+                self.config.delete_path,
+                {
+                    "search_title": request.search_title,
+                    "search_time_min": request.search_time_min,
+                    "search_time_max": request.search_time_max,
+                    "event_id": request.event_id or "",
+                    "timezone": self.config.timezone,
+                },
+            )
+        except httpx.HTTPError as exc:
+            return self._delete_failure_result(action_id, target, exc)
+
+        payload_failure = self._payload_failure(payload)
+        if payload_failure is not None:
+            return CalendarDeleteEventResult(
+                action_id=action_id,
+                status="blocked" if payload_failure.code in {"authentication_needed", "not_found"} else "failed",
+                title="Calendar delete failed",
+                summary=payload_failure.message,
+                visibility=ActionVisibility(surfaces=["thread"], badge="Calendar failed"),
+                details=CalendarDeleteEventDetails(target=target),
+                error=payload_failure,
+            )
+
+        event_id = self._coerce_text(payload.get("event_id")) if isinstance(payload, dict) else None
+        summary = self._coerce_text(payload.get("reply")) if isinstance(payload, dict) else None
+        return CalendarDeleteEventResult(
+            action_id=action_id,
+            status="completed",
+            title="Calendar event deleted",
+            summary=summary or f"Deleted calendar event '{target.title}'.",
+            visibility=ActionVisibility(
+                surfaces=["thread", "sidebar", "linked_session"],
+                badge="Calendar deleted",
+                inline_status="Calendar event deleted",
+                linked_summary=target.title,
+            ),
+            references=ActionReferences(message_id=event_id or request.event_id),
+            details=CalendarDeleteEventDetails(event_id=event_id or request.event_id, target=target),
         )
 
     async def _post_json(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -335,6 +471,41 @@ class N8NCalendarAutomationClient:
             error=failure,
         )
 
+    def _update_failure_result(
+        self,
+        action_id: str,
+        preview: CalendarEventPreview,
+        target: CalendarEventSummary | None,
+        exc: httpx.HTTPError,
+    ) -> CalendarUpdateEventResult:
+        failure = self._map_http_error(exc)
+        return CalendarUpdateEventResult(
+            action_id=action_id,
+            status="blocked" if failure.code == "authentication_needed" else "failed",
+            title="Calendar update failed",
+            summary=failure.message,
+            visibility=ActionVisibility(surfaces=["thread"], badge="Calendar failed"),
+            details=CalendarUpdateEventDetails(target=target, preview=preview),
+            error=failure,
+        )
+
+    def _delete_failure_result(
+        self,
+        action_id: str,
+        target: CalendarEventSummary,
+        exc: httpx.HTTPError,
+    ) -> CalendarDeleteEventResult:
+        failure = self._map_http_error(exc)
+        return CalendarDeleteEventResult(
+            action_id=action_id,
+            status="blocked" if failure.code == "authentication_needed" else "failed",
+            title="Calendar delete failed",
+            summary=failure.message,
+            visibility=ActionVisibility(surfaces=["thread"], badge="Calendar failed"),
+            details=CalendarDeleteEventDetails(target=target),
+            error=failure,
+        )
+
     def _map_http_error(self, exc: httpx.HTTPError) -> ActionFailure:
         if isinstance(exc, httpx.HTTPStatusError):
             status_code = exc.response.status_code
@@ -373,6 +544,21 @@ class N8NCalendarAutomationClient:
             message="The calendar automation endpoint is temporarily unavailable.",
             retryable=True,
         )
+
+    def _payload_failure(self, payload: dict[str, Any]) -> ActionFailure | None:
+        action = self._coerce_text(payload.get("action")) if isinstance(payload, dict) else None
+        if not action or not (action.endswith("-error") or action.endswith("-not-found")):
+            return None
+        message = (
+            self._coerce_text(payload.get("reply"))
+            or self._coerce_text(payload.get("error"))
+            or "Google Calendar workflow execution failed."
+        )
+        if action.endswith("-not-found"):
+            return ActionFailure(code="not_found", message=message, retryable=False)
+        if bool(payload.get("needs_reconnect")):
+            return ActionFailure(code="authentication_needed", message=message, retryable=False)
+        return ActionFailure(code="service_unavailable", message=message, retryable=True)
 
     def _action_id(self, prefix: str) -> str:
         from uuid import uuid4
@@ -631,10 +817,206 @@ class CalendarAutomationSessionRunner:
         self.sessions.save(session)
         return result
 
+    async def request_update_approval(
+        self,
+        session_key: str,
+        request: CalendarUpdateRequest,
+        target: CalendarEventSummary | None = None,
+    ) -> CalendarUpdateEventResult:
+        preview = CalendarEventPreview(
+            title=request.new_title or request.search_title,
+            start_at=request.start_at,
+            end_at=request.end_at,
+        )
+        result = CalendarUpdateEventResult(
+            action_id=self.client._action_id("calendar-update-approval"),
+            status="waiting_approval",
+            title="Calendar update approval required",
+            summary=f"Approval required before updating '{request.search_title}'.",
+            next_step="Approve or deny the pending calendar update request.",
+            visibility=ActionVisibility(
+                surfaces=["thread", "sidebar", "linked_session"],
+                badge="Approval pending",
+                inline_status="Calendar update approval pending",
+                linked_summary=request.search_title,
+                approval_summary="Calendar update approval pending",
+            ),
+            details=CalendarUpdateEventDetails(event_id=request.event_id, target=target, preview=preview),
+            error=ActionFailure(
+                code="approval_needed",
+                message="Approval is required before updating this calendar event.",
+                retryable=True,
+            ),
+        )
+        session = self.sessions.get_or_create(session_key)
+        session.metadata[CALENDAR_UPDATE_APPROVAL_METADATA_KEY] = {
+            "request": request.model_dump(mode="json"),
+            "target": target.model_dump(mode="json") if target is not None else None,
+        }
+        pending_updated_at = datetime.now(timezone.utc).isoformat()
+        session.metadata[CALENDAR_PENDING_INTERACTION_METADATA_KEY] = {
+            "id": result.action_id,
+            "kind": "update_approval",
+            "status": "pending",
+            "question": result.summary,
+            "buttons": [["승인", "취소"]],
+            "request": request.model_dump(mode="json"),
+            "target": target.model_dump(mode="json") if target is not None else None,
+            "created_at": pending_updated_at,
+            "updated_at": pending_updated_at,
+        }
+        self.sessions.set_action_result(session, result)
+        self.sessions.set_approval_summary(session, {
+            "status": "pending",
+            "channel": self._channel_from_session_key(session_key),
+            "tool_name": "calendar.update_event",
+            "tool_call_id": result.action_id,
+            "message_id": None,
+            "prompt_preview": self._update_approval_prompt(request),
+        })
+        session.add_message("assistant", result.summary)
+        self.sessions.save(session)
+        return result
+
+    async def request_delete_approval(
+        self,
+        session_key: str,
+        request: CalendarDeleteRequest,
+        target: CalendarEventSummary,
+    ) -> CalendarDeleteEventResult:
+        result = CalendarDeleteEventResult(
+            action_id=self.client._action_id("calendar-delete-approval"),
+            status="waiting_approval",
+            title="Calendar delete approval required",
+            summary=f"Approval required before deleting '{target.title}'.",
+            next_step="Approve or deny the pending calendar delete request.",
+            visibility=ActionVisibility(
+                surfaces=["thread", "sidebar", "linked_session"],
+                badge="Approval pending",
+                inline_status="Calendar delete approval pending",
+                linked_summary=target.title,
+                approval_summary="Calendar delete approval pending",
+            ),
+            details=CalendarDeleteEventDetails(event_id=request.event_id, target=target),
+            error=ActionFailure(
+                code="approval_needed",
+                message="Approval is required before deleting this calendar event.",
+                retryable=True,
+            ),
+        )
+        session = self.sessions.get_or_create(session_key)
+        session.metadata[CALENDAR_DELETE_APPROVAL_METADATA_KEY] = {
+            "request": request.model_dump(mode="json"),
+            "target": target.model_dump(mode="json"),
+        }
+        pending_updated_at = datetime.now(timezone.utc).isoformat()
+        session.metadata[CALENDAR_PENDING_INTERACTION_METADATA_KEY] = {
+            "id": result.action_id,
+            "kind": "delete_approval",
+            "status": "pending",
+            "question": result.summary,
+            "buttons": [["승인", "취소"]],
+            "request": request.model_dump(mode="json"),
+            "target": target.model_dump(mode="json"),
+            "created_at": pending_updated_at,
+            "updated_at": pending_updated_at,
+        }
+        self.sessions.set_action_result(session, result)
+        self.sessions.set_approval_summary(session, {
+            "status": "pending",
+            "channel": self._channel_from_session_key(session_key),
+            "tool_name": "calendar.delete_event",
+            "tool_call_id": result.action_id,
+            "message_id": None,
+            "prompt_preview": self._delete_approval_prompt(target),
+        })
+        session.add_message("assistant", result.summary)
+        self.sessions.save(session)
+        return result
+
+    async def approve_update(self, session_key: str) -> CalendarUpdateEventResult:
+        pending = self._pending_update_request(session_key)
+        if pending is None:
+            return self._persist_ephemeral_result(session_key, self._no_pending_update_result())
+        request, target = pending
+        result = await self.client.update_event(request, target)
+        session = self.sessions.get_or_create(session_key)
+        session.metadata.pop(CALENDAR_UPDATE_APPROVAL_METADATA_KEY, None)
+        session.metadata.pop(CALENDAR_PENDING_INTERACTION_METADATA_KEY, None)
+        self.sessions.clear_approval_summary(session)
+        self.sessions.set_action_result(session, result)
+        session.add_message("assistant", result.summary)
+        self.sessions.save(session)
+        return result
+
+    async def approve_delete(self, session_key: str) -> CalendarDeleteEventResult:
+        pending = self._pending_delete_request(session_key)
+        if pending is None:
+            return self._persist_ephemeral_result(session_key, self._no_pending_delete_result())
+        request, target = pending
+        result = await self.client.delete_event(request, target)
+        session = self.sessions.get_or_create(session_key)
+        session.metadata.pop(CALENDAR_DELETE_APPROVAL_METADATA_KEY, None)
+        session.metadata.pop(CALENDAR_PENDING_INTERACTION_METADATA_KEY, None)
+        self.sessions.clear_approval_summary(session)
+        self.sessions.set_action_result(session, result)
+        session.add_message("assistant", result.summary)
+        self.sessions.save(session)
+        return result
+
+    async def deny_update(self, session_key: str) -> CalendarUpdateEventResult:
+        pending = self._pending_update_request(session_key)
+        if pending is None:
+            return self._persist_ephemeral_result(session_key, self._no_pending_update_result(cancel=True))
+        request, target = pending
+        preview = CalendarEventPreview(title=request.new_title or request.search_title, start_at=request.start_at, end_at=request.end_at)
+        result = CalendarUpdateEventResult(
+            action_id=self.client._action_id("calendar-update-denied"),
+            status="rejected",
+            title="Calendar update cancelled",
+            summary="The pending calendar update request was cancelled.",
+            next_step="Request the update again if you still want to change the event.",
+            visibility=ActionVisibility(surfaces=["thread", "sidebar"], badge="Calendar cancelled"),
+            details=CalendarUpdateEventDetails(event_id=request.event_id, target=target, preview=preview),
+            error=ActionFailure(code="approval_rejected", message="The pending calendar update request was cancelled."),
+        )
+        session = self.sessions.get_or_create(session_key)
+        session.metadata.pop(CALENDAR_UPDATE_APPROVAL_METADATA_KEY, None)
+        session.metadata.pop(CALENDAR_PENDING_INTERACTION_METADATA_KEY, None)
+        self.sessions.clear_approval_summary(session)
+        self.sessions.set_action_result(session, result)
+        session.add_message("assistant", result.summary)
+        self.sessions.save(session)
+        return result
+
+    async def deny_delete(self, session_key: str) -> CalendarDeleteEventResult:
+        pending = self._pending_delete_request(session_key)
+        if pending is None:
+            return self._persist_ephemeral_result(session_key, self._no_pending_delete_result(cancel=True))
+        request, target = pending
+        result = CalendarDeleteEventResult(
+            action_id=self.client._action_id("calendar-delete-denied"),
+            status="rejected",
+            title="Calendar delete cancelled",
+            summary="The pending calendar delete request was cancelled.",
+            next_step="Request the delete again if you still want to remove the event.",
+            visibility=ActionVisibility(surfaces=["thread", "sidebar"], badge="Calendar cancelled"),
+            details=CalendarDeleteEventDetails(event_id=request.event_id, target=target),
+            error=ActionFailure(code="approval_rejected", message="The pending calendar delete request was cancelled."),
+        )
+        session = self.sessions.get_or_create(session_key)
+        session.metadata.pop(CALENDAR_DELETE_APPROVAL_METADATA_KEY, None)
+        session.metadata.pop(CALENDAR_PENDING_INTERACTION_METADATA_KEY, None)
+        self.sessions.clear_approval_summary(session)
+        self.sessions.set_action_result(session, result)
+        session.add_message("assistant", result.summary)
+        self.sessions.save(session)
+        return result
+
     def _persist_result(
         self,
         session_key: str,
-        result: CalendarListEventsResult | CalendarFindConflictsResult | CalendarCreateEventResult,
+        result: CalendarListEventsResult | CalendarFindConflictsResult | CalendarCreateEventResult | CalendarUpdateEventResult | CalendarDeleteEventResult,
     ) -> None:
         session = self.sessions.get_or_create(session_key)
         self.sessions.set_action_result(session, result)
@@ -642,7 +1024,7 @@ class CalendarAutomationSessionRunner:
             session.add_message("assistant", result.summary)
         self.sessions.save(session)
 
-    def _persist_ephemeral_result(self, session_key: str, result: CalendarCreateEventResult) -> CalendarCreateEventResult:
+    def _persist_ephemeral_result(self, session_key: str, result):
         self._persist_result(session_key, result)
         return result
 
@@ -656,6 +1038,60 @@ class CalendarAutomationSessionRunner:
         except Exception:
             return None
 
+    def _pending_update_request(self, session_key: str) -> tuple[CalendarUpdateRequest, CalendarEventSummary | None] | None:
+        session = self.sessions.get_or_create(session_key)
+        payload = session.metadata.get(CALENDAR_UPDATE_APPROVAL_METADATA_KEY)
+        if not isinstance(payload, dict):
+            return None
+        request_payload = payload.get("request")
+        if not isinstance(request_payload, dict):
+            return None
+        try:
+            request = CalendarUpdateRequest.model_validate(request_payload)
+            target_payload = payload.get("target")
+            target = CalendarEventSummary.model_validate(target_payload) if isinstance(target_payload, dict) else None
+            return request, target
+        except Exception:
+            return None
+
+    def _pending_delete_request(self, session_key: str) -> tuple[CalendarDeleteRequest, CalendarEventSummary] | None:
+        session = self.sessions.get_or_create(session_key)
+        payload = session.metadata.get(CALENDAR_DELETE_APPROVAL_METADATA_KEY)
+        if not isinstance(payload, dict):
+            return None
+        request_payload = payload.get("request")
+        target_payload = payload.get("target")
+        if not isinstance(request_payload, dict) or not isinstance(target_payload, dict):
+            return None
+        try:
+            return CalendarDeleteRequest.model_validate(request_payload), CalendarEventSummary.model_validate(target_payload)
+        except Exception:
+            return None
+
+    def _no_pending_update_result(self, *, cancel: bool = False) -> CalendarUpdateEventResult:
+        return CalendarUpdateEventResult(
+            action_id=self.client._action_id("calendar-update-no-pending-cancel" if cancel else "calendar-update-no-pending"),
+            status="blocked",
+            title="No pending calendar update approval",
+            summary="There is no pending calendar update approval in this session.",
+            next_step="Request calendar update approval first.",
+            visibility=ActionVisibility(surfaces=["thread", "sidebar"], badge="Calendar blocked"),
+            details=CalendarUpdateEventDetails(preview=CalendarEventPreview(title="(Untitled)", start_at="", end_at="")),
+            error=ActionFailure(code="not_found", message="No pending calendar update approval is available."),
+        )
+
+    def _no_pending_delete_result(self, *, cancel: bool = False) -> CalendarDeleteEventResult:
+        return CalendarDeleteEventResult(
+            action_id=self.client._action_id("calendar-delete-no-pending-cancel" if cancel else "calendar-delete-no-pending"),
+            status="blocked",
+            title="No pending calendar delete approval",
+            summary="There is no pending calendar delete approval in this session.",
+            next_step="Request calendar delete approval first.",
+            visibility=ActionVisibility(surfaces=["thread", "sidebar"], badge="Calendar blocked"),
+            details=CalendarDeleteEventDetails(target=CalendarEventSummary(title="(Untitled)", start_at="", end_at="")),
+            error=ActionFailure(code="not_found", message="No pending calendar delete approval is available."),
+        )
+
     @staticmethod
     def _channel_from_session_key(session_key: str) -> str:
         return session_key.split(":", 1)[0] if ":" in session_key else "websocket"
@@ -666,4 +1102,20 @@ class CalendarAutomationSessionRunner:
             "Approval required before creating this calendar event. "
             f"Title: {request.title}. Start: {request.start_at}. End: {request.end_at}. "
             "Use /calendar approve to create it or /calendar deny to cancel."
+        )
+
+    @staticmethod
+    def _update_approval_prompt(request: CalendarUpdateRequest) -> str:
+        return (
+            "Approval required before updating this calendar event. "
+            f"Title: {request.search_title}. New start: {request.start_at}. New end: {request.end_at}. "
+            "Use /calendar approve to update it or /calendar deny to cancel."
+        )
+
+    @staticmethod
+    def _delete_approval_prompt(target: CalendarEventSummary) -> str:
+        return (
+            "Approval required before deleting this calendar event. "
+            f"Title: {target.title}. Start: {target.start_at}. End: {target.end_at}. "
+            "Use /calendar approve to delete it or /calendar deny to cancel."
         )

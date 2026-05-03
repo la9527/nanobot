@@ -4,17 +4,28 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import shlex
 import sys
+from datetime import datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from nanobot.automation.calendar import (
+    CALENDAR_CREATE_APPROVAL_METADATA_KEY,
+    CALENDAR_DELETE_APPROVAL_METADATA_KEY,
+    CALENDAR_UPDATE_APPROVAL_METADATA_KEY,
     CalendarAutomationSessionRunner,
     CalendarCreateRequest,
+    CalendarDeleteRequest,
+    CalendarUpdateRequest,
     N8NCalendarAutomationClient,
     N8NCalendarAutomationConfig,
 )
+from nanobot.automation_results import CalendarEventSummary
 from nanobot.automation.mail import (
+    MAIL_LAST_DRAFT_REQUEST_METADATA_KEY,
+    MAIL_SEND_APPROVAL_METADATA_KEY,
     MailAutomationSessionRunner,
     MailDraftRequest,
     MailSendRequest,
@@ -30,6 +41,7 @@ from nanobot.response_status import (
     build_response_footer,
     normalize_response_footer_mode,
 )
+from nanobot.session.continuity import ACTION_RESULT_METADATA_KEY, TASK_SUMMARY_METADATA_KEY
 from nanobot.utils.helpers import build_status_content
 from nanobot.utils.restart import set_restart_notice_to_env
 
@@ -44,6 +56,41 @@ CALENDAR_CONFLICT_REVIEW_CHOICES = [
     [CALENDAR_CONFLICT_FORCE_CREATE_LABEL, CALENDAR_CONFLICT_RESCHEDULE_LABEL],
     ["취소"],
 ]
+CALENDAR_NATURAL_CREATE_KEYWORDS = ("일정", "예약", "캘린더")
+CALENDAR_NATURAL_CREATE_VERBS = ("잡아", "등록", "추가", "넣어", "만들", "생성", "예약")
+CALENDAR_NATURAL_MUTATION_VERBS = ("삭제", "지워", "취소", "옮겨", "변경", "수정", "미뤄", "당겨")
+CALENDAR_NATURAL_DELETE_VERBS = ("삭제", "지워", "취소")
+CALENDAR_NATURAL_UPDATE_VERBS = ("옮겨", "변경", "수정", "미뤄", "당겨")
+CALENDAR_NATURAL_APPROVE_WORDS = ("승인", "확정", "진행", "좋아", "맞아", "그래", "ok", "okay", "yes")
+CALENDAR_NATURAL_CANCEL_WORDS = ("취소", "반려", "거절", "거부", "아니", "하지마", "하지 마", "cancel", "deny", "no")
+SESSION_LOG_MODE_METADATA_KEY = "_session_log_mode"
+SESSION_LOG_MODE_SKIP = "skip"
+CONTEXT_CLEAR_METADATA_KEYS = (
+    ACTION_RESULT_METADATA_KEY,
+    TASK_SUMMARY_METADATA_KEY,
+    "approval_summary",
+    "proactive_summary",
+    "runtime_checkpoint",
+    "pending_user_turn",
+    "_last_summary",
+    CALENDAR_CREATE_INPUT_METADATA_KEY,
+    CALENDAR_CONFLICT_REVIEW_METADATA_KEY,
+    CALENDAR_PENDING_INTERACTION_METADATA_KEY,
+    CALENDAR_CREATE_APPROVAL_METADATA_KEY,
+    CALENDAR_UPDATE_APPROVAL_METADATA_KEY,
+    CALENDAR_DELETE_APPROVAL_METADATA_KEY,
+    MAIL_LAST_DRAFT_REQUEST_METADATA_KEY,
+    MAIL_SEND_APPROVAL_METADATA_KEY,
+)
+CALENDAR_WEEKDAY_INDEX = {
+    "월": 0,
+    "화": 1,
+    "수": 2,
+    "목": 3,
+    "금": 4,
+    "토": 5,
+    "일": 6,
+}
 
 
 async def cmd_stop(ctx: CommandContext) -> OutboundMessage:
@@ -219,12 +266,24 @@ async def cmd_model(ctx: CommandContext) -> OutboundMessage:
     """Show or change the active named model target for the session."""
     loop = ctx.loop
     session = ctx.session or loop.sessions.get_or_create(ctx.key)
-    if not targets:
+    targets = loop.get_available_model_targets()
+    active_name = loop.get_active_model_target_name(session)
+    args = ctx.args.strip().lower()
+
+    def _render_targets() -> list[str]:
         lines: list[str] = []
         for name, target in targets.items():
             prefix = "*" if name == active_name else "-"
             lines.append(f"{prefix} `{name}` — {describe_model_target(target)}")
         return lines
+
+    if not targets:
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content="No model targets are configured.",
+            metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+        )
 
     if not args or args == "current":
         current = targets.get(active_name)
@@ -298,6 +357,59 @@ async def cmd_new(ctx: CommandContext) -> OutboundMessage:
         channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
         content="New session started.",
         metadata=dict(ctx.msg.metadata or {})
+    )
+
+
+async def cmd_context(ctx: CommandContext) -> OutboundMessage:
+    """Show or clear the current chat session context."""
+    loop = ctx.loop
+    session = ctx.session or loop.sessions.get_or_create(ctx.key)
+    raw_command = ctx.raw.strip().split(maxsplit=1)[0].split("@", 1)[0].lower()
+    args = ctx.args.strip().lower()
+    wants_clear = raw_command == "/clear" or args.split(maxsplit=1)[0:1] == ["clear"]
+
+    if not wants_clear:
+        message_count = len(session.messages)
+        content = (
+            "Context keeps this chat's recent messages for future replies.\n"
+            f"Current stored message count: {message_count}.\n\n"
+            "Use `/context clear` or `/clear` to drop this chat's stored conversation context."
+        )
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content=content,
+            metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+        )
+
+    cancelled = await loop._cancel_active_tasks(ctx.key)
+    message_count = len(session.messages)
+    removed_metadata = [key for key in CONTEXT_CLEAR_METADATA_KEYS if key in session.metadata]
+    session.clear()
+    for key in CONTEXT_CLEAR_METADATA_KEYS:
+        session.metadata.pop(key, None)
+    summaries = getattr(getattr(loop, "auto_compact", None), "_summaries", None)
+    if isinstance(summaries, dict):
+        summaries.pop(session.key, None)
+    loop.sessions.save(session)
+
+    details = [
+        f"Cleared {message_count} stored message(s) from this chat context.",
+    ]
+    if removed_metadata:
+        details.append(f"Removed {len(removed_metadata)} pending context marker(s).")
+    if cancelled:
+        details.append(f"Stopped {cancelled} active task(s) for this chat.")
+    details.append("Long-term memory and global preferences were left unchanged.")
+    return OutboundMessage(
+        channel=ctx.msg.channel,
+        chat_id=ctx.msg.chat_id,
+        content="\n".join(details),
+        metadata={
+            **dict(ctx.msg.metadata or {}),
+            "render_as": "text",
+            SESSION_LOG_MODE_METADATA_KEY: SESSION_LOG_MODE_SKIP,
+        },
     )
 
 
@@ -638,8 +750,10 @@ def _calendar_help_text() -> str:
         "- `/calendar today` to summarize today's schedule",
         "- `/calendar check --start 2026-05-02T15:00:00+09:00 --end 2026-05-02T16:00:00+09:00`",
         "- `/calendar create --title \"Dentist\" --start 2026-05-02T15:00:00+09:00 --end 2026-05-02T16:00:00+09:00 [--location ...] [--details ...]`",
+        "- Natural update: `2026-05-02 오후 3시 치과 일정을 오후 4시로 변경해줘`",
+        "- Natural delete: `2026-05-02 오후 3시 치과 일정 삭제해줘`",
         "- `/calendar approve` to create the pending event",
-        "- `/calendar deny` or `/calendar cancel` to cancel the pending create approval",
+        "- `/calendar deny` or `/calendar cancel` to cancel the pending calendar approval",
     ])
 
 
@@ -657,6 +771,8 @@ def _calendar_config_status_lines(runner: CalendarAutomationSessionRunner | None
             f"- Base URL: {config.base_url}",
             f"- Summary webhook path: {config.summary_path}",
             f"- Create webhook path: {config.create_path}",
+            f"- Update webhook path: {config.update_path}",
+            f"- Delete webhook path: {config.delete_path}",
             f"- Timezone: {config.timezone}",
             f"- Webhook token: {'configured' if config.webhook_token else 'not set'}",
         ]
@@ -702,6 +818,28 @@ def _calendar_pending_status_lines(session) -> list[str]:
             f"- Event title: {str(approval.get('title') or '(unknown)').strip() or '(unknown)'}",
             f"- Start: {str(approval.get('start_at') or '-').strip() or '-'}",
             f"- End: {str(approval.get('end_at') or '-').strip() or '-'}",
+            "- Resolve with: /calendar approve or /calendar cancel",
+        ]
+
+    update_approval = session.metadata.get("calendar_update_approval")
+    if isinstance(update_approval, dict):
+        request = update_approval.get("request") if isinstance(update_approval.get("request"), dict) else {}
+        return [
+            "- Pending: update approval",
+            f"- Event title: {str(request.get('search_title') or '(unknown)').strip() or '(unknown)'}",
+            f"- New start: {str(request.get('start_at') or '-').strip() or '-'}",
+            f"- New end: {str(request.get('end_at') or '-').strip() or '-'}",
+            "- Resolve with: /calendar approve or /calendar cancel",
+        ]
+
+    delete_approval = session.metadata.get("calendar_delete_approval")
+    if isinstance(delete_approval, dict):
+        target = delete_approval.get("target") if isinstance(delete_approval.get("target"), dict) else {}
+        return [
+            "- Pending: delete approval",
+            f"- Event title: {str(target.get('title') or '(unknown)').strip() or '(unknown)'}",
+            f"- Start: {str(target.get('start_at') or '-').strip() or '-'}",
+            f"- End: {str(target.get('end_at') or '-').strip() or '-'}",
             "- Resolve with: /calendar approve or /calendar cancel",
         ]
 
@@ -797,6 +935,13 @@ def _calendar_result_content(result) -> str:
     lines = [result.title, "", result.summary]
     preview = getattr(result.details, "preview", None)
     if preview is not None:
+        target = getattr(result.details, "target", None)
+        if target is not None:
+            lines.extend([
+                "",
+                f"Target: {target.title}",
+                f"Current: {target.start_at} -> {target.end_at}",
+            ])
         lines.extend([
             "",
             f"Title: {preview.title}",
@@ -821,6 +966,13 @@ def _calendar_result_content(result) -> str:
                 lines.append(
                     f"{index}. {event.title} ({event.start_at} -> {event.end_at})"
                 )
+        target = getattr(result.details, "target", None)
+        if target is not None:
+            lines.extend([
+                "",
+                f"Target: {target.title}",
+                f"When: {target.start_at} -> {target.end_at}",
+            ])
     if result.next_step:
         lines.extend(["", f"Next step: {result.next_step}"])
     return "\n".join(lines)
@@ -994,9 +1146,6 @@ def _calendar_conflict_review_response(ctx: CommandContext, session, request: Ca
 
 
 def _normalize_calendar_datetime(value: str, timezone: str = "Asia/Seoul") -> str | None:
-    from datetime import datetime
-    from zoneinfo import ZoneInfo
-
     text = value.strip()
     if not text:
         return None
@@ -1004,10 +1153,409 @@ def _normalize_calendar_datetime(value: str, timezone: str = "Asia/Seoul") -> st
     try:
         parsed = datetime.fromisoformat(normalized)
     except ValueError:
-        return None
+        zone = ZoneInfo(timezone)
+        current = datetime.now(zone)
+        local_date = _extract_calendar_natural_date(text, current, roll_forward=False)
+        local_time = _extract_calendar_natural_time(text)
+        if local_date is None or local_time is None:
+            return None
+        parsed = _calendar_datetime_from_date_time(local_date, local_time, timezone)
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=ZoneInfo(timezone))
     return parsed.isoformat()
+
+
+def _calendar_looks_like_natural_create(text: str) -> bool:
+    normalized = text.strip().lower()
+    if not normalized or normalized.startswith("/"):
+        return False
+    if any(keyword in normalized for keyword in CALENDAR_NATURAL_MUTATION_VERBS):
+        return False
+    return any(keyword in normalized for keyword in CALENDAR_NATURAL_CREATE_KEYWORDS) and any(
+        verb in normalized for verb in CALENDAR_NATURAL_CREATE_VERBS
+    )
+
+
+def _extract_calendar_natural_date(
+    text: str,
+    now: datetime,
+    *,
+    roll_forward: bool = True,
+) -> datetime.date | None:
+    iso_match = re.search(r"\b(\d{4})-(\d{1,2})-(\d{1,2})\b", text)
+    if iso_match:
+        try:
+            return datetime(
+                int(iso_match.group(1)),
+                int(iso_match.group(2)),
+                int(iso_match.group(3)),
+            ).date()
+        except ValueError:
+            return None
+
+    korean_year_match = re.search(r"(\d{4})\s*년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일", text)
+    if korean_year_match:
+        try:
+            return datetime(
+                int(korean_year_match.group(1)),
+                int(korean_year_match.group(2)),
+                int(korean_year_match.group(3)),
+            ).date()
+        except ValueError:
+            return None
+
+    month_day_match = re.search(r"(?<!년\s)(\d{1,2})\s*월\s*(\d{1,2})\s*일", text)
+    if month_day_match:
+        try:
+            candidate = datetime(
+                now.year,
+                int(month_day_match.group(1)),
+                int(month_day_match.group(2)),
+            ).date()
+        except ValueError:
+            return None
+        if roll_forward and candidate < now.date():
+            try:
+                return datetime(now.year + 1, candidate.month, candidate.day).date()
+            except ValueError:
+                return candidate
+        return candidate
+
+    if "모레" in text:
+        return (now + timedelta(days=2)).date()
+    if "내일" in text:
+        return (now + timedelta(days=1)).date()
+    if "오늘" in text:
+        return now.date()
+
+    weekday_match = re.search(r"다음\s*([월화수목금토일])\s*요일", text)
+    if weekday_match:
+        target_weekday = CALENDAR_WEEKDAY_INDEX[weekday_match.group(1)]
+        days_ahead = target_weekday - now.weekday()
+        if days_ahead <= 0:
+            days_ahead += 7
+        return (now + timedelta(days=days_ahead)).date()
+
+    return None
+
+
+def _extract_calendar_natural_time(text: str) -> tuple[int, int] | None:
+    colon_match = re.search(r"\b(\d{1,2}):(\d{2})\b", text)
+    if colon_match:
+        hour = int(colon_match.group(1))
+        minute = int(colon_match.group(2))
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            return hour, minute
+        return None
+
+    time_match = re.search(
+        r"(오전|오후)?\s*(\d{1,2})\s*시(?!간)\s*(반|\d{1,2}\s*분)?",
+        text,
+    )
+    if not time_match:
+        return None
+
+    marker = time_match.group(1)
+    hour = int(time_match.group(2))
+    minute_text = (time_match.group(3) or "").strip()
+    minute = 30 if minute_text == "반" else 0
+    minute_match = re.search(r"(\d{1,2})", minute_text)
+    if minute_match:
+        minute = int(minute_match.group(1))
+
+    if marker == "오후" and hour < 12:
+        hour += 12
+    elif marker == "오전" and hour == 12:
+        hour = 0
+
+    if 0 <= hour <= 23 and 0 <= minute <= 59:
+        return hour, minute
+    return None
+
+
+def _extract_calendar_natural_duration_minutes(text: str) -> int | None:
+    if re.search(r"한\s*시간", text):
+        return 60
+    hour_match = re.search(r"(\d{1,2})\s*시간(?:\s*(\d{1,2})\s*분)?", text)
+    if hour_match:
+        hours = int(hour_match.group(1))
+        minutes = int(hour_match.group(2) or "0")
+        total = hours * 60 + minutes
+        return total if total > 0 else None
+    minute_match = re.search(r"(\d{1,3})\s*분\s*(?:동안|짜리)?", text)
+    if minute_match:
+        minutes = int(minute_match.group(1))
+        return minutes if minutes > 0 else None
+    return None
+
+
+def _strip_calendar_natural_title(text: str) -> str | None:
+    cleaned = text.strip()
+    removal_patterns = [
+        r"\b\d{4}-\d{1,2}-\d{1,2}\b",
+        r"\d{4}\s*년\s*\d{1,2}\s*월\s*\d{1,2}\s*일",
+        r"\d{1,2}\s*월\s*\d{1,2}\s*일",
+        r"다음\s*[월화수목금토일]\s*요일",
+        r"오늘|내일|모레",
+        r"(오전|오후)?\s*\d{1,2}\s*시(?!간)\s*(반|\d{1,2}\s*분)?\s*(부터|에)?",
+        r"\b\d{1,2}:\d{2}\b\s*(부터|에)?",
+        r"한\s*시간",
+        r"\d{1,2}\s*시간(?:\s*\d{1,2}\s*분)?",
+        r"\d{1,3}\s*분\s*(동안|짜리)?",
+    ]
+    for pattern in removal_patterns:
+        cleaned = re.sub(pattern, " ", cleaned)
+    for token in (
+        "캘린더", "일정", "예약", "등록", "추가", "넣어줘", "넣어", "잡아줘", "잡아",
+        "만들어줘", "만들어", "생성해줘", "생성", "해줘", "해주세요", "부탁해",
+    ):
+        cleaned = cleaned.replace(token, " ")
+    cleaned = re.sub(r"[.,!?]", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" 은는이가을를에으로 ")
+    return cleaned or None
+
+
+def _parse_calendar_natural_create(
+    text: str,
+    *,
+    timezone: str = "Asia/Seoul",
+    now: datetime | None = None,
+) -> dict[str, Any] | None:
+    if not _calendar_looks_like_natural_create(text):
+        return None
+
+    zone = ZoneInfo(timezone)
+    current = now.astimezone(zone) if now else datetime.now(zone)
+    local_date = _extract_calendar_natural_date(text, current)
+    local_time = _extract_calendar_natural_time(text)
+    duration_minutes = _extract_calendar_natural_duration_minutes(text)
+    title = _strip_calendar_natural_title(text)
+
+    start_at = None
+    end_at = None
+    if local_time is not None:
+        if local_date is None:
+            candidate = datetime.combine(current.date(), datetime.min.time(), tzinfo=zone).replace(
+                hour=local_time[0],
+                minute=local_time[1],
+            )
+            if candidate <= current:
+                candidate += timedelta(days=1)
+        else:
+            candidate = datetime.combine(local_date, datetime.min.time(), tzinfo=zone).replace(
+                hour=local_time[0],
+                minute=local_time[1],
+            )
+        start_at = candidate.isoformat()
+        if duration_minutes:
+            end_at = (candidate + timedelta(minutes=duration_minutes)).isoformat()
+
+    return {
+        "title": title,
+        "start_at": start_at,
+        "end_at": end_at,
+        "location": None,
+        "description": text.strip(),
+    }
+
+
+def _calendar_looks_like_natural_delete(text: str) -> bool:
+    normalized = text.strip().lower()
+    if not normalized or normalized.startswith("/"):
+        return False
+    return any(keyword in normalized for keyword in CALENDAR_NATURAL_CREATE_KEYWORDS) and any(
+        verb in normalized for verb in CALENDAR_NATURAL_DELETE_VERBS
+    )
+
+
+def _calendar_looks_like_natural_update(text: str) -> bool:
+    normalized = text.strip().lower()
+    if not normalized or normalized.startswith("/"):
+        return False
+    return any(keyword in normalized for keyword in CALENDAR_NATURAL_CREATE_KEYWORDS) and any(
+        verb in normalized for verb in CALENDAR_NATURAL_UPDATE_VERBS
+    )
+
+
+def _extract_calendar_natural_times(text: str) -> list[tuple[int, int]]:
+    times: list[tuple[int, int]] = []
+    for match in re.finditer(r"\b(\d{1,2}):(\d{2})\b", text):
+        hour = int(match.group(1))
+        minute = int(match.group(2))
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            times.append((hour, minute))
+
+    pattern = r"(오전|오후)?\s*(\d{1,2})\s*시(?!간)\s*(반|\d{1,2}\s*분)?"
+    for match in re.finditer(pattern, text):
+        marker = match.group(1)
+        hour = int(match.group(2))
+        minute_text = (match.group(3) or "").strip()
+        minute = 30 if minute_text == "반" else 0
+        minute_match = re.search(r"(\d{1,2})", minute_text)
+        if minute_match:
+            minute = int(minute_match.group(1))
+        if marker == "오후" and hour < 12:
+            hour += 12
+        elif marker == "오전" and hour == 12:
+            hour = 0
+        if 0 <= hour <= 23 and 0 <= minute <= 59 and (hour, minute) not in times:
+            times.append((hour, minute))
+    return times
+
+
+def _strip_calendar_natural_mutation_title(text: str) -> str | None:
+    cleaned = text.strip()
+    removal_patterns = [
+        r"\b\d{4}-\d{1,2}-\d{1,2}\b",
+        r"\d{4}\s*년\s*\d{1,2}\s*월\s*\d{1,2}\s*일",
+        r"\d{1,2}\s*월\s*\d{1,2}\s*일",
+        r"다음\s*[월화수목금토일]\s*요일",
+        r"오늘|내일|모레",
+        r"(오전|오후)?\s*\d{1,2}\s*시(?!간)\s*(반|\d{1,2}\s*분)?\s*(부터|에|로|으로)?",
+        r"\b\d{1,2}:\d{2}\b\s*(부터|에|로|으로)?",
+        r"한\s*시간",
+        r"\d{1,2}\s*시간(?:\s*\d{1,2}\s*분)?",
+        r"\d{1,3}\s*분\s*(동안|짜리)?",
+    ]
+    for pattern in removal_patterns:
+        cleaned = re.sub(pattern, " ", cleaned)
+    for token in (
+        "캘린더", "일정", "예약", "변경해줘", "변경", "수정해줘", "수정", "옮겨줘", "옮겨",
+        "미뤄줘", "미뤄", "당겨줘", "당겨", "삭제해줘", "삭제", "지워줘", "지워",
+        "취소해줘", "취소", "해줘", "해주세요", "부탁해",
+    ):
+        cleaned = cleaned.replace(token, " ")
+    cleaned = re.sub(r"[.,!?]", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" 은는이가을를에으로로 ")
+    return cleaned or None
+
+
+def _calendar_day_window(local_date, timezone: str = "Asia/Seoul") -> tuple[str, str]:
+    zone = ZoneInfo(timezone)
+    start = datetime.combine(local_date, datetime.min.time(), tzinfo=zone)
+    end = start + timedelta(days=1) - timedelta(seconds=1)
+    return start.isoformat(), end.isoformat()
+
+
+def _calendar_datetime_from_date_time(local_date, local_time: tuple[int, int], timezone: str = "Asia/Seoul") -> datetime:
+    zone = ZoneInfo(timezone)
+    return datetime.combine(local_date, datetime.min.time(), tzinfo=zone).replace(
+        hour=local_time[0],
+        minute=local_time[1],
+    )
+
+
+def _calendar_parse_event_datetime(value: str, timezone: str = "Asia/Seoul") -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(value.strip())
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=ZoneInfo(timezone))
+    return parsed.astimezone(ZoneInfo(timezone))
+
+
+async def _calendar_find_single_target(
+    ctx: CommandContext,
+    runner: CalendarAutomationSessionRunner,
+    *,
+    search_title: str,
+    local_date,
+    local_time: tuple[int, int] | None,
+    purpose: str,
+) -> tuple[CalendarEventSummary | None, str | None]:
+    time_min, time_max = _calendar_day_window(local_date)
+    list_result = await runner.client.list_events(
+        message="일정 후보를 찾아줘",
+        channel=ctx.key.split(":", 1)[0] if ":" in ctx.key else "websocket",
+        session_id=ctx.key,
+        user_id="primary-user",
+        time_min=time_min,
+        time_max=time_max,
+        window_label=local_date.isoformat(),
+    )
+    if list_result.status != "completed":
+        return None, list_result.summary
+
+    normalized_title = search_title.lower()
+    matches: list[CalendarEventSummary] = []
+    for event in list_result.details.events:
+        if normalized_title and normalized_title not in event.title.lower():
+            continue
+        if local_time is not None:
+            start = _calendar_parse_event_datetime(event.start_at)
+            if start is None or (start.hour, start.minute) != local_time:
+                continue
+        matches.append(event)
+
+    if len(matches) == 1:
+        return matches[0], None
+    if not matches:
+        return None, f"{purpose}할 일정 '{search_title}' 을 찾지 못했습니다. 날짜와 시간을 더 구체적으로 알려주세요."
+
+    lines = [f"{purpose}할 일정 후보가 여러 개입니다. 제목과 시간을 더 구체적으로 알려주세요.", ""]
+    for index, event in enumerate(matches[:5], start=1):
+        lines.append(f"{index}. {event.title} ({event.start_at} -> {event.end_at})")
+    return None, "\n".join(lines)
+
+
+async def _calendar_update_request_outbound(
+    ctx: CommandContext,
+    runner: CalendarAutomationSessionRunner,
+    request: CalendarUpdateRequest,
+    target: CalendarEventSummary | None,
+) -> OutboundMessage:
+    result = await runner.request_update_approval(ctx.key, request, target)
+    return OutboundMessage(
+        channel=ctx.msg.channel,
+        chat_id=ctx.msg.chat_id,
+        content=_calendar_result_content(result),
+        metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+    )
+
+
+async def _calendar_delete_request_outbound(
+    ctx: CommandContext,
+    runner: CalendarAutomationSessionRunner,
+    request: CalendarDeleteRequest,
+    target: CalendarEventSummary,
+) -> OutboundMessage:
+    result = await runner.request_delete_approval(ctx.key, request, target)
+    return OutboundMessage(
+        channel=ctx.msg.channel,
+        chat_id=ctx.msg.chat_id,
+        content=_calendar_result_content(result),
+        metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+    )
+
+
+async def _calendar_create_request_outbound(
+    ctx: CommandContext,
+    runner: CalendarAutomationSessionRunner,
+    request: CalendarCreateRequest,
+) -> OutboundMessage:
+    conflict = await runner.client.find_conflicts(
+        start_at=request.start_at,
+        end_at=request.end_at,
+        channel=ctx.key.split(":", 1)[0] if ":" in ctx.key else "websocket",
+        session_id=ctx.key,
+        user_id="primary-user",
+    )
+    session = ctx.session or ctx.loop.sessions.get_or_create(ctx.key)
+    if getattr(conflict.details, "available", False):
+        result = await runner.request_create_approval(ctx.key, request)
+        content = _calendar_result_content(result)
+    elif getattr(conflict.details, "reason", None) == "overlap_detected":
+        return _calendar_conflict_review_response(ctx, session, request, conflict)
+    else:
+        _persist_calendar_result(ctx, session, conflict)
+        content = _calendar_result_content(conflict)
+    return OutboundMessage(
+        channel=ctx.msg.channel,
+        chat_id=ctx.msg.chat_id,
+        content=content,
+        metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+    )
 
 
 async def _calendar_pending_input_interceptor(ctx: CommandContext) -> OutboundMessage | None:
@@ -1173,6 +1721,214 @@ async def _calendar_conflict_review_interceptor(ctx: CommandContext) -> Outbound
         buttons=CALENDAR_CONFLICT_REVIEW_CHOICES,
         metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
     )
+
+
+def _calendar_pending_resolution_kind(session) -> str | None:
+    if _calendar_pending_input(session) is not None:
+        return "input"
+    if _calendar_conflict_review(session) is not None:
+        return "conflict"
+    if isinstance(session.metadata.get(CALENDAR_UPDATE_APPROVAL_METADATA_KEY), dict):
+        return "approval"
+    if isinstance(session.metadata.get(CALENDAR_DELETE_APPROVAL_METADATA_KEY), dict):
+        return "approval"
+    if isinstance(session.metadata.get(CALENDAR_CREATE_APPROVAL_METADATA_KEY), dict):
+        return "approval"
+    return None
+
+
+def _calendar_natural_resolution_intent(text: str) -> str | None:
+    normalized = text.strip().lower()
+    if not normalized or normalized.startswith("/"):
+        return None
+    if any(word in normalized for word in CALENDAR_NATURAL_CANCEL_WORDS):
+        return "cancel"
+    if any(word in normalized for word in CALENDAR_NATURAL_APPROVE_WORDS):
+        return "approve"
+    return None
+
+
+async def _calendar_natural_resolution_interceptor(ctx: CommandContext) -> OutboundMessage | None:
+    session = ctx.session
+    if session is None:
+        return None
+    pending_kind = _calendar_pending_resolution_kind(session)
+    if pending_kind is None:
+        return None
+
+    intent = _calendar_natural_resolution_intent(ctx.raw)
+    if intent is None:
+        return None
+    if intent == "approve" and pending_kind == "input":
+        return None
+
+    if intent == "approve" and pending_kind == "conflict":
+        synthetic_ctx = CommandContext(
+            msg=ctx.msg,
+            session=session,
+            key=ctx.key,
+            raw=CALENDAR_CONFLICT_FORCE_CREATE_LABEL,
+            loop=ctx.loop,
+        )
+        return await _calendar_conflict_review_interceptor(synthetic_ctx)
+
+    command = "/calendar approve" if intent == "approve" else "/calendar cancel"
+    synthetic_ctx = CommandContext(
+        msg=ctx.msg,
+        session=session,
+        key=ctx.key,
+        raw=command,
+        loop=ctx.loop,
+    )
+    return await cmd_calendar(synthetic_ctx)
+
+
+async def _calendar_natural_update_interceptor(ctx: CommandContext) -> OutboundMessage | None:
+    if not _calendar_looks_like_natural_update(ctx.raw):
+        return None
+
+    zone = ZoneInfo("Asia/Seoul")
+    current = datetime.now(zone)
+    local_date = _extract_calendar_natural_date(ctx.raw, current, roll_forward=False)
+    times = _extract_calendar_natural_times(ctx.raw)
+    title = _strip_calendar_natural_mutation_title(ctx.raw)
+    if local_date is None or len(times) < 2 or not title:
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content="Calendar update needs a title, date, current time, and new time. For example: 2026-05-05 오후 3시 치과 일정을 오후 4시로 변경해줘",
+            metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+        )
+
+    runner = _calendar_runner_for_ctx(ctx)
+    if runner is None:
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content="Calendar automation is not configured. Set N8N_BASE_URL and the Calendar webhook env vars first.",
+            metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+        )
+
+    old_time, new_time = times[0], times[-1]
+    target, error = await _calendar_find_single_target(
+        ctx,
+        runner,
+        search_title=title,
+        local_date=local_date,
+        local_time=old_time,
+        purpose="변경",
+    )
+    if target is None:
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content=error or "변경할 일정을 찾지 못했습니다.",
+            metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+        )
+
+    target_start = _calendar_parse_event_datetime(target.start_at) or _calendar_datetime_from_date_time(local_date, old_time)
+    target_end = _calendar_parse_event_datetime(target.end_at) or (target_start + timedelta(hours=1))
+    duration = target_end - target_start
+    if duration.total_seconds() <= 0:
+        duration = timedelta(hours=1)
+    new_start = _calendar_datetime_from_date_time(local_date, new_time)
+    new_end = new_start + duration
+    request = CalendarUpdateRequest(
+        search_title=target.title,
+        new_title=target.title,
+        start_at=new_start.isoformat(),
+        end_at=new_end.isoformat(),
+        search_time_min=target.start_at,
+        search_time_max=target.end_at,
+        event_id=target.event_id,
+    )
+    return await _calendar_update_request_outbound(ctx, runner, request, target)
+
+
+async def _calendar_natural_delete_interceptor(ctx: CommandContext) -> OutboundMessage | None:
+    if not _calendar_looks_like_natural_delete(ctx.raw):
+        return None
+
+    zone = ZoneInfo("Asia/Seoul")
+    current = datetime.now(zone)
+    local_date = _extract_calendar_natural_date(ctx.raw, current, roll_forward=False)
+    times = _extract_calendar_natural_times(ctx.raw)
+    title = _strip_calendar_natural_mutation_title(ctx.raw)
+    if local_date is None or not title:
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content="Calendar delete needs a title and date. For example: 2026-05-05 오후 3시 치과 일정 삭제해줘",
+            metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+        )
+
+    runner = _calendar_runner_for_ctx(ctx)
+    if runner is None:
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content="Calendar automation is not configured. Set N8N_BASE_URL and the Calendar webhook env vars first.",
+            metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+        )
+
+    target, error = await _calendar_find_single_target(
+        ctx,
+        runner,
+        search_title=title,
+        local_date=local_date,
+        local_time=times[0] if times else None,
+        purpose="삭제",
+    )
+    if target is None:
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content=error or "삭제할 일정을 찾지 못했습니다.",
+            metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+        )
+
+    request = CalendarDeleteRequest(
+        search_title=target.title,
+        search_time_min=target.start_at,
+        search_time_max=target.end_at,
+        event_id=target.event_id,
+    )
+    return await _calendar_delete_request_outbound(ctx, runner, request, target)
+
+
+async def _calendar_natural_create_interceptor(ctx: CommandContext) -> OutboundMessage | None:
+    parsed = _parse_calendar_natural_create(ctx.raw)
+    if parsed is None:
+        return None
+
+    session = ctx.session or ctx.loop.sessions.get_or_create(ctx.key)
+    missing = _calendar_missing_required_fields(parsed)
+    if missing:
+        parsed["expected_field"] = missing[0]
+        return _calendar_prompt_response(
+            ctx,
+            session,
+            parsed,
+            _calendar_prompt_for_field(parsed["expected_field"]),
+        )
+
+    runner = _calendar_runner_for_ctx(ctx)
+    if runner is None:
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content="Calendar automation is not configured. Set N8N_BASE_URL and the Calendar webhook env vars first.",
+            metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+        )
+
+    request = CalendarCreateRequest(
+        title=str(parsed.get("title") or "").strip(),
+        start_at=str(parsed.get("start_at") or "").strip(),
+        end_at=str(parsed.get("end_at") or "").strip(),
+        location=str(parsed.get("location") or "").strip() or None,
+        description=str(parsed.get("description") or "").strip() or None,
+    )
+    return await _calendar_create_request_outbound(ctx, runner, request)
 
 
 async def cmd_mail(ctx: CommandContext) -> OutboundMessage:
@@ -1418,31 +2174,15 @@ async def cmd_calendar(ctx: CommandContext) -> OutboundMessage:
                 location=(parsed.get("location") or "").strip() or None,
                 description=(parsed.get("details") or "").strip() or None,
             )
-            conflict = await runner.client.find_conflicts(
-                start_at=request.start_at,
-                end_at=request.end_at,
-                channel=ctx.key.split(":", 1)[0] if ":" in ctx.key else "websocket",
-                session_id=ctx.key,
-                user_id="primary-user",
-            )
-            session = ctx.session or ctx.loop.sessions.get_or_create(ctx.key)
-            if getattr(conflict.details, "available", False):
-                result = await runner.request_create_approval(ctx.key, request)
-                content = _calendar_result_content(result)
-            elif getattr(conflict.details, "reason", None) == "overlap_detected":
-                return _calendar_conflict_review_response(ctx, session, request, conflict)
-            else:
-                _persist_calendar_result(ctx, session, conflict)
-                content = _calendar_result_content(conflict)
-        return OutboundMessage(
-            channel=ctx.msg.channel,
-            chat_id=ctx.msg.chat_id,
-            content=content,
-            metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
-        )
+            return await _calendar_create_request_outbound(ctx, runner, request)
 
     if subcommand == "approve":
-        result = await runner.approve_create(ctx.key)
+        if isinstance(session.metadata.get("calendar_update_approval"), dict):
+            result = await runner.approve_update(ctx.key)
+        elif isinstance(session.metadata.get("calendar_delete_approval"), dict):
+            result = await runner.approve_delete(ctx.key)
+        else:
+            result = await runner.approve_create(ctx.key)
         return OutboundMessage(
             channel=ctx.msg.channel,
             chat_id=ctx.msg.chat_id,
@@ -1451,7 +2191,12 @@ async def cmd_calendar(ctx: CommandContext) -> OutboundMessage:
         )
 
     if subcommand in {"deny", "cancel", "취소"}:
-        result = await runner.deny_create(ctx.key)
+        if isinstance(session.metadata.get("calendar_update_approval"), dict):
+            result = await runner.deny_update(ctx.key)
+        elif isinstance(session.metadata.get("calendar_delete_approval"), dict):
+            result = await runner.deny_delete(ctx.key)
+        else:
+            result = await runner.deny_create(ctx.key)
         return OutboundMessage(
             channel=ctx.msg.channel,
             chat_id=ctx.msg.chat_id,
@@ -1474,6 +2219,8 @@ def build_help_text() -> str:
         "/new — Stop current task and start a new conversation",
         "/stop — Stop the current task",
         "/restart — Restart the bot",
+        "/context clear — Clear this chat's stored conversation context",
+        "/clear — Shortcut for /context clear",
         "/model — Show or change the active model target",
         "/status — Show bot status",
         "/usage — Show or change the reply footer mode",
@@ -1496,7 +2243,11 @@ def register_builtin_commands(router: CommandRouter) -> None:
     router.priority("/stop", cmd_stop)
     router.priority("/restart", cmd_restart)
     router.priority("/status", cmd_status)
+    router.priority("/clear", cmd_context)
     router.exact("/new", cmd_new)
+    router.exact("/clear", cmd_context)
+    router.exact("/context", cmd_context)
+    router.prefix("/context ", cmd_context)
     router.exact("/model", cmd_model)
     router.prefix("/model ", cmd_model)
     router.exact("/status", cmd_status)
@@ -1506,8 +2257,12 @@ def register_builtin_commands(router: CommandRouter) -> None:
     router.prefix("/mail ", cmd_mail)
     router.exact("/calendar", cmd_calendar)
     router.prefix("/calendar ", cmd_calendar)
+    router.intercept(_calendar_natural_resolution_interceptor)
     router.intercept(_calendar_conflict_review_interceptor)
     router.intercept(_calendar_pending_input_interceptor)
+    router.intercept(_calendar_natural_update_interceptor)
+    router.intercept(_calendar_natural_delete_interceptor)
+    router.intercept(_calendar_natural_create_interceptor)
     router.exact("/history", cmd_history)
     router.prefix("/history ", cmd_history)
     router.exact("/usage", cmd_usage)

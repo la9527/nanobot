@@ -240,12 +240,19 @@ def _normalized_task_summary(
             if isinstance(action_next_step, str) and action_next_step.strip()
             else "Review the pending approval request."
         )
-    elif isinstance(action_status, str) and action_status.strip() in {"failed", "blocked", "rejected"}:
+    elif isinstance(action_status, str) and action_status.strip() in {"failed", "blocked"}:
         status = "blocked"
         next_step_hint = (
             action_next_step.strip()
             if isinstance(action_next_step, str) and action_next_step.strip()
             else "Review the latest failure and retry when ready."
+        )
+    elif isinstance(action_status, str) and action_status.strip() == "rejected":
+        status = "completed"
+        next_step_hint = (
+            action_next_step.strip()
+            if isinstance(action_next_step, str) and action_next_step.strip()
+            else "The request was cancelled; no follow-up is needed unless you start it again."
         )
     elif isinstance(action_status, str) and action_status.strip() == "completed":
         status = "completed"

@@ -3,12 +3,16 @@ from __future__ import annotations
 from nanobot.automation_results import (
     CalendarCreateEventDetails,
     CalendarCreateEventResult,
+    CalendarDeleteEventDetails,
+    CalendarDeleteEventResult,
     CalendarEventPreview,
     CalendarEventSummary,
     CalendarFindConflictsDetails,
     CalendarFindConflictsResult,
     CalendarListEventsDetails,
     CalendarListEventsResult,
+    CalendarUpdateEventDetails,
+    CalendarUpdateEventResult,
     DEFAULT_ACTION_FAILURE_CODE,
     DEFAULT_ACTION_RESULT_STATUS,
     ActionFailure,
@@ -238,3 +242,56 @@ def test_calendar_find_conflicts_result_serializes_requested_window() -> None:
     assert payload["details"]["requested_start_at"] == "2026-05-02T15:00:00+09:00"
     assert payload["details"]["reason"] == "structured_conflict_data_unavailable"
     assert payload["details"]["conflicting_events"][0]["title"] == "치과"
+
+
+def test_calendar_update_event_result_serializes_target_and_preview() -> None:
+    result = CalendarUpdateEventResult(
+        action_id="calendar-act-4",
+        status="waiting_approval",
+        title="Calendar update approval required",
+        summary="Approval required before updating '치과'.",
+        details=CalendarUpdateEventDetails(
+            event_id="event-1",
+            target=CalendarEventSummary(
+                event_id="event-1",
+                title="치과",
+                start_at="2026-05-02T15:00:00+09:00",
+                end_at="2026-05-02T16:00:00+09:00",
+            ),
+            preview=CalendarEventPreview(
+                title="치과",
+                start_at="2026-05-02T16:00:00+09:00",
+                end_at="2026-05-02T17:00:00+09:00",
+            ),
+        ),
+    )
+
+    payload = result.model_dump()
+
+    assert payload["action"] == "update_event"
+    assert payload["details"]["target"]["title"] == "치과"
+    assert payload["details"]["preview"]["start_at"] == "2026-05-02T16:00:00+09:00"
+
+
+def test_calendar_delete_event_result_serializes_target() -> None:
+    result = CalendarDeleteEventResult(
+        action_id="calendar-act-5",
+        status="waiting_approval",
+        title="Calendar delete approval required",
+        summary="Approval required before deleting '치과'.",
+        details=CalendarDeleteEventDetails(
+            event_id="event-1",
+            target=CalendarEventSummary(
+                event_id="event-1",
+                title="치과",
+                start_at="2026-05-02T15:00:00+09:00",
+                end_at="2026-05-02T16:00:00+09:00",
+            ),
+        ),
+    )
+
+    payload = result.model_dump()
+
+    assert payload["action"] == "delete_event"
+    assert payload["details"]["event_id"] == "event-1"
+    assert payload["details"]["target"]["title"] == "치과"

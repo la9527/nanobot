@@ -838,6 +838,10 @@ class AgentLoop:
         ctx = CommandContext(msg=msg, session=None, key=key, raw=raw, loop=self)
         result = await dispatch_fn(ctx)
         if result:
+            metadata = dict(result.metadata or {})
+            metadata.pop("_session_log_mode", None)
+            if metadata != (result.metadata or {}):
+                result = dataclasses.replace(result, metadata=metadata)
             await self.bus.publish_outbound(result)
         else:
             logger.warning("Command '{}' matched but dispatch returned None", raw)
@@ -848,8 +852,10 @@ class AgentLoop:
         Returns the total number of cancelled tasks + subagents.
         """
         tasks = self._active_tasks.pop(key, [])
-        cancelled = sum(1 for t in tasks if not t.done() and t.cancel())
-        for t in tasks:
+        current = asyncio.current_task()
+        cancellable = [t for t in tasks if t is not current]
+        cancelled = sum(1 for t in cancellable if not t.done() and t.cancel())
+        for t in cancellable:
             try:
                 await t
             except (asyncio.CancelledError, Exception):
@@ -1399,6 +1405,12 @@ class AgentLoop:
         raw = msg.content.strip()
         ctx = CommandContext(msg=msg, session=session, key=key, raw=raw, loop=self)
         if result := await self.commands.dispatch(ctx):
+            metadata = dict(result.metadata or {})
+            session_log_mode = metadata.pop("_session_log_mode", None)
+            if metadata != (result.metadata or {}):
+                result = dataclasses.replace(result, metadata=metadata)
+            if session_log_mode == "skip":
+                return result
             media_paths = [p for p in (msg.media or []) if isinstance(p, str) and p]
             user_extra: dict[str, Any] = {"media": list(media_paths)} if media_paths else {}
             session.add_message("user", msg.content if isinstance(msg.content, str) else "", **user_extra)

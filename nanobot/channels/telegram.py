@@ -257,6 +257,8 @@ class TelegramChannel(BaseChannel):
     BOT_COMMANDS = [
         BotCommand("start", "Start the bot"),
         BotCommand("new", "Start a new conversation"),
+        BotCommand("clear", "Clear this chat's stored context"),
+        BotCommand("context", "Show or clear stored chat context"),
         BotCommand("stop", "Stop the current task"),
         BotCommand("restart", "Restart the bot"),
         BotCommand("model", "Show or change the active model target"),

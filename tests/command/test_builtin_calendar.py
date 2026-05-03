@@ -1,21 +1,33 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
 from nanobot.automation_results import (
     CalendarCreateEventDetails,
     CalendarCreateEventResult,
+    CalendarDeleteEventDetails,
+    CalendarDeleteEventResult,
     CalendarEventPreview,
     CalendarEventSummary,
     CalendarFindConflictsDetails,
     CalendarFindConflictsResult,
     CalendarListEventsDetails,
     CalendarListEventsResult,
+    CalendarUpdateEventDetails,
+    CalendarUpdateEventResult,
 )
 from nanobot.bus.events import InboundMessage
-from nanobot.command.builtin import build_help_text, cmd_calendar, register_builtin_commands
+from nanobot.command.builtin import (
+    _extract_calendar_natural_date,
+    _parse_calendar_natural_create,
+    build_help_text,
+    cmd_calendar,
+    register_builtin_commands,
+)
 from nanobot.command.router import CommandContext, CommandRouter
 from nanobot.session.manager import SessionManager
 
@@ -25,8 +37,7 @@ class _Runner:
         self.calls: list[tuple[str, tuple, dict]] = []
         self.client = self
 
-    async def list_events(self, session_key: str):
-        self.calls.append(("today", (session_key,), {}))
+    async def _list_events_result(self, **kwargs):
         return CalendarListEventsResult(
             action_id="calendar-list-1",
             status="completed",
@@ -42,10 +53,23 @@ class _Runner:
                         title="프로젝트 리뷰",
                         start_at="2026-05-01T10:00:00+09:00",
                         end_at="2026-05-01T11:00:00+09:00",
-                    )
+                    ),
+                    CalendarEventSummary(
+                        event_id="event-2",
+                        title="치과",
+                        start_at="2026-05-05T15:00:00+09:00",
+                        end_at="2026-05-05T16:00:00+09:00",
+                    ),
                 ],
             ),
         )
+
+    async def list_events(self, *args, **kwargs):
+        if args:
+            self.calls.append(("today", args, kwargs))
+        else:
+            self.calls.append(("list", (), kwargs))
+        return await self._list_events_result(**kwargs)
 
     async def find_conflicts(self, session_key: str | None = None, **kwargs):
         call_args = (session_key,) if session_key is not None else ()
@@ -113,6 +137,99 @@ class _Runner:
                     start_at="2026-05-02T15:00:00+09:00",
                     end_at="2026-05-02T16:00:00+09:00",
                 ),
+            ),
+        )
+
+    async def request_update_approval(self, session_key: str, request, target=None):
+        self.calls.append(("update", (session_key, request, target), {}))
+        return CalendarUpdateEventResult(
+            action_id="calendar-update-approval-1",
+            status="waiting_approval",
+            title="Calendar update approval required",
+            summary=f"Approval required before updating '{request.search_title}'.",
+            details=CalendarUpdateEventDetails(
+                event_id=request.event_id,
+                target=target,
+                preview=CalendarEventPreview(
+                    title=request.new_title or request.search_title,
+                    start_at=request.start_at,
+                    end_at=request.end_at,
+                ),
+            ),
+        )
+
+    async def request_delete_approval(self, session_key: str, request, target):
+        self.calls.append(("delete", (session_key, request, target), {}))
+        return CalendarDeleteEventResult(
+            action_id="calendar-delete-approval-1",
+            status="waiting_approval",
+            title="Calendar delete approval required",
+            summary=f"Approval required before deleting '{target.title}'.",
+            details=CalendarDeleteEventDetails(event_id=request.event_id, target=target),
+        )
+
+    async def approve_update(self, session_key: str):
+        self.calls.append(("approve_update", (session_key,), {}))
+        return CalendarUpdateEventResult(
+            action_id="calendar-update-1",
+            status="completed",
+            title="Calendar event updated",
+            summary="치과 일정을 변경했습니다.",
+            details=CalendarUpdateEventDetails(
+                event_id="event-2",
+                target=CalendarEventSummary(
+                    event_id="event-2",
+                    title="치과",
+                    start_at="2026-05-05T15:00:00+09:00",
+                    end_at="2026-05-05T16:00:00+09:00",
+                ),
+                preview=CalendarEventPreview(
+                    title="치과",
+                    start_at="2026-05-05T16:00:00+09:00",
+                    end_at="2026-05-05T17:00:00+09:00",
+                ),
+            ),
+        )
+
+    async def approve_delete(self, session_key: str):
+        self.calls.append(("approve_delete", (session_key,), {}))
+        return CalendarDeleteEventResult(
+            action_id="calendar-delete-1",
+            status="completed",
+            title="Calendar event deleted",
+            summary="치과 일정을 삭제했습니다.",
+            details=CalendarDeleteEventDetails(
+                event_id="event-2",
+                target=CalendarEventSummary(
+                    event_id="event-2",
+                    title="치과",
+                    start_at="2026-05-05T15:00:00+09:00",
+                    end_at="2026-05-05T16:00:00+09:00",
+                ),
+            ),
+        )
+
+    async def deny_update(self, session_key: str):
+        self.calls.append(("deny_update", (session_key,), {}))
+        return CalendarUpdateEventResult(
+            action_id="calendar-update-denied-1",
+            status="rejected",
+            title="Calendar update cancelled",
+            summary="The pending calendar update request was cancelled.",
+            details=CalendarUpdateEventDetails(
+                preview=CalendarEventPreview(title="치과", start_at="", end_at=""),
+            ),
+        )
+
+    async def deny_delete(self, session_key: str):
+        self.calls.append(("deny_delete", (session_key,), {}))
+        return CalendarDeleteEventResult(
+            action_id="calendar-delete-denied-1",
+            status="rejected",
+            title="Calendar delete cancelled",
+            summary="The pending calendar delete request was cancelled.",
+            details=CalendarDeleteEventDetails(
+                target=CalendarEventSummary(title="치과", start_at="2026-05-05T15:00:00+09:00", end_at="2026-05-05T16:00:00+09:00"),
             ),
         )
 
@@ -274,6 +391,140 @@ async def test_calendar_pending_input_interceptor_collects_missing_values(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_calendar_natural_create_requests_approval(tmp_path: Path) -> None:
+    router = CommandRouter()
+    register_builtin_commands(router)
+    session_key = "cli:direct"
+    ctx = _make_router_ctx(
+        tmp_path,
+        "2026-05-05 오후 3시에 치과 일정 1시간 잡아줘",
+        session_key=session_key,
+    )
+
+    out = await router.dispatch(ctx)
+
+    assert out is not None
+    assert "Calendar create approval required" in out.content
+    assert ctx.loop.calendar_automation_runner.calls[0][0] == "check"
+    call = next(call for call in ctx.loop.calendar_automation_runner.calls if call[0] == "create")
+    request = call[1][1]
+    assert request.title == "치과"
+    assert request.start_at == "2026-05-05T15:00:00+09:00"
+    assert request.end_at == "2026-05-05T16:00:00+09:00"
+    assert request.description == "2026-05-05 오후 3시에 치과 일정 1시간 잡아줘"
+
+
+@pytest.mark.asyncio
+async def test_calendar_natural_create_prompts_for_missing_end_time(tmp_path: Path) -> None:
+    router = CommandRouter()
+    register_builtin_commands(router)
+    session_key = "cli:direct"
+    ctx = _make_router_ctx(
+        tmp_path,
+        "2026-05-05 오후 3시에 치과 일정 잡아줘",
+        session_key=session_key,
+    )
+
+    out = await router.dispatch(ctx)
+
+    assert out is not None
+    assert "Calendar create needs an end time" in out.content
+    pending = ctx.session.metadata["calendar_create_input"]
+    assert pending["title"] == "치과"
+    assert pending["start_at"] == "2026-05-05T15:00:00+09:00"
+    assert pending["expected_field"] == "end_at"
+
+
+def test_calendar_natural_date_accepts_month_day_without_year() -> None:
+    now = datetime(2026, 5, 3, 9, 0, tzinfo=ZoneInfo("Asia/Seoul"))
+
+    assert _extract_calendar_natural_date("5월 2일 오후 3시", now, roll_forward=False).isoformat() == "2026-05-02"
+    assert _extract_calendar_natural_date("5월 5일 오후 3시", now).isoformat() == "2026-05-05"
+
+
+def test_calendar_natural_create_accepts_month_day_without_year() -> None:
+    parsed = _parse_calendar_natural_create(
+        "5월 5일 오후 3시에 치과 일정 1시간 잡아줘",
+        now=datetime(2026, 5, 3, 9, 0, tzinfo=ZoneInfo("Asia/Seoul")),
+    )
+
+    assert parsed is not None
+    assert parsed["title"] == "치과"
+    assert parsed["start_at"] == "2026-05-05T15:00:00+09:00"
+    assert parsed["end_at"] == "2026-05-05T16:00:00+09:00"
+
+
+@pytest.mark.asyncio
+async def test_calendar_natural_delete_requests_approval(tmp_path: Path) -> None:
+    router = CommandRouter()
+    register_builtin_commands(router)
+    ctx = _make_router_ctx(tmp_path, "2026-05-05 오후 3시에 치과 일정 삭제해줘")
+
+    out = await router.dispatch(ctx)
+
+    assert out is not None
+    assert "Calendar delete approval required" in out.content
+    call = next(call for call in ctx.loop.calendar_automation_runner.calls if call[0] == "delete")
+    request = call[1][1]
+    target = call[1][2]
+    assert request.search_title == "치과"
+    assert request.search_time_min == "2026-05-05T15:00:00+09:00"
+    assert request.search_time_max == "2026-05-05T16:00:00+09:00"
+    assert request.event_id == "event-2"
+    assert target.title == "치과"
+
+
+@pytest.mark.asyncio
+async def test_calendar_natural_delete_accepts_month_day_without_year(tmp_path: Path) -> None:
+    router = CommandRouter()
+    register_builtin_commands(router)
+    ctx = _make_router_ctx(tmp_path, "5월 5일 오후 3시에 치과 일정 삭제해줘")
+
+    out = await router.dispatch(ctx)
+
+    assert out is not None
+    assert "Calendar delete approval required" in out.content
+    call = next(call for call in ctx.loop.calendar_automation_runner.calls if call[0] == "delete")
+    request = call[1][1]
+    assert request.search_time_min == "2026-05-05T15:00:00+09:00"
+    assert request.search_time_max == "2026-05-05T16:00:00+09:00"
+
+
+@pytest.mark.asyncio
+async def test_calendar_natural_update_requests_approval(tmp_path: Path) -> None:
+    router = CommandRouter()
+    register_builtin_commands(router)
+    ctx = _make_router_ctx(tmp_path, "2026-05-05 오후 3시에 치과 일정을 오후 4시로 변경해줘")
+
+    out = await router.dispatch(ctx)
+
+    assert out is not None
+    assert "Calendar update approval required" in out.content
+    call = next(call for call in ctx.loop.calendar_automation_runner.calls if call[0] == "update")
+    request = call[1][1]
+    target = call[1][2]
+    assert request.search_title == "치과"
+    assert request.start_at == "2026-05-05T16:00:00+09:00"
+    assert request.end_at == "2026-05-05T17:00:00+09:00"
+    assert request.search_time_min == "2026-05-05T15:00:00+09:00"
+    assert request.search_time_max == "2026-05-05T16:00:00+09:00"
+    assert request.event_id == "event-2"
+    assert target.title == "치과"
+
+
+@pytest.mark.asyncio
+async def test_calendar_natural_delete_prompts_for_date(tmp_path: Path) -> None:
+    router = CommandRouter()
+    register_builtin_commands(router)
+    ctx = _make_router_ctx(tmp_path, "치과 일정 삭제해줘")
+
+    out = await router.dispatch(ctx)
+
+    assert out is not None
+    assert "Calendar delete needs a title and date" in out.content
+
+
+@pytest.mark.asyncio
 async def test_calendar_conflict_review_interceptor_can_force_create_or_reschedule(tmp_path: Path) -> None:
     router = CommandRouter()
     register_builtin_commands(router)
@@ -361,6 +612,56 @@ async def test_cmd_calendar_cancel_uses_deny_runner(tmp_path: Path) -> None:
     assert "Calendar create cancelled" in out.content
     assert "치과" in out.content
     assert ctx.loop.calendar_automation_runner.calls[0][0] == "deny"
+
+
+@pytest.mark.asyncio
+async def test_cmd_calendar_approve_prefers_pending_update(tmp_path: Path) -> None:
+    ctx = _make_ctx(tmp_path, "/calendar approve")
+    ctx.session.metadata["calendar_update_approval"] = {"request": {"search_title": "치과"}}
+
+    out = await cmd_calendar(ctx)
+
+    assert "Calendar event updated" in out.content
+    assert ctx.loop.calendar_automation_runner.calls[0][0] == "approve_update"
+
+
+@pytest.mark.asyncio
+async def test_calendar_natural_approve_prefers_pending_update(tmp_path: Path) -> None:
+    router = CommandRouter()
+    register_builtin_commands(router)
+    ctx = _make_router_ctx(tmp_path, "승인해줘")
+    ctx.session.metadata["calendar_update_approval"] = {"request": {"search_title": "치과"}}
+
+    out = await router.dispatch(ctx)
+
+    assert out is not None
+    assert "Calendar event updated" in out.content
+    assert ctx.loop.calendar_automation_runner.calls[0][0] == "approve_update"
+
+
+@pytest.mark.asyncio
+async def test_cmd_calendar_cancel_prefers_pending_delete(tmp_path: Path) -> None:
+    ctx = _make_ctx(tmp_path, "/calendar cancel")
+    ctx.session.metadata["calendar_delete_approval"] = {"request": {"search_title": "치과"}}
+
+    out = await cmd_calendar(ctx)
+
+    assert "Calendar delete cancelled" in out.content
+    assert ctx.loop.calendar_automation_runner.calls[0][0] == "deny_delete"
+
+
+@pytest.mark.asyncio
+async def test_calendar_natural_cancel_prefers_pending_delete(tmp_path: Path) -> None:
+    router = CommandRouter()
+    register_builtin_commands(router)
+    ctx = _make_router_ctx(tmp_path, "취소해줘")
+    ctx.session.metadata["calendar_delete_approval"] = {"request": {"search_title": "치과"}}
+
+    out = await router.dispatch(ctx)
+
+    assert out is not None
+    assert "Calendar delete cancelled" in out.content
+    assert ctx.loop.calendar_automation_runner.calls[0][0] == "deny_delete"
 
 
 @pytest.mark.asyncio

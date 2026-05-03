@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 from zoneinfo import ZoneInfo
 
 
@@ -41,6 +42,10 @@ def build_proactive_context(
         if not isinstance(metadata, dict):
             continue
 
+        action_result = metadata.get("action_result")
+        if isinstance(action_result, dict) and _is_closed_user_rejection(action_result):
+            continue
+
         task = metadata.get("task_summary")
         if isinstance(task, dict):
             title = _clean_text(task.get("title")) or "Untitled task"
@@ -51,7 +56,7 @@ def build_proactive_context(
             status = _clean_text(task.get("status"))
             if status == "waiting-approval":
                 waiting.append(line)
-            elif status == "blocked":
+            elif status == "blocked" and _is_actionable_blocked_task(task):
                 blocked.append(line)
 
         action_result = metadata.get("action_result")
@@ -92,6 +97,23 @@ def build_proactive_context(
         return ""
 
     return "Current proactive context:\n" + "\n".join(lines) + "\n\n"
+
+
+def should_suppress_repeated_proactive_delivery(
+    previous: dict[str, Any] | None,
+    *,
+    response: str,
+    category: str,
+) -> bool:
+    if not isinstance(previous, dict):
+        return False
+    previous_status = _clean_text(previous.get("status"))
+    previous_reason = _clean_text(previous.get("suppressed_reason"))
+    if previous_status != "delivered" and not (previous_status == "suppressed" and previous_reason == "duplicate"):
+        return False
+    previous_summary = _clean_text(previous.get("summary"))
+    previous_category = _clean_text(previous.get("category"))
+    return previous_summary == response.strip() and previous_category == category
 
 
 def classify_proactive_task(tasks: str) -> str:
@@ -249,3 +271,26 @@ def _clean_text(value: object) -> str | None:
         return None
     cleaned = value.strip()
     return cleaned or None
+
+
+def _is_actionable_blocked_task(task: dict[str, object]) -> bool:
+    title = (_clean_text(task.get("title")) or "").lower()
+    next_step = (_clean_text(task.get("next_step_hint")) or "").lower()
+    origin = (_clean_text(task.get("origin_channel")) or "").lower()
+
+    if "reopen the interrupted session" in next_step:
+        return False
+    if title.endswith("session follow-up") and origin in {"api", "websocket", "telegram"}:
+        return False
+    if "후속 작업" in title and "대기" in title:
+        return False
+    return True
+
+
+def _is_closed_user_rejection(action_result: dict[str, object]) -> bool:
+    if _clean_text(action_result.get("status")) != "rejected":
+        return False
+    error = action_result.get("error")
+    if not isinstance(error, dict):
+        return True
+    return _clean_text(error.get("code")) == "approval_rejected"

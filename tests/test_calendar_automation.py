@@ -6,9 +6,12 @@ import pytest
 from nanobot.automation.calendar import (
     CalendarAutomationSessionRunner,
     CalendarCreateRequest,
+    CalendarDeleteRequest,
+    CalendarUpdateRequest,
     N8NCalendarAutomationClient,
     N8NCalendarAutomationConfig,
 )
+from nanobot.automation_results import CalendarEventSummary
 from nanobot.session.manager import SessionManager
 
 
@@ -208,6 +211,171 @@ async def test_create_event_normalizes_success_response(monkeypatch) -> None:
 
     assert result.status == "completed"
     assert result.details.event_id == "event-123"
+
+
+@pytest.mark.asyncio
+async def test_update_event_normalizes_success_response(monkeypatch) -> None:
+    async def _handler(url, json, headers):
+        assert url == "http://127.0.0.1:5678/webhook/assistant-calendar-update"
+        assert json["search_title"] == "치과"
+        assert json["event_id"] == "event-123"
+        return httpx.Response(
+            200,
+            json={
+                "reply": "치과 일정을 변경했습니다.",
+                "action": "calendar-update",
+                "event_id": "event-123",
+            },
+        )
+
+    monkeypatch.setattr(
+        "nanobot.automation.calendar.httpx.AsyncClient",
+        _mock_client_factory(_handler),
+    )
+
+    client = N8NCalendarAutomationClient(
+        N8NCalendarAutomationConfig(base_url="http://127.0.0.1:5678")
+    )
+    target = CalendarEventSummary(
+        event_id="event-123",
+        title="치과",
+        start_at="2026-05-02T15:00:00+09:00",
+        end_at="2026-05-02T16:00:00+09:00",
+    )
+    result = await client.update_event(
+        CalendarUpdateRequest(
+            search_title="치과",
+            new_title="치과",
+            start_at="2026-05-02T16:00:00+09:00",
+            end_at="2026-05-02T17:00:00+09:00",
+            search_time_min="2026-05-02T15:00:00+09:00",
+            search_time_max="2026-05-02T16:00:00+09:00",
+            event_id="event-123",
+        ),
+        target,
+    )
+
+    assert result.status == "completed"
+    assert result.details.event_id == "event-123"
+    assert result.details.preview.start_at == "2026-05-02T16:00:00+09:00"
+
+
+@pytest.mark.asyncio
+async def test_delete_event_normalizes_success_response(monkeypatch) -> None:
+    async def _handler(url, json, headers):
+        assert url == "http://127.0.0.1:5678/webhook/assistant-calendar-delete"
+        assert json["search_title"] == "치과"
+        assert json["event_id"] == "event-123"
+        return httpx.Response(
+            200,
+            json={
+                "reply": "치과 일정을 삭제했습니다.",
+                "action": "calendar-delete",
+                "event_id": "event-123",
+            },
+        )
+
+    monkeypatch.setattr(
+        "nanobot.automation.calendar.httpx.AsyncClient",
+        _mock_client_factory(_handler),
+    )
+
+    client = N8NCalendarAutomationClient(
+        N8NCalendarAutomationConfig(base_url="http://127.0.0.1:5678")
+    )
+    target = CalendarEventSummary(
+        event_id="event-123",
+        title="치과",
+        start_at="2026-05-02T15:00:00+09:00",
+        end_at="2026-05-02T16:00:00+09:00",
+    )
+    result = await client.delete_event(
+        CalendarDeleteRequest(
+            search_title="치과",
+            search_time_min="2026-05-02T15:00:00+09:00",
+            search_time_max="2026-05-02T16:00:00+09:00",
+            event_id="event-123",
+        ),
+        target,
+    )
+
+    assert result.status == "completed"
+    assert result.details.event_id == "event-123"
+    assert result.details.target.title == "치과"
+
+
+@pytest.mark.asyncio
+async def test_update_event_maps_error_payload_to_failure(monkeypatch) -> None:
+    async def _handler(url, json, headers):
+        return httpx.Response(
+            200,
+            json={
+                "reply": "변경할 일정 '치과' 을 찾지 못했습니다.",
+                "action": "calendar-update-not-found",
+            },
+        )
+
+    monkeypatch.setattr(
+        "nanobot.automation.calendar.httpx.AsyncClient",
+        _mock_client_factory(_handler),
+    )
+
+    client = N8NCalendarAutomationClient(
+        N8NCalendarAutomationConfig(base_url="http://127.0.0.1:5678")
+    )
+    result = await client.update_event(
+        CalendarUpdateRequest(
+            search_title="치과",
+            start_at="2026-05-02T16:00:00+09:00",
+            end_at="2026-05-02T17:00:00+09:00",
+            search_time_min="2026-05-02T15:00:00+09:00",
+            search_time_max="2026-05-02T16:00:00+09:00",
+        )
+    )
+
+    assert result.status == "blocked"
+    assert result.error is not None
+    assert result.error.code == "not_found"
+
+
+@pytest.mark.asyncio
+async def test_delete_event_maps_error_payload_to_failure(monkeypatch) -> None:
+    async def _handler(url, json, headers):
+        return httpx.Response(
+            200,
+            json={
+                "reply": "Google Calendar 연결이 만료되었습니다.",
+                "action": "calendar-delete-error",
+                "needs_reconnect": True,
+            },
+        )
+
+    monkeypatch.setattr(
+        "nanobot.automation.calendar.httpx.AsyncClient",
+        _mock_client_factory(_handler),
+    )
+
+    client = N8NCalendarAutomationClient(
+        N8NCalendarAutomationConfig(base_url="http://127.0.0.1:5678")
+    )
+    target = CalendarEventSummary(
+        event_id="event-123",
+        title="치과",
+        start_at="2026-05-02T15:00:00+09:00",
+        end_at="2026-05-02T16:00:00+09:00",
+    )
+    result = await client.delete_event(
+        CalendarDeleteRequest(
+            search_title="치과",
+            search_time_min="2026-05-02T15:00:00+09:00",
+            search_time_max="2026-05-02T16:00:00+09:00",
+        ),
+        target,
+    )
+
+    assert result.status == "blocked"
+    assert result.error is not None
+    assert result.error.code == "authentication_needed"
 
 
 @pytest.mark.asyncio

@@ -6,6 +6,7 @@ from nanobot.heartbeat.proactive import (
     HeartbeatProactivePolicy,
     build_proactive_context,
     decide_heartbeat_target,
+    should_suppress_repeated_proactive_delivery,
 )
 
 
@@ -31,9 +32,9 @@ def test_build_proactive_context_includes_digest_sources() -> None:
             "key": "websocket:beta",
             "metadata": {
                 "task_summary": {
-                    "title": "Resume calendar sync",
+                    "title": "Calendar credentials need attention",
                     "status": "blocked",
-                    "next_step_hint": "Reopen the interrupted session and continue the task.",
+                    "next_step_hint": "Reconnect Google Calendar credentials in n8n.",
                 },
                 "action_result": {
                     "domain": "calendar",
@@ -52,6 +53,128 @@ def test_build_proactive_context_includes_digest_sources() -> None:
     assert "Blocked tasks:" in context
     assert "Recent calendar summary:" in context
     assert "Recent mail summary:" in context
+
+
+def test_build_proactive_context_ignores_closed_approval_rejections() -> None:
+    sessions = [
+        {
+            "key": "telegram:alpha",
+            "metadata": {
+                "task_summary": {
+                    "title": "Calendar create cancelled",
+                    "status": "blocked",
+                    "next_step_hint": "Review the proposed event and request approval again when ready.",
+                },
+                "action_result": {
+                    "domain": "calendar",
+                    "action": "create_event",
+                    "status": "rejected",
+                    "title": "Calendar create cancelled",
+                    "summary": "The pending calendar create request was cancelled.",
+                    "error": {"code": "approval_rejected"},
+                },
+            },
+        }
+    ]
+
+    context = build_proactive_context(sessions, max_digest_items=3)
+
+    assert context == ""
+
+
+def test_build_proactive_context_ignores_generic_interrupted_session_followups() -> None:
+    sessions = [
+        {
+            "key": "api:primary-user",
+            "metadata": {
+                "task_summary": {
+                    "title": "API session follow-up",
+                    "status": "blocked",
+                    "origin_channel": "api",
+                    "next_step_hint": "Reopen the interrupted session and continue the task.",
+                }
+            },
+        },
+        {
+            "key": "websocket:browser",
+            "metadata": {
+                "task_summary": {
+                    "title": "API 세션 후속 작업 2건이 대기",
+                    "status": "blocked",
+                    "origin_channel": "websocket",
+                    "next_step_hint": "Reopen the interrupted session and continue the task.",
+                }
+            },
+        },
+    ]
+
+    context = build_proactive_context(sessions, max_digest_items=3)
+
+    assert context == ""
+
+
+def test_build_proactive_context_keeps_actionable_blocked_tasks() -> None:
+    sessions = [
+        {
+            "key": "telegram:alpha",
+            "metadata": {
+                "task_summary": {
+                    "title": "Calendar credentials need attention",
+                    "status": "blocked",
+                    "origin_channel": "telegram",
+                    "next_step_hint": "Reconnect Google Calendar credentials in n8n.",
+                }
+            },
+        }
+    ]
+
+    context = build_proactive_context(sessions, max_digest_items=3)
+
+    assert "Blocked tasks:" in context
+    assert "Calendar credentials need attention" in context
+
+
+def test_should_suppress_repeated_proactive_delivery_for_same_summary() -> None:
+    previous = {
+        "status": "delivered",
+        "category": "briefing",
+        "summary": "가장 시급한 작업은 없습니다.",
+    }
+
+    assert should_suppress_repeated_proactive_delivery(
+        previous,
+        response="가장 시급한 작업은 없습니다.",
+        category="briefing",
+    )
+
+
+def test_should_keep_new_proactive_delivery_when_summary_changes() -> None:
+    previous = {
+        "status": "delivered",
+        "category": "briefing",
+        "summary": "가장 시급한 작업은 없습니다.",
+    }
+
+    assert not should_suppress_repeated_proactive_delivery(
+        previous,
+        response="승인 대기 중인 캘린더 수정 요청이 있습니다.",
+        category="briefing",
+    )
+
+
+def test_should_continue_suppressing_after_duplicate_suppression() -> None:
+    previous = {
+        "status": "suppressed",
+        "suppressed_reason": "duplicate",
+        "category": "briefing",
+        "summary": "가장 시급한 작업은 없습니다.",
+    }
+
+    assert should_suppress_repeated_proactive_delivery(
+        previous,
+        response="가장 시급한 작업은 없습니다.",
+        category="briefing",
+    )
 
 
 def test_decide_heartbeat_target_prefers_recent_external_channel_outside_quiet_hours() -> None:
