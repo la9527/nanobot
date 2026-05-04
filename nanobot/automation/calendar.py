@@ -139,12 +139,12 @@ class N8NCalendarAutomationClient:
         return CalendarListEventsResult(
             action_id=action_id,
             status="completed",
-            title="Calendar summary ready" if has_events else "No events found",
+            title=_t("calendar.result.list.ready_title", locale=self.config.locale) if has_events else _t("calendar.result.list.empty_title", locale=self.config.locale),
             summary=summary,
-            next_step="Review the schedule before planning a new event." if has_events else None,
+            next_step=_t("calendar.result.list.review_next_step", locale=self.config.locale) if has_events else None,
             visibility=ActionVisibility(
                 surfaces=["thread", "sidebar"],
-                badge="Calendar",
+                badge=_t("calendar.badge.calendar", locale=self.config.locale),
                 inline_status=summary,
                 linked_summary=summary,
             ),
@@ -182,10 +182,10 @@ class N8NCalendarAutomationClient:
             return CalendarFindConflictsResult(
                 action_id=self._action_id("calendar-conflicts"),
                 status="blocked",
-                title="Conflict check unavailable",
+                title=_t("calendar.result.conflict.unavailable_title", locale=self.config.locale),
                 summary=list_result.summary,
-                next_step="Review the calendar connection or retry the conflict check.",
-                visibility=ActionVisibility(surfaces=["thread", "sidebar"], badge="Calendar blocked"),
+                next_step=_t("calendar.result.conflict.unavailable_next_step", locale=self.config.locale),
+                visibility=ActionVisibility(surfaces=["thread", "sidebar"], badge=_t("calendar.badge.calendar_blocked", locale=self.config.locale)),
                 details=CalendarFindConflictsDetails(
                     requested_start_at=start_at,
                     requested_end_at=end_at,
@@ -201,10 +201,10 @@ class N8NCalendarAutomationClient:
             return CalendarFindConflictsResult(
                 action_id=self._action_id("calendar-conflicts"),
                 status="blocked",
-                title="Conflict check needs structured events",
-                summary="The current calendar summary response does not include structured event times yet.",
-                next_step="Update the assistant-automation workflow so it returns an events array, then retry the conflict check.",
-                visibility=ActionVisibility(surfaces=["thread", "sidebar"], badge="Conflict blocked"),
+                title=_t("calendar.result.conflict.structured_title", locale=self.config.locale),
+                summary=_t("calendar.result.conflict.structured_summary", locale=self.config.locale),
+                next_step=_t("calendar.result.conflict.structured_next_step", locale=self.config.locale),
+                visibility=ActionVisibility(surfaces=["thread", "sidebar"], badge=_t("calendar.badge.conflict_blocked", locale=self.config.locale)),
                 details=CalendarFindConflictsDetails(
                     requested_start_at=start_at,
                     requested_end_at=end_at,
@@ -216,7 +216,7 @@ class N8NCalendarAutomationClient:
                 ),
                 error=ActionFailure(
                     code="executor_unavailable",
-                    message="Structured event times are missing from the calendar summary webhook response.",
+                    message=_t("calendar.conflict.structured_missing", locale=self.config.locale),
                     retryable=False,
                 ),
             )
@@ -230,10 +230,10 @@ class N8NCalendarAutomationClient:
             return CalendarFindConflictsResult(
                 action_id=self._action_id("calendar-conflicts"),
                 status="completed",
-                title="No conflicts found",
-                summary=f"No overlapping events were found in the {window_label} calendar window.",
-                next_step="Request calendar create approval when you are ready.",
-                visibility=ActionVisibility(surfaces=["thread", "sidebar"], badge="Slot available"),
+                title=_t("calendar.result.conflict.none_title", locale=self.config.locale),
+                summary=_t("calendar.result.conflict.none_summary", locale=self.config.locale, window_label=window_label),
+                next_step=_t("calendar.result.conflict.none_next_step", locale=self.config.locale),
+                visibility=ActionVisibility(surfaces=["thread", "sidebar"], badge=_t("calendar.slot.available", locale=self.config.locale)),
                 details=CalendarFindConflictsDetails(
                     requested_start_at=start_at,
                     requested_end_at=end_at,
@@ -250,10 +250,10 @@ class N8NCalendarAutomationClient:
         return CalendarFindConflictsResult(
             action_id=self._action_id("calendar-conflicts"),
             status="blocked",
-            title="Conflicts found",
-            summary=f"The requested slot overlaps with {conflict_titles}{extra}.",
-            next_step="Choose a different time or continue only after reviewing the conflicting events.",
-            visibility=ActionVisibility(surfaces=["thread", "sidebar"], badge="Conflict found"),
+            title=_t("calendar.result.conflict.found_title", locale=self.config.locale),
+            summary=_t("calendar.result.conflict.found_summary", locale=self.config.locale, conflict_titles=conflict_titles, extra=extra),
+            next_step=_t("calendar.result.conflict.found_next_step", locale=self.config.locale),
+            visibility=ActionVisibility(surfaces=["thread", "sidebar"], badge=_t("calendar.badge.conflict_found", locale=self.config.locale)),
             details=CalendarFindConflictsDetails(
                 requested_start_at=start_at,
                 requested_end_at=end_at,
@@ -265,7 +265,7 @@ class N8NCalendarAutomationClient:
             ),
             error=ActionFailure(
                 code="invalid_input",
-                message="The requested slot overlaps with existing calendar events.",
+                message=_t("calendar.error.conflict.overlap", locale=self.config.locale),
                 retryable=False,
             ),
         )
@@ -298,9 +298,9 @@ class N8NCalendarAutomationClient:
             return CalendarCreateEventResult(
                 action_id=action_id,
                 status="blocked" if payload_failure.code in {"authentication_needed", "not_found"} else "failed",
-                title="Calendar create failed",
+                title=_t("calendar.result.create.failed_title", locale=self.config.locale),
                 summary=payload_failure.message,
-                visibility=ActionVisibility(surfaces=["thread"], badge="Calendar failed"),
+                visibility=ActionVisibility(surfaces=["thread"], badge=_t("calendar.badge.calendar_failed", locale=self.config.locale)),
                 details=CalendarCreateEventDetails(preview=preview),
                 error=payload_failure,
             )
@@ -310,12 +310,12 @@ class N8NCalendarAutomationClient:
         return CalendarCreateEventResult(
             action_id=action_id,
             status="completed",
-            title="Calendar event created",
-            summary=summary or f"Created calendar event '{request.title}'.",
+            title=_t("calendar.result.create.created_title", locale=self.config.locale),
+            summary=summary or _t("calendar.result.create.created_summary", locale=self.config.locale, title=request.title),
             visibility=ActionVisibility(
                 surfaces=["thread", "sidebar", "linked_session"],
-                badge="Calendar created",
-                inline_status="Calendar event created",
+                badge=_t("calendar.badge.calendar_created", locale=self.config.locale),
+                inline_status=_t("calendar.inline.event_created", locale=self.config.locale),
                 linked_summary=request.title,
             ),
             references=ActionReferences(message_id=event_id),
@@ -350,9 +350,9 @@ class N8NCalendarAutomationClient:
             return CalendarUpdateEventResult(
                 action_id=action_id,
                 status="blocked" if payload_failure.code in {"authentication_needed", "not_found"} else "failed",
-                title="Calendar update failed",
+                title=_t("calendar.result.update.failed_title", locale=self.config.locale),
                 summary=payload_failure.message,
-                visibility=ActionVisibility(surfaces=["thread"], badge="Calendar failed"),
+                visibility=ActionVisibility(surfaces=["thread"], badge=_t("calendar.badge.calendar_failed", locale=self.config.locale)),
                 details=CalendarUpdateEventDetails(target=target, preview=preview),
                 error=payload_failure,
             )
@@ -362,12 +362,12 @@ class N8NCalendarAutomationClient:
         return CalendarUpdateEventResult(
             action_id=action_id,
             status="completed",
-            title="Calendar event updated",
-            summary=summary or f"Updated calendar event '{request.search_title}'.",
+            title=_t("calendar.result.update.updated_title", locale=self.config.locale),
+            summary=summary or _t("calendar.result.update.updated_summary", locale=self.config.locale, title=request.search_title),
             visibility=ActionVisibility(
                 surfaces=["thread", "sidebar", "linked_session"],
-                badge="Calendar updated",
-                inline_status="Calendar event updated",
+                badge=_t("calendar.badge.calendar_updated", locale=self.config.locale),
+                inline_status=_t("calendar.inline.event_updated", locale=self.config.locale),
                 linked_summary=request.search_title,
             ),
             references=ActionReferences(message_id=event_id or request.event_id),
@@ -395,9 +395,9 @@ class N8NCalendarAutomationClient:
             return CalendarDeleteEventResult(
                 action_id=action_id,
                 status="blocked" if payload_failure.code in {"authentication_needed", "not_found"} else "failed",
-                title="Calendar delete failed",
+                title=_t("calendar.result.delete.failed_title", locale=self.config.locale),
                 summary=payload_failure.message,
-                visibility=ActionVisibility(surfaces=["thread"], badge="Calendar failed"),
+                visibility=ActionVisibility(surfaces=["thread"], badge=_t("calendar.badge.calendar_failed", locale=self.config.locale)),
                 details=CalendarDeleteEventDetails(target=target),
                 error=payload_failure,
             )
@@ -407,12 +407,12 @@ class N8NCalendarAutomationClient:
         return CalendarDeleteEventResult(
             action_id=action_id,
             status="completed",
-            title="Calendar event deleted",
-            summary=summary or f"Deleted calendar event '{target.title}'.",
+            title=_t("calendar.result.delete.deleted_title", locale=self.config.locale),
+            summary=summary or _t("calendar.result.delete.deleted_summary", locale=self.config.locale, title=target.title),
             visibility=ActionVisibility(
                 surfaces=["thread", "sidebar", "linked_session"],
-                badge="Calendar deleted",
-                inline_status="Calendar event deleted",
+                badge=_t("calendar.badge.calendar_deleted", locale=self.config.locale),
+                inline_status=_t("calendar.inline.event_deleted", locale=self.config.locale),
                 linked_summary=target.title,
             ),
             references=ActionReferences(message_id=event_id or request.event_id),
@@ -450,9 +450,9 @@ class N8NCalendarAutomationClient:
         return CalendarListEventsResult(
             action_id=action_id,
             status="blocked" if failure.code == "authentication_needed" else "failed",
-            title="Calendar summary unavailable",
+            title=_t("calendar.result.list.unavailable_title", locale=self.config.locale),
             summary=failure.message,
-            visibility=ActionVisibility(surfaces=["thread"], badge="Calendar failed"),
+            visibility=ActionVisibility(surfaces=["thread"], badge=_t("calendar.badge.calendar_failed", locale=self.config.locale)),
             details=CalendarListEventsDetails(window_label="today", total_candidates=0),
             error=failure,
         )
@@ -467,9 +467,9 @@ class N8NCalendarAutomationClient:
         return CalendarCreateEventResult(
             action_id=action_id,
             status="blocked" if failure.code == "authentication_needed" else "failed",
-            title="Calendar create failed",
+            title=_t("calendar.result.create.failed_title", locale=self.config.locale),
             summary=failure.message,
-            visibility=ActionVisibility(surfaces=["thread"], badge="Calendar failed"),
+            visibility=ActionVisibility(surfaces=["thread"], badge=_t("calendar.badge.calendar_failed", locale=self.config.locale)),
             details=CalendarCreateEventDetails(preview=preview),
             error=failure,
         )
@@ -485,9 +485,9 @@ class N8NCalendarAutomationClient:
         return CalendarUpdateEventResult(
             action_id=action_id,
             status="blocked" if failure.code == "authentication_needed" else "failed",
-            title="Calendar update failed",
+            title=_t("calendar.result.update.failed_title", locale=self.config.locale),
             summary=failure.message,
-            visibility=ActionVisibility(surfaces=["thread"], badge="Calendar failed"),
+            visibility=ActionVisibility(surfaces=["thread"], badge=_t("calendar.badge.calendar_failed", locale=self.config.locale)),
             details=CalendarUpdateEventDetails(target=target, preview=preview),
             error=failure,
         )
@@ -502,9 +502,9 @@ class N8NCalendarAutomationClient:
         return CalendarDeleteEventResult(
             action_id=action_id,
             status="blocked" if failure.code == "authentication_needed" else "failed",
-            title="Calendar delete failed",
+            title=_t("calendar.result.delete.failed_title", locale=self.config.locale),
             summary=failure.message,
-            visibility=ActionVisibility(surfaces=["thread"], badge="Calendar failed"),
+            visibility=ActionVisibility(surfaces=["thread"], badge=_t("calendar.badge.calendar_failed", locale=self.config.locale)),
             details=CalendarDeleteEventDetails(target=target),
             error=failure,
         )
@@ -515,36 +515,36 @@ class N8NCalendarAutomationClient:
             if status_code in {401, 403}:
                 return ActionFailure(
                     code="authentication_needed",
-                    message="Google Calendar credentials need attention before this action can continue.",
+                    message=_t("calendar.error.auth_needed", locale=self.config.locale),
                     retryable=False,
                 )
             if status_code == 404:
                 return ActionFailure(
                     code="executor_unavailable",
-                    message="The calendar automation webhook is not available.",
+                    message=_t("calendar.error.webhook_missing", locale=self.config.locale),
                     retryable=False,
                 )
             if status_code == 429:
                 return ActionFailure(
                     code="rate_limited",
-                    message="The calendar automation endpoint is rate limited right now.",
+                    message=_t("calendar.error.rate_limited", locale=self.config.locale),
                     retryable=True,
                 )
             return ActionFailure(
                 code="service_unavailable",
-                message="The calendar automation endpoint could not complete the request.",
+                message=_t("calendar.error.request_failed", locale=self.config.locale),
                 retryable=status_code >= 500,
                 detail=f"HTTP {status_code}",
             )
         if isinstance(exc, httpx.TimeoutException):
             return ActionFailure(
                 code="service_unavailable",
-                message="The calendar automation endpoint timed out.",
+                message=_t("calendar.error.timeout", locale=self.config.locale),
                 retryable=True,
             )
         return ActionFailure(
             code="service_unavailable",
-            message="The calendar automation endpoint is temporarily unavailable.",
+            message=_t("calendar.error.temporarily_unavailable", locale=self.config.locale),
             retryable=True,
         )
 
@@ -555,7 +555,7 @@ class N8NCalendarAutomationClient:
         message = (
             self._coerce_text(payload.get("reply"))
             or self._coerce_text(payload.get("error"))
-            or "Google Calendar workflow execution failed."
+            or _t("calendar.error.workflow_failed", locale=self.config.locale)
         )
         if action.endswith("-not-found"):
             return ActionFailure(code="not_found", message=message, retryable=False)
@@ -690,20 +690,20 @@ class CalendarAutomationSessionRunner:
         result = CalendarCreateEventResult(
             action_id=self.client._action_id("calendar-create-approval"),
             status="waiting_approval",
-            title="Calendar create approval required",
-            summary=f"Approval required before creating '{request.title}'.",
-            next_step="Approve or deny the pending calendar create request.",
+            title=_t("calendar.result.create.approval_title", locale=self._locale()),
+            summary=_t("calendar.result.create.approval_summary", locale=self._locale(), title=request.title),
+            next_step=_t("calendar.result.create.approval_next_step", locale=self._locale()),
             visibility=ActionVisibility(
                 surfaces=["thread", "sidebar", "linked_session"],
-                badge="Approval pending",
-                inline_status="Calendar create approval pending",
+                badge=_t("calendar.badge.approval_pending", locale=self._locale()),
+                inline_status=_t("calendar.inline.create_approval_pending", locale=self._locale()),
                 linked_summary=request.title,
-                approval_summary="Calendar create approval pending",
+                approval_summary=_t("calendar.inline.create_approval_pending", locale=self._locale()),
             ),
             details=CalendarCreateEventDetails(preview=preview),
             error=ActionFailure(
                 code="approval_needed",
-                message="Approval is required before creating this calendar event.",
+                message=_t("calendar.error.create.approval_needed", locale=self._locale()),
                 retryable=True,
             ),
         )
@@ -753,16 +753,16 @@ class CalendarAutomationSessionRunner:
                 CalendarCreateEventResult(
                     action_id=self.client._action_id("calendar-create-no-pending"),
                     status="blocked",
-                    title="No pending calendar approval",
-                    summary="There is no pending calendar create approval in this session.",
-                    next_step="Request calendar create approval first.",
-                    visibility=ActionVisibility(surfaces=["thread", "sidebar"], badge="Calendar blocked"),
+                    title=_t("calendar.result.create.no_pending_title", locale=self._locale()),
+                    summary=_t("calendar.result.create.no_pending_summary", locale=self._locale()),
+                    next_step=_t("calendar.result.create.no_pending_next_step", locale=self._locale()),
+                    visibility=ActionVisibility(surfaces=["thread", "sidebar"], badge=_t("calendar.badge.calendar_blocked", locale=self._locale())),
                     details=CalendarCreateEventDetails(
-                        preview=CalendarEventPreview(title="(Untitled)", start_at="", end_at=""),
+                        preview=CalendarEventPreview(title=_t("calendar.event.untitled", locale=self._locale()), start_at="", end_at=""),
                     ),
                     error=ActionFailure(
                         code="not_found",
-                        message="No pending calendar approval is available.",
+                        message=_t("calendar.error.create.no_pending", locale=self._locale()),
                         retryable=False,
                     ),
                 ),
@@ -785,16 +785,16 @@ class CalendarAutomationSessionRunner:
                 CalendarCreateEventResult(
                     action_id=self.client._action_id("calendar-create-no-pending-cancel"),
                     status="blocked",
-                    title="No pending calendar approval",
-                    summary="There is no pending calendar create approval to cancel in this session.",
-                    next_step="Request calendar create approval first.",
-                    visibility=ActionVisibility(surfaces=["thread", "sidebar"], badge="Calendar blocked"),
+                    title=_t("calendar.result.create.no_pending_title", locale=self._locale()),
+                    summary=_t("calendar.result.create.no_pending_cancel_summary", locale=self._locale()),
+                    next_step=_t("calendar.result.create.no_pending_next_step", locale=self._locale()),
+                    visibility=ActionVisibility(surfaces=["thread", "sidebar"], badge=_t("calendar.badge.calendar_blocked", locale=self._locale())),
                     details=CalendarCreateEventDetails(
-                        preview=CalendarEventPreview(title="(Untitled)", start_at="", end_at=""),
+                        preview=CalendarEventPreview(title=_t("calendar.event.untitled", locale=self._locale()), start_at="", end_at=""),
                     ),
                     error=ActionFailure(
                         code="not_found",
-                        message="No pending calendar approval is available.",
+                        message=_t("calendar.error.create.no_pending", locale=self._locale()),
                         retryable=False,
                     ),
                 ),
@@ -809,14 +809,14 @@ class CalendarAutomationSessionRunner:
         result = CalendarCreateEventResult(
             action_id=self.client._action_id("calendar-create-denied"),
             status="rejected",
-            title="Calendar create cancelled",
-            summary="The pending calendar create request was cancelled.",
-            next_step="Review the proposed event and request approval again when ready.",
-            visibility=ActionVisibility(surfaces=["thread", "sidebar"], badge="Calendar cancelled"),
+            title=_t("calendar.result.create.cancelled_title", locale=self._locale()),
+            summary=_t("calendar.result.create.cancelled_summary", locale=self._locale()),
+            next_step=_t("calendar.result.create.cancelled_next_step", locale=self._locale()),
+            visibility=ActionVisibility(surfaces=["thread", "sidebar"], badge=_t("calendar.badge.calendar_cancelled", locale=self._locale())),
             details=CalendarCreateEventDetails(preview=preview),
             error=ActionFailure(
                 code="approval_rejected",
-                message="The pending calendar create request was cancelled.",
+                message=_t("calendar.error.create.cancelled", locale=self._locale()),
                 retryable=False,
             ),
         )
@@ -843,20 +843,20 @@ class CalendarAutomationSessionRunner:
         result = CalendarUpdateEventResult(
             action_id=self.client._action_id("calendar-update-approval"),
             status="waiting_approval",
-            title="Calendar update approval required",
-            summary=f"Approval required before updating '{request.search_title}'.",
-            next_step="Approve or deny the pending calendar update request.",
+            title=_t("calendar.result.update.approval_title", locale=self._locale()),
+            summary=_t("calendar.result.update.approval_summary", locale=self._locale(), title=request.search_title),
+            next_step=_t("calendar.result.update.approval_next_step", locale=self._locale()),
             visibility=ActionVisibility(
                 surfaces=["thread", "sidebar", "linked_session"],
-                badge="Approval pending",
-                inline_status="Calendar update approval pending",
+                badge=_t("calendar.badge.approval_pending", locale=self._locale()),
+                inline_status=_t("calendar.inline.update_approval_pending", locale=self._locale()),
                 linked_summary=request.search_title,
-                approval_summary="Calendar update approval pending",
+                approval_summary=_t("calendar.inline.update_approval_pending", locale=self._locale()),
             ),
             details=CalendarUpdateEventDetails(event_id=request.event_id, target=target, preview=preview),
             error=ActionFailure(
                 code="approval_needed",
-                message="Approval is required before updating this calendar event.",
+                message=_t("calendar.error.update.approval_needed", locale=self._locale()),
                 retryable=True,
             ),
         )
@@ -903,20 +903,20 @@ class CalendarAutomationSessionRunner:
         result = CalendarDeleteEventResult(
             action_id=self.client._action_id("calendar-delete-approval"),
             status="waiting_approval",
-            title="Calendar delete approval required",
-            summary=f"Approval required before deleting '{target.title}'.",
-            next_step="Approve or deny the pending calendar delete request.",
+            title=_t("calendar.result.delete.approval_title", locale=self._locale()),
+            summary=_t("calendar.result.delete.approval_summary", locale=self._locale(), title=target.title),
+            next_step=_t("calendar.result.delete.approval_next_step", locale=self._locale()),
             visibility=ActionVisibility(
                 surfaces=["thread", "sidebar", "linked_session"],
-                badge="Approval pending",
-                inline_status="Calendar delete approval pending",
+                badge=_t("calendar.badge.approval_pending", locale=self._locale()),
+                inline_status=_t("calendar.inline.delete_approval_pending", locale=self._locale()),
                 linked_summary=target.title,
-                approval_summary="Calendar delete approval pending",
+                approval_summary=_t("calendar.inline.delete_approval_pending", locale=self._locale()),
             ),
             details=CalendarDeleteEventDetails(event_id=request.event_id, target=target),
             error=ActionFailure(
                 code="approval_needed",
-                message="Approval is required before deleting this calendar event.",
+                message=_t("calendar.error.delete.approval_needed", locale=self._locale()),
                 retryable=True,
             ),
         )
@@ -993,12 +993,12 @@ class CalendarAutomationSessionRunner:
         result = CalendarUpdateEventResult(
             action_id=self.client._action_id("calendar-update-denied"),
             status="rejected",
-            title="Calendar update cancelled",
-            summary="The pending calendar update request was cancelled.",
-            next_step="Request the update again if you still want to change the event.",
-            visibility=ActionVisibility(surfaces=["thread", "sidebar"], badge="Calendar cancelled"),
+            title=_t("calendar.result.update.cancelled_title", locale=self._locale()),
+            summary=_t("calendar.result.update.cancelled_summary", locale=self._locale()),
+            next_step=_t("calendar.result.update.cancelled_next_step", locale=self._locale()),
+            visibility=ActionVisibility(surfaces=["thread", "sidebar"], badge=_t("calendar.badge.calendar_cancelled", locale=self._locale())),
             details=CalendarUpdateEventDetails(event_id=request.event_id, target=target, preview=preview),
-            error=ActionFailure(code="approval_rejected", message="The pending calendar update request was cancelled."),
+            error=ActionFailure(code="approval_rejected", message=_t("calendar.error.update.cancelled", locale=self._locale())),
         )
         session = self.sessions.get_or_create(session_key)
         session.metadata.pop(CALENDAR_UPDATE_APPROVAL_METADATA_KEY, None)
@@ -1017,12 +1017,12 @@ class CalendarAutomationSessionRunner:
         result = CalendarDeleteEventResult(
             action_id=self.client._action_id("calendar-delete-denied"),
             status="rejected",
-            title="Calendar delete cancelled",
-            summary="The pending calendar delete request was cancelled.",
-            next_step="Request the delete again if you still want to remove the event.",
-            visibility=ActionVisibility(surfaces=["thread", "sidebar"], badge="Calendar cancelled"),
+            title=_t("calendar.result.delete.cancelled_title", locale=self._locale()),
+            summary=_t("calendar.result.delete.cancelled_summary", locale=self._locale()),
+            next_step=_t("calendar.result.delete.cancelled_next_step", locale=self._locale()),
+            visibility=ActionVisibility(surfaces=["thread", "sidebar"], badge=_t("calendar.badge.calendar_cancelled", locale=self._locale())),
             details=CalendarDeleteEventDetails(event_id=request.event_id, target=target),
-            error=ActionFailure(code="approval_rejected", message="The pending calendar delete request was cancelled."),
+            error=ActionFailure(code="approval_rejected", message=_t("calendar.error.delete.cancelled", locale=self._locale())),
         )
         session = self.sessions.get_or_create(session_key)
         session.metadata.pop(CALENDAR_DELETE_APPROVAL_METADATA_KEY, None)
@@ -1092,50 +1092,53 @@ class CalendarAutomationSessionRunner:
         return CalendarUpdateEventResult(
             action_id=self.client._action_id("calendar-update-no-pending-cancel" if cancel else "calendar-update-no-pending"),
             status="blocked",
-            title="No pending calendar update approval",
-            summary="There is no pending calendar update approval in this session.",
-            next_step="Request calendar update approval first.",
-            visibility=ActionVisibility(surfaces=["thread", "sidebar"], badge="Calendar blocked"),
-            details=CalendarUpdateEventDetails(preview=CalendarEventPreview(title="(Untitled)", start_at="", end_at="")),
-            error=ActionFailure(code="not_found", message="No pending calendar update approval is available."),
+            title=_t("calendar.result.update.no_pending_title", locale=self._locale()),
+            summary=_t("calendar.result.update.no_pending_summary", locale=self._locale()),
+            next_step=_t("calendar.result.update.no_pending_next_step", locale=self._locale()),
+            visibility=ActionVisibility(surfaces=["thread", "sidebar"], badge=_t("calendar.badge.calendar_blocked", locale=self._locale())),
+            details=CalendarUpdateEventDetails(preview=CalendarEventPreview(title=_t("calendar.event.untitled", locale=self._locale()), start_at="", end_at="")),
+            error=ActionFailure(code="not_found", message=_t("calendar.error.update.no_pending", locale=self._locale())),
         )
 
     def _no_pending_delete_result(self, *, cancel: bool = False) -> CalendarDeleteEventResult:
         return CalendarDeleteEventResult(
             action_id=self.client._action_id("calendar-delete-no-pending-cancel" if cancel else "calendar-delete-no-pending"),
             status="blocked",
-            title="No pending calendar delete approval",
-            summary="There is no pending calendar delete approval in this session.",
-            next_step="Request calendar delete approval first.",
-            visibility=ActionVisibility(surfaces=["thread", "sidebar"], badge="Calendar blocked"),
-            details=CalendarDeleteEventDetails(target=CalendarEventSummary(title="(Untitled)", start_at="", end_at="")),
-            error=ActionFailure(code="not_found", message="No pending calendar delete approval is available."),
+            title=_t("calendar.result.delete.no_pending_title", locale=self._locale()),
+            summary=_t("calendar.result.delete.no_pending_summary", locale=self._locale()),
+            next_step=_t("calendar.result.delete.no_pending_next_step", locale=self._locale()),
+            visibility=ActionVisibility(surfaces=["thread", "sidebar"], badge=_t("calendar.badge.calendar_blocked", locale=self._locale())),
+            details=CalendarDeleteEventDetails(target=CalendarEventSummary(title=_t("calendar.event.untitled", locale=self._locale()), start_at="", end_at="")),
+            error=ActionFailure(code="not_found", message=_t("calendar.error.delete.no_pending", locale=self._locale())),
         )
 
     @staticmethod
     def _channel_from_session_key(session_key: str) -> str:
         return session_key.split(":", 1)[0] if ":" in session_key else "websocket"
 
-    @staticmethod
-    def _approval_prompt(request: CalendarCreateRequest) -> str:
-        return (
-            "Approval required before creating this calendar event. "
-            f"Title: {request.title}. Start: {request.start_at}. End: {request.end_at}. "
-            "Use /calendar approve to create it or /calendar deny to cancel."
+    def _approval_prompt(self, request: CalendarCreateRequest) -> str:
+        return _t(
+            "calendar.approval.prompt.create",
+            locale=self._locale(),
+            title=request.title,
+            start_at=request.start_at,
+            end_at=request.end_at,
         )
 
-    @staticmethod
-    def _update_approval_prompt(request: CalendarUpdateRequest) -> str:
-        return (
-            "Approval required before updating this calendar event. "
-            f"Title: {request.search_title}. New start: {request.start_at}. New end: {request.end_at}. "
-            "Use /calendar approve to update it or /calendar deny to cancel."
+    def _update_approval_prompt(self, request: CalendarUpdateRequest) -> str:
+        return _t(
+            "calendar.approval.prompt.update",
+            locale=self._locale(),
+            title=request.search_title,
+            start_at=request.start_at,
+            end_at=request.end_at,
         )
 
-    @staticmethod
-    def _delete_approval_prompt(target: CalendarEventSummary) -> str:
-        return (
-            "Approval required before deleting this calendar event. "
-            f"Title: {target.title}. Start: {target.start_at}. End: {target.end_at}. "
-            "Use /calendar approve to delete it or /calendar deny to cancel."
+    def _delete_approval_prompt(self, target: CalendarEventSummary) -> str:
+        return _t(
+            "calendar.approval.prompt.delete",
+            locale=self._locale(),
+            title=target.title,
+            start_at=target.start_at,
+            end_at=target.end_at,
         )

@@ -1,9 +1,11 @@
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { taskStatusLabel } from "@/lib/sessionMetadata";
 import type {
   DerivedMemoryCorrectionAction,
   DerivedOwnerProfile,
   DerivedTaskSummary,
 } from "@/lib/sessionMetadata";
+import { useTranslation } from "react-i18next";
 
 interface ThreadAssistantDetailsSheetProps {
   open: boolean;
@@ -43,6 +45,7 @@ export function ThreadAssistantDetailsSheet({
   memoryActions = [],
   onMemoryAction,
 }: ThreadAssistantDetailsSheetProps) {
+  const { t } = useTranslation();
   const hasContent = Boolean(
     ownerSummaryBody
       || continuityBody
@@ -57,66 +60,66 @@ export function ThreadAssistantDetailsSheet({
       <SheetContent side="right" className="w-full max-w-[24rem] p-0 sm:max-w-[24rem]">
         <div className="flex h-full flex-col">
           <SheetHeader className="border-b border-border/50 px-4 py-3">
-            <SheetTitle>Assistant details</SheetTitle>
+            <SheetTitle>{t("thread.details.title")}</SheetTitle>
             <SheetDescription className="text-[12px] leading-5">
-              Thread-level metadata and power tools live here so the conversation stays primary.
+              {t("thread.details.description")}
             </SheetDescription>
           </SheetHeader>
           <div className="flex-1 space-y-2 overflow-y-auto px-3 py-3">
             {!hasContent ? (
-              <Section title="No extra details">
-                This thread does not have additional owner or task metadata yet.
+              <Section title={t("thread.details.noExtra.title")}>
+                {t("thread.details.noExtra.body")}
               </Section>
             ) : null}
 
             {currentTask ? (
-              <Section title="Current task">
+              <Section title={t("thread.details.currentTask.title")}>
                 <div className="flex flex-wrap items-center gap-1">
                   {currentTask.status ? (
                     <span className="inline-flex items-center rounded-full border border-border/50 bg-background/85 px-2 py-0.5 text-[10px] font-medium tracking-wide text-foreground/80">
-                      {currentTask.status}
+                      {taskStatusLabel(currentTask.status)}
                     </span>
                   ) : null}
                   {currentTask.originChannel ? (
                     <span className="inline-flex items-center rounded-full border border-border/50 bg-background/85 px-2 py-0.5 text-[10px] font-medium tracking-wide text-foreground/80">
-                      Origin {currentTask.originChannel}
+                      {t("thread.details.currentTask.origin", { channel: currentTask.originChannel })}
                     </span>
                   ) : null}
                 </div>
                 {currentTask.title ? <p className="mt-1.5 text-[12px] leading-5 text-foreground/88">{currentTask.title}</p> : null}
-                {currentTask.nextStepHint ? <p className="mt-1">Next step: {currentTask.nextStepHint}</p> : null}
+                {currentTask.nextStepHint ? <p className="mt-1">{t("thread.details.currentTask.nextStep", { hint: currentTask.nextStepHint })}</p> : null}
               </Section>
             ) : null}
 
             {ownerSummaryBody ? (
-              <Section title="Assistant overview">
+              <Section title={t("thread.details.assistantOverview.title")}>
                 <p>{ownerSummaryBody}</p>
               </Section>
             ) : null}
 
             {(ownerProfile?.preferredLanguage || ownerProfile?.timezone || ownerProfile?.responseTone || ownerProfile?.responseLength) ? (
-              <Section title="Owner defaults">
+              <Section title={t("thread.details.ownerDefaults.title")}>
                 <p>
-                  {(ownerProfile?.preferredLanguage || "unknown language")}
+                  {(ownerProfile?.preferredLanguage || t("thread.details.ownerDefaults.unknownLanguage"))}
                   {" · "}
-                  {(ownerProfile?.timezone || "unknown timezone")}
+                  {(ownerProfile?.timezone || t("thread.details.ownerDefaults.unknownTimezone"))}
                   {" · "}
-                  {(ownerProfile?.responseTone || "default tone")}
+                  {(ownerProfile?.responseTone || t("thread.details.ownerDefaults.defaultTone"))}
                   {" · "}
-                  {(ownerProfile?.responseLength || "default length")}
+                  {(ownerProfile?.responseLength || t("thread.details.ownerDefaults.defaultLength"))}
                 </p>
               </Section>
             ) : null}
 
             {continuityBody ? (
-              <Section title={continuityTitle || "Linked external session"}>
+              <Section title={continuityTitle || t("thread.details.linkedExternalSession.title")}>
                 <p>{continuityBody}</p>
               </Section>
             ) : null}
 
             {memoryActions.length ? (
-              <Section title="Memory tools">
-                <p className="mb-1.5">Use these only when you want to correct durable memory, not for normal conversation turns.</p>
+              <Section title={t("thread.details.memoryTools.title")}>
+                <p className="mb-1.5">{t("thread.details.memoryTools.description")}</p>
                 <div className="flex flex-wrap gap-1.5">
                   {memoryActions.map((action) => (
                     <button

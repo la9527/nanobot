@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronLeft, Loader2, Minus, Moon, Plus, Sun } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { Button } from "@/components/ui/button";
@@ -30,6 +31,7 @@ export function SettingsView({
   onDecreaseChatFont,
   onIncreaseChatFont,
 }: SettingsViewProps) {
+  const { t } = useTranslation();
   const { token } = useClient();
   const [settings, setSettings] = useState<SettingsPayload | null>(null);
   const [loading, setLoading] = useState(true);
@@ -112,22 +114,22 @@ export function SettingsView({
           className="mb-4 inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground"
         >
           <ChevronLeft className="h-3.5 w-3.5" />
-          Back to chat
+          {t("settings.backToChat")}
         </button>
 
-        <h1 className="mb-2 text-base font-semibold tracking-tight">General</h1>
+        <h1 className="mb-2 text-base font-semibold tracking-tight">{t("settings.title")}</h1>
         <p className="mb-6 max-w-[38rem] text-sm text-muted-foreground">
-          Default assistant settings for model selection, theme, and chat readability.
+          {t("settings.description")}
         </p>
 
         {loading ? (
           <div className="flex h-48 items-center justify-center text-sm text-muted-foreground">
             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            Loading settings...
+            {t("settings.loading")}
           </div>
         ) : error ? (
           <SettingsGroup>
-            <SettingsRow title="Could not load settings">
+            <SettingsRow title={t("settings.loadErrorTitle")}>
               <span className="max-w-[520px] text-sm text-muted-foreground">{error}</span>
             </SettingsRow>
           </SettingsGroup>
@@ -185,6 +187,7 @@ function SettingsSection({
   onDecreaseChatFont: () => void;
   onIncreaseChatFont: () => void;
 }) {
+  const { t } = useTranslation();
   const canDecreaseFont = chatFontSize !== "sm";
   const canIncreaseFont = chatFontSize !== "lg";
   const modelLocked = settings.agent.model_locked === true;
@@ -193,9 +196,9 @@ function SettingsSection({
   return (
     <div className="space-y-7">
       <section>
-        <h2 className="mb-2 px-2 text-xs font-medium text-muted-foreground">Assistant</h2>
+        <h2 className="mb-2 px-2 text-xs font-medium text-muted-foreground">{t("settings.sections.assistant")}</h2>
         <SettingsGroup>
-          <SettingsRow title="Default provider">
+          <SettingsRow title={t("settings.rows.defaultProvider")}>
             <select
               value={form.provider}
               onChange={(event) => setForm((prev) => ({ ...prev, provider: event.target.value }))}
@@ -213,7 +216,7 @@ function SettingsSection({
             </select>
           </SettingsRow>
 
-          <SettingsRow title="Default model">
+          <SettingsRow title={t("settings.rows.defaultModel")}>
             <Input
               value={form.model}
               onChange={(event) => setForm((prev) => ({ ...prev, model: event.target.value }))}
@@ -223,9 +226,9 @@ function SettingsSection({
           </SettingsRow>
 
           {providerLocked || modelLocked ? (
-            <SettingsRow title="Managed by runtime">
+            <SettingsRow title={t("settings.rows.managedByRuntime")}>
               <span className="max-w-[280px] text-sm text-muted-foreground">
-                Provider or model is locked by the current runtime configuration.
+                {t("settings.managedByRuntimeBody")}
               </span>
             </SettingsRow>
           ) : null}
@@ -242,18 +245,18 @@ function SettingsSection({
       </section>
 
       <section>
-        <h2 className="mb-2 px-2 text-xs font-medium text-muted-foreground">Themes</h2>
+        <h2 className="mb-2 px-2 text-xs font-medium text-muted-foreground">{t("settings.sections.themes")}</h2>
         <SettingsGroup>
-          <SettingsRow title="Theme">
+          <SettingsRow title={t("settings.rows.theme")}>
             <Button
               type="button"
               size="sm"
               variant="outline"
               onClick={onToggleTheme}
               className="h-8 min-w-[7.5rem] justify-between px-3"
-              aria-label="Toggle theme"
+              aria-label={t("settings.toggleTheme")}
             >
-              <span>{theme === "dark" ? "Dark" : "Light"}</span>
+              <span>{theme === "dark" ? t("settings.theme.dark") : t("settings.theme.light")}</span>
               {theme === "dark" ? (
                 <Moon className="h-3.5 w-3.5" aria-hidden />
               ) : (
@@ -262,7 +265,7 @@ function SettingsSection({
             </Button>
           </SettingsRow>
 
-          <SettingsRow title="Chat font size">
+          <SettingsRow title={t("settings.rows.chatFontSize")}>
             <div className="flex items-center gap-2">
               <Button
                 type="button"
@@ -270,7 +273,7 @@ function SettingsSection({
                 variant="outline"
                 onClick={onDecreaseChatFont}
                 disabled={!canDecreaseFont}
-                aria-label="Decrease chat font size"
+                aria-label={t("settings.decreaseChatFontSize")}
                 className="h-8 w-8"
               >
                 <Minus className="h-3.5 w-3.5" aria-hidden />
@@ -284,7 +287,7 @@ function SettingsSection({
                 variant="outline"
                 onClick={onIncreaseChatFont}
                 disabled={!canIncreaseFont}
-                aria-label="Increase chat font size"
+                aria-label={t("settings.increaseChatFontSize")}
                 className="h-8 w-8"
               >
                 <Plus className="h-3.5 w-3.5" aria-hidden />
@@ -295,9 +298,9 @@ function SettingsSection({
       </section>
 
       <section>
-        <h2 className="mb-2 px-2 text-xs font-medium text-muted-foreground">Interface</h2>
+        <h2 className="mb-2 px-2 text-xs font-medium text-muted-foreground">{t("settings.sections.interface")}</h2>
         <SettingsGroup>
-          <SettingsRow title="Language">
+          <SettingsRow title={t("settings.rows.language")}>
             <LanguageSwitcher />
           </SettingsRow>
         </SettingsGroup>

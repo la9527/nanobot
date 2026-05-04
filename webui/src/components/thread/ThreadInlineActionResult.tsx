@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 
 interface ThreadInlineActionResultProps {
   domain?: string | null;
@@ -45,28 +46,33 @@ export function ThreadInlineActionResult({
   conflict = null,
   threads = [],
 }: ThreadInlineActionResultProps) {
+  const { t } = useTranslation();
   const visibleThreads = threads.slice(0, 2);
   const [detailsOpen, setDetailsOpen] = useState(false);
   if (!title && !summary && !preview && !conflict && visibleThreads.length === 0) {
     return null;
   }
 
-  const label = domain === "calendar" ? "Calendar result" : domain === "mail" ? "Mail result" : "Latest result";
+  const label = domain === "calendar"
+    ? t("thread.inlineAction.label.calendar")
+    : domain === "mail"
+      ? t("thread.inlineAction.label.mail")
+      : t("thread.inlineAction.label.latest");
   const statusLabel = status === "waiting_approval"
-    ? "Approval pending"
+    ? t("thread.inlineAction.status.approvalPending")
     : status
       ? status.replaceAll("_", " ").replace(/^./, (char) => char.toUpperCase())
       : null;
   const detailBadge = preview
     ? status === "waiting_approval"
-      ? "Approval pending"
+      ? t("thread.inlineAction.status.approvalPending")
       : domain === "calendar"
-        ? "Event preview"
-        : "Draft preview"
+        ? t("thread.inlineAction.badge.eventPreview")
+        : t("thread.inlineAction.badge.draftPreview")
     : conflict
-      ? "Conflict check"
+      ? t("thread.inlineAction.badge.conflictCheck")
       : visibleThreads.length
-        ? "Thread summary"
+        ? t("thread.inlineAction.badge.threadSummary")
         : null;
   const humanizeStatus = (value: string | null | undefined) => value
     ? value.replaceAll("_", " ").replace(/^./, (char) => char.toUpperCase())
@@ -76,8 +82,8 @@ export function ThreadInlineActionResult({
   const hasExpandableDetails = Boolean(preview || conflict || visibleThreads.length > 0);
   const compactConflictSummary = conflict
     ? [
-      visibleConflicts[0]?.title ? `Conflicts with ${visibleConflicts[0].title}` : null,
-      extraConflictCount > 0 ? `+${extraConflictCount} more` : null,
+      visibleConflicts[0]?.title ? t("thread.inlineAction.conflict.withTitle", { title: visibleConflicts[0].title }) : null,
+      extraConflictCount > 0 ? t("thread.inlineAction.conflict.moreCount", { count: extraConflictCount }) : null,
       `${conflict.requestedStartAt} -> ${conflict.requestedEndAt}`,
     ].filter(Boolean).join(" · ")
     : null;
@@ -108,31 +114,31 @@ export function ThreadInlineActionResult({
             onClick={() => setDetailsOpen((open) => !open)}
             className="shrink-0 inline-flex items-center rounded-full border border-border/45 bg-background/80 px-2 py-0.5 text-[10px] font-medium tracking-wide text-foreground/75 transition-colors hover:bg-background"
           >
-            {detailsOpen ? "Hide" : "Details"}
+            {detailsOpen ? t("thread.inlineAction.actions.hide") : t("thread.inlineAction.actions.details")}
           </button>
         ) : null}
       </div>
 
       {detailsOpen && (preview?.subject || preview?.title) ? (
         <div className="mt-1.5 space-y-0.5 text-[11px] leading-4.5">
-          {preview.to_recipients?.length ? <p><span className="font-medium text-foreground/82">To:</span> {preview.to_recipients.join(", ")}</p> : null}
-          {preview.subject ? <p><span className="font-medium text-foreground/82">Subject:</span> {preview.subject}</p> : null}
-          {preview.body_preview ? <p><span className="font-medium text-foreground/82">Preview:</span> {preview.body_preview}</p> : null}
-          {preview.title ? <p><span className="font-medium text-foreground/82">Title:</span> {preview.title}</p> : null}
-          {preview.start_at && preview.end_at ? <p><span className="font-medium text-foreground/82">When:</span> {preview.start_at} -&gt; {preview.end_at}</p> : null}
-          {preview.location ? <p><span className="font-medium text-foreground/82">Location:</span> {preview.location}</p> : null}
-          {preview.description ? <p><span className="font-medium text-foreground/82">Details:</span> {preview.description}</p> : null}
+          {preview.to_recipients?.length ? <p><span className="font-medium text-foreground/82">{t("thread.inlineAction.fields.to")}</span> {preview.to_recipients.join(", ")}</p> : null}
+          {preview.subject ? <p><span className="font-medium text-foreground/82">{t("thread.inlineAction.fields.subject")}</span> {preview.subject}</p> : null}
+          {preview.body_preview ? <p><span className="font-medium text-foreground/82">{t("thread.inlineAction.fields.preview")}</span> {preview.body_preview}</p> : null}
+          {preview.title ? <p><span className="font-medium text-foreground/82">{t("thread.inlineAction.fields.title")}</span> {preview.title}</p> : null}
+          {preview.start_at && preview.end_at ? <p><span className="font-medium text-foreground/82">{t("thread.inlineAction.fields.when")}</span> {preview.start_at} -&gt; {preview.end_at}</p> : null}
+          {preview.location ? <p><span className="font-medium text-foreground/82">{t("thread.inlineAction.fields.location")}</span> {preview.location}</p> : null}
+          {preview.description ? <p><span className="font-medium text-foreground/82">{t("thread.inlineAction.fields.details")}</span> {preview.description}</p> : null}
         </div>
       ) : null}
 
       {detailsOpen && conflict ? (
         <div className="mt-1.5 space-y-0.5 text-[11px] leading-4.5">
-          {conflict.reason ? <p><span className="font-medium text-foreground/82">Reason:</span> {humanizeStatus(conflict.reason)}</p> : null}
+          {conflict.reason ? <p><span className="font-medium text-foreground/82">{t("thread.inlineAction.fields.reason")}</span> {humanizeStatus(conflict.reason)}</p> : null}
           {visibleConflicts.length ? (
             <div className="space-y-1 pt-0.5">
               {visibleConflicts.map((event, index) => (
                 <div key={event.event_id || `${index}-${event.title || "conflict"}`} className="rounded-[10px] border border-border/40 bg-background/75 px-2 py-1.5">
-                  <p className="font-medium text-foreground/85">{event.title || "(Untitled event)"}</p>
+                  <p className="font-medium text-foreground/85">{event.title || t("thread.inlineAction.fallback.untitledEvent")}</p>
                   <p className="text-muted-foreground/95">{event.start_at || "?"} -&gt; {event.end_at || "?"}</p>
                   {event.location ? <p className="text-muted-foreground/95">{event.location}</p> : null}
                 </div>
@@ -146,8 +152,8 @@ export function ThreadInlineActionResult({
         <div className="mt-1.5 space-y-1.5 text-[11px] leading-4.5">
           {visibleThreads.map((thread, index) => (
             <div key={thread.thread_id || `${index}-${thread.subject || "thread"}`} className="rounded-[10px] border border-border/40 bg-background/75 px-2 py-1.5">
-              <p className="font-medium text-foreground/85">{thread.subject || "(No subject)"}</p>
-              <p className="text-muted-foreground/95">{thread.summary || thread.sender_summary || thread.snippet || "No summary available."}</p>
+              <p className="font-medium text-foreground/85">{thread.subject || t("thread.inlineAction.fallback.noSubject")}</p>
+              <p className="text-muted-foreground/95">{thread.summary || thread.sender_summary || thread.snippet || t("thread.inlineAction.fallback.noSummary")}</p>
             </div>
           ))}
         </div>

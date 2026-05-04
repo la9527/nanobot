@@ -5,6 +5,7 @@ import {
   LoaderCircle,
   X,
 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -19,6 +20,7 @@ interface ThreadStatusBlockProps {
 }
 
 export function ThreadStatusBlock({ tone, title, body, onDismiss }: ThreadStatusBlockProps) {
+  const { t } = useTranslation();
   const Icon =
     tone === "running"
       ? LoaderCircle
@@ -55,12 +57,12 @@ export function ThreadStatusBlock({ tone, title, body, onDismiss }: ThreadStatus
         <div className="mb-1 flex flex-wrap items-center gap-2">
           <span className="text-[11px] font-semibold uppercase tracking-[0.08em]">
             {tone === "running"
-              ? "Running"
+              ? t("thread.statusTone.running")
               : tone === "waiting-approval"
-                ? "Waiting approval"
+                ? t("thread.statusTone.waitingApproval")
                 : tone === "completed"
-                  ? "Completed"
-                  : "Failed"}
+                  ? t("thread.statusTone.completed")
+                  : t("thread.statusTone.failed")}
           </span>
           <span className="text-sm font-medium leading-5">{title}</span>
         </div>
@@ -71,7 +73,7 @@ export function ThreadStatusBlock({ tone, title, body, onDismiss }: ThreadStatus
           variant="ghost"
           size="icon"
           onClick={onDismiss}
-          aria-label="Dismiss"
+          aria-label={t("common.dismiss")}
           className="h-6 w-6 shrink-0"
         >
           <X className="h-3.5 w-3.5" />

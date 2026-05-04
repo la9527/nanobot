@@ -285,6 +285,9 @@ async def test_cmd_calendar_create_requests_approval(tmp_path: Path) -> None:
     out = await cmd_calendar(ctx)
 
     assert "Calendar create approval required" in out.content
+    assert "제목: 치과" in out.content
+    assert "시간: 2026-05-02T15:00:00+09:00 -> 2026-05-02T16:00:00+09:00" in out.content
+    assert "다음 단계: Approve or deny the pending calendar create request." in out.content
     assert ctx.loop.calendar_automation_runner.calls[0][0] == "check"
     call = next(call for call in ctx.loop.calendar_automation_runner.calls if call[0] == "create")
     request = call[1][1]
@@ -348,7 +351,7 @@ async def test_cmd_calendar_create_prompts_for_missing_required_fields(tmp_path:
 
     out = await cmd_calendar(ctx)
 
-    assert "Calendar create needs a title" in out.content
+    assert "일정 생성에는 제목이 필요합니다." in out.content
     assert out.buttons == [["취소"]]
     pending = ctx.session.metadata["calendar_create_input"]
     assert pending["expected_field"] == "title"
@@ -368,18 +371,18 @@ async def test_calendar_pending_input_interceptor_collects_missing_values(tmp_pa
 
     first = await router.dispatch(create_ctx)
     assert first is not None
-    assert "Calendar create needs a title" in first.content
+    assert "일정 생성에는 제목이 필요합니다." in first.content
 
     title_ctx = _make_router_ctx(tmp_path, '치과', session_key=session_key)
     second = await router.dispatch(title_ctx)
     assert second is not None
-    assert "Calendar create needs a start time" in second.content
+    assert "일정 생성에는 시작 시간이 필요합니다." in second.content
     assert title_ctx.session.metadata["calendar_pending_interaction"]["expected_field"] == "start_at"
 
     start_ctx = _make_router_ctx(tmp_path, '2026-05-02T15:00:00+09:00', session_key=session_key)
     third = await router.dispatch(start_ctx)
     assert third is not None
-    assert "Calendar create needs an end time" in third.content
+    assert "일정 생성에는 종료 시간이 필요합니다." in third.content
     assert start_ctx.session.metadata["calendar_pending_interaction"]["expected_field"] == "end_at"
 
     end_ctx = _make_router_ctx(tmp_path, '2026-05-02T16:00:00+09:00', session_key=session_key)
@@ -428,7 +431,7 @@ async def test_calendar_natural_create_prompts_for_missing_end_time(tmp_path: Pa
     out = await router.dispatch(ctx)
 
     assert out is not None
-    assert "Calendar create needs an end time" in out.content
+    assert "일정 생성에는 종료 시간이 필요합니다." in out.content
     pending = ctx.session.metadata["calendar_create_input"]
     assert pending["title"] == "치과"
     assert pending["start_at"] == "2026-05-05T15:00:00+09:00"
@@ -521,7 +524,7 @@ async def test_calendar_natural_delete_prompts_for_date(tmp_path: Path) -> None:
     out = await router.dispatch(ctx)
 
     assert out is not None
-    assert "Calendar delete needs a title and date" in out.content
+    assert "일정 삭제에는 제목과 날짜가 필요합니다." in out.content
 
 
 @pytest.mark.asyncio
@@ -585,7 +588,7 @@ async def test_calendar_conflict_review_interceptor_can_force_create_or_reschedu
     reschedule_ctx = _make_router_ctx(tmp_path, '새 시간 다시 입력', session_key=session_key)
     rescheduled = await router.dispatch(reschedule_ctx)
     assert rescheduled is not None
-    assert "Calendar create needs a start time" in rescheduled.content
+    assert "일정 생성에는 시작 시간이 필요합니다." in rescheduled.content
     assert rescheduled.buttons == [["취소"]]
     assert reschedule_ctx.session.metadata["calendar_create_input"]["expected_field"] == "start_at"
     assert reschedule_ctx.session.metadata["calendar_pending_interaction"]["kind"] == "collect_input"
@@ -682,7 +685,7 @@ async def test_cmd_calendar_cancel_clears_pending_input_without_runner(tmp_path:
 
     out = await cmd_calendar(ctx)
 
-    assert out.content == "Calendar create input was cancelled."
+    assert out.content == "일정 생성 입력을 취소했습니다."
     assert "calendar_create_input" not in session.metadata
     assert "calendar_pending_interaction" not in session.metadata
 

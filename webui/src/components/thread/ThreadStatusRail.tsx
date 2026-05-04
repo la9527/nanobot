@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import { useTranslation } from "react-i18next";
 
 interface ThreadStatusRailProps {
   items: string[];
@@ -7,6 +8,8 @@ interface ThreadStatusRailProps {
 }
 
 export function ThreadStatusRail({ items, caption = null, onOpenDetails }: ThreadStatusRailProps) {
+  const { t } = useTranslation();
+
   if (items.length === 0 && !caption && !onOpenDetails) return null;
 
   return (
@@ -29,7 +32,7 @@ export function ThreadStatusRail({ items, caption = null, onOpenDetails }: Threa
               onClick={onOpenDetails}
               className="ml-auto h-6 rounded-full px-2 text-[11px] text-muted-foreground"
             >
-              Assistant details
+              {t("thread.statusRail.detailsButton")}
             </Button>
           ) : null}
         </div>

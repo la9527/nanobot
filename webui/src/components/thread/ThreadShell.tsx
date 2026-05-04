@@ -72,7 +72,7 @@ function toModelBadgeLabel(
   return label;
 }
 
-function formatContinuitySummary(session: ChatSummary | null): {
+function formatContinuitySummary(session: ChatSummary | null, t: TFunction): {
   title: string;
   body: string;
 } | null {
@@ -85,23 +85,23 @@ function formatContinuitySummary(session: ChatSummary | null): {
 
   if (!ownerId && !externalIdentity && !trustLevel) {
     return {
-      title: "Linked external session",
-      body: `This thread is attached to the current ${channelLabel} conversation. Replies and approval steps may continue against that linked session.`,
+      title: t("thread.details.linkedExternalSession.title"),
+      body: t("thread.details.linkedExternalSession.bodySimple", { channel: channelLabel }),
     };
   }
 
   const parts = [
-    `This thread is attached to the current ${channelLabel} conversation for owner ${ownerId || "primary-user"}.`,
+    t("thread.details.linkedExternalSession.bodyWithOwner", { channel: channelLabel, owner: ownerId || "primary-user" }),
   ];
   if (externalIdentity) {
-    parts.push(`Linked identity: ${externalIdentity}.`);
+    parts.push(t("thread.details.linkedExternalSession.identity", { identity: externalIdentity }));
   }
   if (trustLevel) {
-    parts.push(`Trust: ${trustLevel}.`);
+    parts.push(t("thread.details.linkedExternalSession.trust", { trust: trustLevel }));
   }
-  parts.push("Replies and approval steps may continue against that linked session.");
+  parts.push(t("thread.details.linkedExternalSession.repliesContinue"));
   return {
-    title: "Linked external session",
+    title: t("thread.details.linkedExternalSession.title"),
     body: parts.join(" "),
   };
 }
@@ -181,6 +181,7 @@ function deriveOwnerAwareSummary(params: {
   sessions: ChatSummary[];
   assistantActive: boolean;
   currentThreadTone: ThreadStatusTone | null;
+  t: TFunction;
 }): {
   title: string;
   body: string;
@@ -190,7 +191,7 @@ function deriveOwnerAwareSummary(params: {
   suppressedProactiveCount: number;
   nextStepHint: string | null;
 } | null {
-  const { session, sessions, assistantActive, currentThreadTone } = params;
+  const { session, sessions, assistantActive, currentThreadTone, t } = params;
   if (!session) return null;
 
   const ownerId = canonicalOwnerId(session);
@@ -231,19 +232,19 @@ function deriveOwnerAwareSummary(params: {
 
   const metrics: string[] = [];
   if (activeTaskCount > 0) {
-    metrics.push(`${activeTaskCount} active now`);
+    metrics.push(t("thread.details.ownerSummary.metrics.activeNow", { count: activeTaskCount }));
   }
   if (approvalPendingCount > 0) {
-    metrics.push(`${approvalPendingCount} approval pending`);
+    metrics.push(t("thread.details.ownerSummary.metrics.approvalPending", { count: approvalPendingCount }));
   }
   if (blockedCount > 0) {
-    metrics.push(`${blockedCount} blocked`);
+    metrics.push(t("thread.details.ownerSummary.metrics.blocked", { count: blockedCount }));
   }
   if (suppressedProactiveCount > 0) {
-    metrics.push(`${suppressedProactiveCount} proactive held`);
+    metrics.push(t("thread.details.ownerSummary.metrics.proactiveHeld", { count: suppressedProactiveCount }));
   }
   if (linkedSessionCount > 0) {
-    metrics.push(`${linkedSessionCount} linked sessions`);
+    metrics.push(t("thread.details.ownerSummary.metrics.linkedSessions", { count: linkedSessionCount }));
   }
 
   const latestSuppressedProactive = [...suppressedProactiveSessions]
@@ -285,8 +286,11 @@ function deriveOwnerAwareSummary(params: {
       latestExternalSession.updatedAt ?? latestExternalSession.createdAt,
     );
     const channelLabel = toChannelBadgeLabel(latestExternalSession.channel);
+    const updatedSuffix = updatedLabel
+      ? t("thread.details.ownerSummary.updatedSuffix", { updated: updatedLabel })
+      : "";
     bodyParts.push(
-      `Latest external activity: ${channelLabel}${updatedLabel ? ` updated ${updatedLabel}` : ""}.`,
+      t("thread.details.ownerSummary.latestExternalActivity", { channel: channelLabel, updatedSuffix }),
     );
   }
   if (recentCompletedSession) {
@@ -294,8 +298,11 @@ function deriveOwnerAwareSummary(params: {
       recentCompletedSession.updatedAt ?? recentCompletedSession.createdAt,
     );
     const channelLabel = toChannelBadgeLabel(recentCompletedSession.channel);
+    const updatedSuffix = updatedLabel
+      ? t("thread.details.ownerSummary.updatedSuffix", { updated: updatedLabel })
+      : "";
     bodyParts.push(
-      `Recent completion: ${channelLabel}${updatedLabel ? ` updated ${updatedLabel}` : ""}.`,
+      t("thread.details.ownerSummary.recentCompletion", { channel: channelLabel, updatedSuffix }),
     );
   }
   if (latestSuppressedProactive) {
@@ -306,8 +313,15 @@ function deriveOwnerAwareSummary(params: {
     const updatedLabel = relativeTime(
       proactive?.updatedAt ?? latestSuppressedProactive.updatedAt ?? latestSuppressedProactive.createdAt,
     );
+    const updatedSuffix = updatedLabel
+      ? t("thread.details.ownerSummary.updatedLead", { updated: updatedLabel })
+      : "";
     bodyParts.push(
-      `Quiet hours held ${proactive?.title ?? "the latest proactive update"} for ${channelLabel}${updatedLabel ? ` ${updatedLabel}` : ""}.`,
+      t("thread.details.ownerSummary.quietHoursHeld", {
+        title: proactive?.title ?? t("thread.details.ownerSummary.latestProactiveUpdate"),
+        channel: channelLabel,
+        updatedSuffix,
+      }),
     );
   }
   const nextTaskHint = [
@@ -319,17 +333,17 @@ function deriveOwnerAwareSummary(params: {
     .find((hint) => Boolean(hint));
 
   if (nextTaskHint) {
-    bodyParts.push(`Next step: ${nextTaskHint}`);
+    bodyParts.push(t("thread.details.currentTask.nextStep", { hint: nextTaskHint }));
   } else if (approvalPendingCount > 0) {
-    bodyParts.push("Next step: review the pending approval request.");
+    bodyParts.push(t("thread.details.ownerSummary.nextStepReviewApproval"));
   } else if (blockedCount > 0) {
-    bodyParts.push("Next step: reopen the blocked session and continue the interrupted action.");
+    bodyParts.push(t("thread.details.ownerSummary.nextStepReopenBlocked"));
   } else if (suppressedProactiveCount > 0) {
-    bodyParts.push("Next step: open WebUI to review the held proactive update.");
+    bodyParts.push(t("thread.details.ownerSummary.nextStepOpenWebUI"));
   }
 
   return {
-    title: "Assistant summary",
+    title: t("thread.details.assistantOverview.title"),
     body: bodyParts.join(" "),
     approvalPendingCount,
     blockedCount,
@@ -458,24 +472,24 @@ export function ThreadShell({
     }> = [];
     const modelLabel = toModelBadgeLabel(modelName, activeTarget);
     if (modelLabel) {
-      badges.push({ label: `Target ${modelLabel}` });
+      badges.push({ label: t("thread.headerBadges.target", { label: modelLabel }) });
     }
-    badges.push({ label: `Channel ${toChannelBadgeLabel(session?.channel)}`, tone: "muted" });
+    badges.push({ label: t("thread.headerBadges.channel", { channel: toChannelBadgeLabel(session?.channel) }), tone: "muted" });
     if (session?.channel && session.channel !== "websocket") {
-      badges.push({ label: "Linked session", tone: "muted" });
+      badges.push({ label: t("thread.headerBadges.linkedSession"), tone: "muted" });
     }
     if (pendingAsk || pendingApprovalMessage) {
       badges.push({ label: approvalPendingBadgeLabel(), tone: "warning" });
     }
     if (isStreaming || remoteReplyPending || booting || modelTargetPending) {
-      badges.push({ label: "Assistant active", tone: "active" });
+      badges.push({ label: t("thread.headerBadges.assistantActive"), tone: "active" });
     }
     return badges;
-  }, [activeTarget, booting, isStreaming, modelName, modelTargetPending, pendingApprovalMessage, pendingAsk, remoteReplyPending, session?.channel]);
+  }, [activeTarget, booting, isStreaming, modelName, modelTargetPending, pendingApprovalMessage, pendingAsk, remoteReplyPending, session?.channel, t]);
 
   const continuityPlaceholder = useMemo(() => {
-    return formatContinuitySummary(session);
-  }, [session]);
+    return formatContinuitySummary(session, t);
+  }, [session, t]);
 
   const threadStatus = useMemo(
     () => deriveThreadStatus({
@@ -498,8 +512,9 @@ export function ThreadShell({
       sessions,
       assistantActive: isStreaming || remoteReplyPending || booting || modelTargetPending,
       currentThreadTone: threadStatus?.tone ?? null,
+      t,
     });
-  }, [booting, isStreaming, modelTargetPending, remoteReplyPending, session, sessions, threadStatus?.tone]);
+  }, [booting, isStreaming, modelTargetPending, remoteReplyPending, session, sessions, t, threadStatus?.tone]);
 
   const currentTaskSummary = useMemo(() => getTaskSummary(session), [session]);
   const currentOwnerProfile = useMemo(() => getOwnerProfile(session), [session]);
@@ -552,26 +567,34 @@ export function ThreadShell({
   const statusRailItems = useMemo(() => {
     const items: string[] = [];
     if (ownerAwareSummary?.approvalPendingCount) {
-      items.push(ownerAwareSummary.approvalPendingCount === 1 ? "Approval pending" : `Approvals ${ownerAwareSummary.approvalPendingCount}`);
+      items.push(
+        ownerAwareSummary.approvalPendingCount === 1
+          ? t("thread.statusRail.approvalPending")
+          : t("thread.statusRail.approvals", { count: ownerAwareSummary.approvalPendingCount }),
+      );
     }
     if (ownerAwareSummary?.blockedCount) {
-      items.push(ownerAwareSummary.blockedCount === 1 ? "Blocked" : `Blocked ${ownerAwareSummary.blockedCount}`);
+      items.push(
+        ownerAwareSummary.blockedCount === 1
+          ? t("thread.statusRail.blocked")
+          : t("thread.statusRail.blockedCount", { count: ownerAwareSummary.blockedCount }),
+      );
     }
     if (ownerAwareSummary?.suppressedProactiveCount) {
-      items.push(`Held ${ownerAwareSummary.suppressedProactiveCount}`);
+      items.push(t("thread.statusRail.held", { count: ownerAwareSummary.suppressedProactiveCount }));
     }
     if (ownerAwareSummary?.linkedSessionCount) {
-      items.push(`Linked ${ownerAwareSummary.linkedSessionCount}`);
+      items.push(t("thread.statusRail.linkedSessions", { count: ownerAwareSummary.linkedSessionCount }));
     }
     if (session?.channel && session.channel !== "websocket") {
-      items.push(`Linked ${toChannelBadgeLabel(session.channel)}`);
+      items.push(t("thread.statusRail.linkedChannel", { channel: toChannelBadgeLabel(session.channel) }));
     }
     const updatedLabel = relativeTime(session?.updatedAt ?? session?.createdAt);
     if (updatedLabel) {
-      items.push(`Updated ${updatedLabel}`);
+      items.push(t("thread.statusRail.updated", { time: updatedLabel }));
     }
     return items.slice(0, 4);
-  }, [ownerAwareSummary?.approvalPendingCount, ownerAwareSummary?.blockedCount, ownerAwareSummary?.suppressedProactiveCount, session?.channel, session?.createdAt, session?.updatedAt]);
+  }, [ownerAwareSummary?.approvalPendingCount, ownerAwareSummary?.blockedCount, ownerAwareSummary?.suppressedProactiveCount, ownerAwareSummary?.linkedSessionCount, session?.channel, session?.createdAt, session?.updatedAt, t]);
 
   const statusRailCaption = useMemo(() => {
     if (currentTaskSummary?.status === "waiting-approval" || currentTaskSummary?.status === "blocked") {

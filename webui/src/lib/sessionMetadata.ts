@@ -1,4 +1,5 @@
 import type { ChatSummary } from "@/lib/types";
+import i18n from "@/i18n";
 
 export interface DerivedTaskSummary {
   taskId: string | null;
@@ -61,12 +62,12 @@ export interface DerivedPendingInteraction {
 }
 
 export function toChannelBadgeLabel(channel: string | null | undefined): string {
-  if (!channel) return "WebUI";
-  if (channel === "websocket") return "WebUI";
-  if (channel === "telegram") return "Telegram";
-  if (channel === "discord") return "Discord";
-  if (channel === "email") return "Email";
-  if (channel === "slack") return "Slack";
+  if (!channel) return i18n.t("channels.webui");
+  if (channel === "websocket") return i18n.t("channels.webui");
+  if (channel === "telegram") return i18n.t("channels.telegram");
+  if (channel === "discord") return i18n.t("channels.discord");
+  if (channel === "email") return i18n.t("channels.email");
+  if (channel === "slack") return i18n.t("channels.slack");
   return channel;
 }
 
@@ -75,14 +76,14 @@ export function hasPendingApproval(session: ChatSummary | null | undefined): boo
 }
 
 export function approvalPendingBadgeLabel(): string {
-  return "Approval pending";
+  return i18n.t("thread.approval.pendingBadge");
 }
 
 export function approvalSummaryLabel(session: ChatSummary | null | undefined): string | null {
   const summary = session?.metadata?.approval_summary;
   if (!summary || summary.status !== "pending") return null;
 
-  const toolName = summary.tool_name?.trim() || "tool";
+  const toolName = summary.tool_name?.trim() || i18n.t("thread.approval.toolFallback");
   if (toolName === "calendar.create_event") {
     const request = session?.metadata?.calendar_create_approval;
     const pendingRequest = session?.metadata?.calendar_pending_interaction?.request;
@@ -91,13 +92,15 @@ export function approvalSummaryLabel(session: ChatSummary | null | undefined): s
     const startAt = request?.start_at?.trim() || (typeof pending?.start_at === "string" ? pending.start_at.trim() : "");
     const endAt = request?.end_at?.trim() || (typeof pending?.end_at === "string" ? pending.end_at.trim() : "");
     if (title && startAt && endAt) {
-      return `Calendar create approval pending: ${title} (${startAt} -> ${endAt})`;
+      return i18n.t("thread.approval.calendarCreatePendingWindow", { title, startAt, endAt });
     }
-    if (title) return `Calendar create approval pending: ${title}`;
-    return "Calendar create approval pending.";
+    if (title) return i18n.t("thread.approval.calendarCreatePendingTitle", { title });
+    return i18n.t("thread.approval.calendarCreatePending");
   }
   const promptPreview = summary.prompt_preview?.trim();
-  return promptPreview ? `${toolName}: ${promptPreview}` : `${toolName} approval pending`;
+  return promptPreview
+    ? i18n.t("thread.approval.pendingWithPreview", { toolName, promptPreview })
+    : i18n.t("thread.approval.pendingWithTool", { toolName });
 }
 
 export function getCalendarPendingInteraction(
@@ -209,13 +212,13 @@ export function getProactiveSummary(
 }
 
 export function taskStatusLabel(status: string | null | undefined): string {
-  if (!status) return "Unknown";
-  if (status === "waiting-approval") return "Waiting approval";
-  if (status === "blocked") return "Blocked";
-  if (status === "completed") return "Completed";
-  if (status === "failed") return "Failed";
-  if (status === "scheduled") return "Scheduled";
-  if (status === "running") return "Running";
+  if (!status) return i18n.t("thread.statusTone.unknown");
+  if (status === "waiting-approval") return i18n.t("thread.statusTone.waitingApproval");
+  if (status === "blocked") return i18n.t("thread.statusTone.blocked");
+  if (status === "completed") return i18n.t("thread.statusTone.completed");
+  if (status === "failed") return i18n.t("thread.statusTone.failed");
+  if (status === "scheduled") return i18n.t("thread.statusTone.scheduled");
+  if (status === "running") return i18n.t("thread.statusTone.running");
   return status;
 }
 

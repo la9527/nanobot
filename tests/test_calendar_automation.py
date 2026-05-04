@@ -408,15 +408,59 @@ async def test_session_runner_persists_calendar_create_approval_and_approval_sum
     restored = runner.sessions.read_session_file("websocket:calendar-demo")
 
     assert result.status == "waiting_approval"
+    assert result.title == "일정 생성 승인 필요"
+    assert result.summary == "'치과' 일정을 생성하려면 승인이 필요합니다."
     assert restored is not None
     assert restored["metadata"]["approval_summary"]["status"] == "pending"
+    assert "이 일정을 생성하려면 승인이 필요합니다." in restored["metadata"]["approval_summary"]["prompt_preview"]
     assert restored["metadata"]["action_result"]["action"] == "create_event"
     assert restored["metadata"]["calendar_create_approval"]["title"] == "치과"
     pending = restored["metadata"]["calendar_pending_interaction"]
     assert pending["kind"] == "create_approval"
     assert pending["status"] == "pending"
+    assert pending["question"] == "'치과' 일정을 생성하려면 승인이 필요합니다."
     assert pending["buttons"] == [["승인", "취소"]]
     assert pending["request"]["title"] == "치과"
+
+
+@pytest.mark.asyncio
+async def test_session_runner_deny_create_persists_localized_cancellation_result(tmp_path) -> None:
+    class _Client:
+        async def create_event(self, request):
+            raise AssertionError("create_event should not be called during deny flow")
+
+        async def list_events(self, **kwargs):
+            raise AssertionError("list_events is not used in this test")
+
+        async def find_conflicts(self, **kwargs):
+            raise AssertionError("find_conflicts is not used in this test")
+
+        def _action_id(self, prefix: str) -> str:
+            return f"{prefix}-test"
+
+        config = N8NCalendarAutomationConfig(base_url="http://127.0.0.1:5678")
+
+    runner = CalendarAutomationSessionRunner(SessionManager(tmp_path), _Client())
+    await runner.request_create_approval(
+        "websocket:calendar-demo",
+        CalendarCreateRequest(
+            title="치과",
+            start_at="2026-05-02T15:00:00+09:00",
+            end_at="2026-05-02T16:00:00+09:00",
+        ),
+    )
+
+    result = await runner.deny_create("websocket:calendar-demo")
+    restored = runner.sessions.read_session_file("websocket:calendar-demo")
+
+    assert result.status == "rejected"
+    assert result.title == "일정 생성 취소됨"
+    assert result.summary == "보류 중이던 일정 생성 요청을 취소했습니다."
+    assert result.next_step == "필요하면 제안된 일정을 검토한 뒤 다시 승인 요청을 올리세요."
+    assert restored is not None
+    assert restored["metadata"]["action_result"]["summary"] == "보류 중이던 일정 생성 요청을 취소했습니다."
+    assert "calendar_pending_interaction" not in restored["metadata"]
+    assert "calendar_create_approval" not in restored["metadata"]
 
 
 @pytest.mark.asyncio
@@ -440,6 +484,6 @@ async def test_session_runner_deny_without_pending_does_not_create_event(tmp_pat
     restored = runner.sessions.read_session_file("websocket:calendar-demo")
 
     assert result.status == "blocked"
-    assert "no pending calendar create approval to cancel" in result.summary
+    assert result.summary == "이 세션에는 취소할 일정 생성 승인 요청이 없습니다."
     assert restored is not None
     assert restored["metadata"]["action_result"]["action_id"] == "calendar-create-no-pending-cancel-test"

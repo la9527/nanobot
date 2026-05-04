@@ -929,6 +929,7 @@ def _mail_send_content(result) -> str:
 
 
 def _calendar_result_content(result) -> str:
+    locale = CALENDAR_DEFAULT_LOCALE
     lines = [result.title, "", result.summary]
     preview = getattr(result.details, "preview", None)
     if preview is not None:
@@ -936,25 +937,25 @@ def _calendar_result_content(result) -> str:
         if target is not None:
             lines.extend([
                 "",
-                f"Target: {target.title}",
-                f"Current: {target.start_at} -> {target.end_at}",
+                f"{_t('calendar.fields.target', locale=locale)} {target.title}",
+                f"{_t('calendar.fields.current', locale=locale)} {target.start_at} -> {target.end_at}",
             ])
         lines.extend([
             "",
-            f"Title: {preview.title}",
-            f"When: {preview.start_at} -> {preview.end_at}",
+            f"{_t('calendar.fields.title', locale=locale)} {preview.title}",
+            f"{_t('calendar.fields.when', locale=locale)} {preview.start_at} -> {preview.end_at}",
         ])
         if getattr(preview, "location", None):
-            lines.append(f"Location: {preview.location}")
+            lines.append(f"{_t('calendar.fields.location', locale=locale)} {preview.location}")
         if getattr(preview, "description", None):
-            lines.append(f"Details: {preview.description}")
+            lines.append(f"{_t('calendar.fields.details', locale=locale)} {preview.description}")
     else:
         requested_start_at = getattr(result.details, "requested_start_at", None)
         requested_end_at = getattr(result.details, "requested_end_at", None)
         if requested_start_at and requested_end_at:
             lines.extend([
                 "",
-                f"When: {requested_start_at} -> {requested_end_at}",
+                f"{_t('calendar.fields.when', locale=locale)} {requested_start_at} -> {requested_end_at}",
             ])
         conflicting_events = getattr(result.details, "conflicting_events", []) or []
         if conflicting_events:
@@ -967,11 +968,11 @@ def _calendar_result_content(result) -> str:
         if target is not None:
             lines.extend([
                 "",
-                f"Target: {target.title}",
-                f"When: {target.start_at} -> {target.end_at}",
+                f"{_t('calendar.fields.target', locale=locale)} {target.title}",
+                f"{_t('calendar.fields.when', locale=locale)} {target.start_at} -> {target.end_at}",
             ])
     if result.next_step:
-        lines.extend(["", f"Next step: {result.next_step}"])
+        lines.extend(["", f"{_t('calendar.fields.next_step', locale=locale)} {result.next_step}"])
     return "\n".join(lines)
 
 

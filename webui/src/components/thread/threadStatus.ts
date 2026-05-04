@@ -1,6 +1,7 @@
 import type { StreamError } from "@/lib/nanobot-client";
 import type { DerivedActionResult } from "@/lib/sessionMetadata";
 import type { UIMessage } from "@/lib/types";
+import i18n from "@/i18n";
 
 import type { ThreadStatusTone } from "@/components/thread/ThreadStatusBlock";
 
@@ -37,8 +38,8 @@ export function deriveThreadStatus(params: {
     if (streamError.kind === "message_too_big") {
       return {
         tone: "failed",
-        title: "Message rejected",
-        body: "The last message exceeded the upload size limit. Remove some attachments or use smaller files, then try again.",
+        title: i18n.t("thread.statusSummary.error.messageRejected"),
+        body: i18n.t("thread.statusSummary.error.messageTooBig"),
       };
     }
   }
@@ -47,22 +48,22 @@ export function deriveThreadStatus(params: {
   if (pendingApprovalMessage || pendingAsk) {
     return {
       tone: "waiting-approval",
-      title: "Assistant is waiting for confirmation",
-      body: summarizeStatusText(approvalSource, "Review the pending action and choose how to continue."),
+      title: i18n.t("thread.statusSummary.waitingApproval.title"),
+      body: summarizeStatusText(approvalSource, i18n.t("thread.statusSummary.waitingApproval.body")),
     };
   }
 
   if (modelTargetPending || booting || remoteReplyPending || isStreaming) {
     return {
       tone: "running",
-      title: "Assistant is working",
+      title: i18n.t("thread.statusSummary.running.title"),
       body: modelTargetPending
-        ? "Applying the selected target for this session."
+        ? i18n.t("thread.statusSummary.running.applyingTarget")
         : booting
-          ? "Preparing the new chat before sending your first message."
+          ? i18n.t("thread.statusSummary.running.preparingChat")
           : remoteReplyPending
-            ? "Waiting for the linked external session to return a reply."
-            : "Streaming the current assistant response.",
+            ? i18n.t("thread.statusSummary.running.waitingExternal")
+            : i18n.t("thread.statusSummary.running.streaming"),
     };
   }
 
@@ -78,14 +79,14 @@ export function deriveThreadStatus(params: {
             : "completed";
     return {
       tone,
-      title: actionResult.title || "Latest assistant action is ready",
+      title: actionResult.title || i18n.t("thread.statusSummary.completed.latestActionTitle"),
       body: summarizeStatusText(
         actionResult.summary
           || actionResult.inlineStatus
           || actionResult.errorMessage
           || actionResult.nextStep
-          || "The latest assistant action finished.",
-        "The latest assistant action finished.",
+          || i18n.t("thread.statusSummary.completed.latestActionBody"),
+        i18n.t("thread.statusSummary.completed.latestActionBody"),
       ),
     };
   }
@@ -97,8 +98,8 @@ export function deriveThreadStatus(params: {
 
   return {
     tone: "completed",
-    title: "Latest assistant update is ready",
-    body: summarizeStatusText(lastMeaningful.content, "The most recent assistant turn finished successfully."),
+    title: i18n.t("thread.statusSummary.completed.latestUpdateTitle"),
+    body: summarizeStatusText(lastMeaningful.content, i18n.t("thread.statusSummary.completed.latestUpdateBody")),
   };
 }
 

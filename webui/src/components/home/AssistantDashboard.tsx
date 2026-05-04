@@ -71,8 +71,8 @@ export function AssistantDashboard({ sessions, onOpenSession, onNewChat }: Assis
       if (hasPendingApproval(session) || task?.status === "waiting-approval") {
         return {
           key: session.key,
-          title: task?.title || approvalSummaryLabel(session) || "Approval required",
-          summary: task?.nextStepHint || "Review the pending approval request.",
+          title: task?.title || approvalSummaryLabel(session) || t("dashboard.fallback.approvalRequired"),
+          summary: task?.nextStepHint || t("dashboard.fallback.reviewPendingApproval"),
           channelLabel: toChannelBadgeLabel(session.channel),
           updatedLabel,
           updatedAtMs,
@@ -83,8 +83,8 @@ export function AssistantDashboard({ sessions, onOpenSession, onNewChat }: Assis
       if (isBlockedSession(session)) {
         return {
           key: session.key,
-          title: task?.title || "Blocked task",
-          summary: task?.nextStepHint || "Reopen the blocked thread and continue the interrupted action.",
+          title: task?.title || t("dashboard.fallback.blockedTask"),
+          summary: task?.nextStepHint || t("dashboard.fallback.reopenBlockedThread"),
           channelLabel: toChannelBadgeLabel(session.channel),
           updatedLabel,
           updatedAtMs,
@@ -95,8 +95,8 @@ export function AssistantDashboard({ sessions, onOpenSession, onNewChat }: Assis
       if (session.metadata?.pending_user_turn) {
         return {
           key: session.key,
-          title: task?.title || "Waiting input",
-          summary: task?.nextStepHint || "Open the thread and provide the missing input.",
+          title: task?.title || t("dashboard.fallback.waitingInput"),
+          summary: task?.nextStepHint || t("dashboard.fallback.provideMissingInput"),
           channelLabel: toChannelBadgeLabel(session.channel),
           updatedLabel,
           updatedAtMs,
@@ -107,8 +107,8 @@ export function AssistantDashboard({ sessions, onOpenSession, onNewChat }: Assis
       if (proactive?.status === "suppressed") {
         return {
           key: session.key,
-          title: proactive.title || "Proactive review needed",
-          summary: proactive.summary || "A proactive update is waiting in WebUI because external delivery was held.",
+          title: proactive.title || t("dashboard.fallback.proactiveReviewNeeded"),
+          summary: proactive.summary || t("dashboard.fallback.proactiveHeldForWebUI"),
           channelLabel: toChannelBadgeLabel(proactive.targetChannel || session.channel),
           updatedLabel: relativeTime(proactive.updatedAt ?? session.updatedAt ?? session.createdAt),
           updatedAtMs,
@@ -164,7 +164,7 @@ export function AssistantDashboard({ sessions, onOpenSession, onNewChat }: Assis
   return (
     <div className="w-full max-w-[52rem] space-y-3 animate-in fade-in-0 slide-in-from-bottom-2 duration-500">
       <section className="rounded-[18px] border border-border/50 bg-muted/15 p-3.5">
-        <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">Assistant dashboard</p>
+        <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">{t("dashboard.label")}</p>
         <h1 className="mt-1.5 text-[22px] font-semibold leading-tight text-foreground">{t("dashboard.hero.title")}</h1>
         <p className="mt-2 max-w-[38rem] text-[13px] leading-6 text-muted-foreground">{heroText}</p>
       </section>
@@ -233,7 +233,7 @@ export function AssistantDashboard({ sessions, onOpenSession, onNewChat }: Assis
               return (
                 <div key={session.key} className="rounded-[14px] border border-border/40 bg-background/70 px-2.5 py-2">
                   <div className="flex flex-wrap items-center gap-1.5">
-                    <p className="text-[13px] font-medium leading-5 text-foreground/88">{result?.title || "Completed result"}</p>
+                    <p className="text-[13px] font-medium leading-5 text-foreground/88">{result?.title || t("dashboard.fallback.completedResult")}</p>
                     <span className="inline-flex items-center rounded-full border border-border/60 bg-background/85 px-2 py-0.5 text-[10px] font-medium tracking-wide text-foreground/80">
                       {toChannelBadgeLabel(session.channel)}
                     </span>
@@ -259,7 +259,7 @@ export function AssistantDashboard({ sessions, onOpenSession, onNewChat }: Assis
                   <div className="flex flex-wrap items-center gap-1.5">
                     <p className="text-[13px] font-medium leading-5 text-foreground/88">{toChannelBadgeLabel(session.channel)}</p>
                     <span className="inline-flex items-center rounded-full border border-border/60 bg-background/85 px-2 py-0.5 text-[10px] font-medium tracking-wide text-foreground/80">
-                      {relativeTime(session.updatedAt ?? session.createdAt) || "recently updated"}
+                      {relativeTime(session.updatedAt ?? session.createdAt) || t("dashboard.fallback.recentlyUpdated")}
                     </span>
                   </div>
                   <p className="mt-1 text-[12px] leading-5">

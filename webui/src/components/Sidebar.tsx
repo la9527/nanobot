@@ -70,7 +70,7 @@ export function Sidebar(props: SidebarProps) {
           variant={props.activeView === "chat" && props.activeKey === null ? "secondary" : "ghost"}
         >
           <LayoutDashboard className="h-3.5 w-3.5" />
-          Dashboard
+          {t("sidebar.home")}
         </Button>
         <Button
           onClick={props.onNewChat}
@@ -112,7 +112,7 @@ export function Sidebar(props: SidebarProps) {
             variant={props.activeView === "settings" ? "secondary" : "ghost"}
           >
             <Settings className="h-3.5 w-3.5" />
-            Settings
+            {t("sidebar.settings")}
           </Button>
           <LanguageSwitcher />
         </div>

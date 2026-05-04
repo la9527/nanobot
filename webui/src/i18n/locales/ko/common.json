@@ -18,7 +18,9 @@
     }
   },
   "sidebar": {
+    "home": "대시보드",
     "collapse": "사이드바 접기",
+    "settings": "설정",
     "toggleTheme": "테마 전환",
     "newChat": "새 채팅",
     "recent": "최근 대화",
@@ -54,13 +56,119 @@
     "closed": "연결 끊김",
     "error": "연결 오류"
   },
+  "channels": {
+    "webui": "WebUI",
+    "telegram": "Telegram",
+    "discord": "Discord",
+    "email": "이메일",
+    "slack": "Slack"
+  },
   "thread": {
     "loadingConversation": "대화 불러오는 중…",
     "empty": {
-      "description": "질문을 하거나, 로컬 작업을 이어가거나, 새 스레드를 시작할 수 있습니다."
+      "title": "아직 채팅이 없습니다",
+      "description": "질문을 하거나, 로컬 작업을 이어가거나, 새 스레드를 시작할 수 있습니다.",
+      "body": "대화를 시작해 보세요. 세션은 nanobot 작업공간에 로컬로 저장되며 새로고침 후에도 유지됩니다."
     },
     "header": {
       "toggleSidebar": "사이드바 전환"
+    },
+    "headerBadges": {
+      "target": "타깃 {{label}}",
+      "channel": "채널 {{channel}}",
+      "linkedSession": "연결된 세션",
+      "assistantActive": "Assistant 동작 중"
+    },
+    "statusRail": {
+      "detailsButton": "Assistant 세부 정보",
+      "approvalPending": "승인 대기",
+      "approvals": "승인 {{count}}건",
+      "blocked": "막힘",
+      "blockedCount": "막힘 {{count}}건",
+      "held": "보류 {{count}}건",
+      "linkedSessions": "연결 {{count}}건",
+      "linkedChannel": "연결 {{channel}}",
+      "updated": "업데이트 {{time}}"
+    },
+    "statusTone": {
+      "unknown": "알 수 없음",
+      "running": "실행 중",
+      "waitingApproval": "승인 대기",
+      "blocked": "막힘",
+      "completed": "완료됨",
+      "failed": "실패",
+      "scheduled": "예약됨"
+    },
+    "approval": {
+      "toolFallback": "도구",
+      "pendingBadge": "승인 대기",
+      "calendarCreatePending": "일정 생성 승인이 대기 중입니다.",
+      "calendarCreatePendingTitle": "일정 생성 승인이 대기 중입니다: {{title}}",
+      "calendarCreatePendingWindow": "일정 생성 승인이 대기 중입니다: {{title}} ({{startAt}} -> {{endAt}})",
+      "pendingWithPreview": "{{toolName}}: {{promptPreview}}",
+      "pendingWithTool": "{{toolName}} 승인 대기"
+    },
+    "inlineAction": {
+      "label": {
+        "calendar": "일정 결과",
+        "mail": "메일 결과",
+        "latest": "최근 결과"
+      },
+      "status": {
+        "approvalPending": "승인 대기"
+      },
+      "badge": {
+        "eventPreview": "일정 미리보기",
+        "draftPreview": "초안 미리보기",
+        "conflictCheck": "충돌 확인",
+        "threadSummary": "스레드 요약"
+      },
+      "actions": {
+        "details": "세부 정보",
+        "hide": "숨기기"
+      },
+      "fields": {
+        "to": "받는 사람:",
+        "subject": "제목:",
+        "preview": "미리보기:",
+        "title": "제목:",
+        "when": "시간:",
+        "location": "장소:",
+        "details": "세부 내용:",
+        "reason": "사유:"
+      },
+      "conflict": {
+        "withTitle": "{{title}} 일정과 충돌",
+        "moreCount": "외 {{count}}건"
+      },
+      "fallback": {
+        "untitledEvent": "(제목 없는 일정)",
+        "noSubject": "(제목 없음)",
+        "noSummary": "요약이 없습니다."
+      }
+    },
+    "statusSummary": {
+      "error": {
+        "messageRejected": "메시지 거부됨",
+        "messageTooBig": "마지막 메시지가 업로드 크기 제한을 초과했습니다. 첨부를 줄이거나 더 작은 파일로 다시 시도하세요."
+      },
+      "waitingApproval": {
+        "title": "Assistant가 확인을 기다리고 있습니다",
+        "body": "대기 중인 작업을 검토하고 어떻게 진행할지 선택하세요."
+      },
+      "running": {
+        "title": "Assistant가 작업 중입니다",
+        "applyingTarget": "이 세션에 선택한 타깃을 적용하고 있습니다.",
+        "preparingChat": "첫 메시지를 보내기 전에 새 채팅을 준비하고 있습니다.",
+        "waitingExternal": "연결된 외부 세션의 응답을 기다리고 있습니다.",
+        "streaming": "현재 assistant 응답을 스트리밍하고 있습니다."
+      },
+      "completed": {
+        "latestActionTitle": "최근 assistant 작업이 준비되었습니다",
+        "latestActionBody": "최근 assistant 작업이 완료되었습니다.",
+        "latestUpdateTitle": "최근 assistant 업데이트가 준비되었습니다",
+        "latestUpdateBody": "가장 최근 assistant 응답이 정상적으로 완료되었습니다."
+      }
     },
     "composer": {
       "placeholderThread": "메시지를 입력하세요…",
@@ -103,20 +211,102 @@
         "storeUserOrMemory": "저장 위치: USER.md 또는 memory/MEMORY.md"
       }
     },
+    "details": {
+      "title": "Assistant 세부 정보",
+      "description": "대화 자체를 중심에 두고, thread 단위 metadata와 보조 도구는 여기에서 확인합니다.",
+      "noExtra": {
+        "title": "추가 세부 정보 없음",
+        "body": "이 thread에는 아직 추가 owner 정보나 task metadata가 없습니다."
+      },
+      "assistantOverview": {
+        "title": "Assistant 개요"
+      },
+      "currentTask": {
+        "title": "현재 task",
+        "origin": "시작 채널 {{channel}}",
+        "nextStep": "다음 단계: {{hint}}"
+      },
+      "ownerDefaults": {
+        "title": "Owner 기본값",
+        "unknownLanguage": "알 수 없는 언어",
+        "unknownTimezone": "알 수 없는 시간대",
+        "defaultTone": "기본 응답 톤",
+        "defaultLength": "기본 응답 길이"
+      },
+      "linkedExternalSession": {
+        "title": "연결된 외부 세션",
+        "bodySimple": "이 thread는 현재 {{channel}} 대화에 연결되어 있습니다. 응답과 승인 흐름은 이 연결된 세션을 기준으로 이어질 수 있습니다.",
+        "bodyWithOwner": "이 thread는 owner {{owner}} 의 현재 {{channel}} 대화에 연결되어 있습니다.",
+        "identity": "연결된 identity: {{identity}}.",
+        "trust": "신뢰 수준: {{trust}}.",
+        "repliesContinue": "응답과 승인 흐름은 이 연결된 세션을 기준으로 이어질 수 있습니다."
+      },
+      "memoryTools": {
+        "title": "Memory 도구",
+        "description": "일반 대화가 아니라 오래 유지될 memory를 바로잡고 싶을 때만 사용합니다."
+      },
+      "ownerSummary": {
+        "latestProactiveUpdate": "가장 최근 proactive update",
+        "updatedSuffix": " · {{updated}} 업데이트",
+        "updatedLead": " {{updated}} 기준",
+        "latestExternalActivity": "가장 최근 외부 활동: {{channel}}{{updatedSuffix}}.",
+        "recentCompletion": "최근 완료 항목: {{channel}}{{updatedSuffix}}.",
+        "quietHoursHeld": "조용한 시간대로 인해 {{channel}} 용 {{title}} 이(가){{updatedSuffix}} 보류 중입니다.",
+        "nextStepReviewApproval": "다음 단계: 대기 중인 승인 요청을 검토하세요.",
+        "nextStepReopenBlocked": "다음 단계: 막힌 세션을 다시 열고 중단된 작업을 이어가세요.",
+        "nextStepOpenWebUI": "다음 단계: WebUI 에서 보류된 proactive update 를 검토하세요.",
+        "metrics": {
+          "activeNow": "현재 활성 {{count}}건",
+          "approvalPending": "승인 대기 {{count}}건",
+          "blocked": "막힘 {{count}}건",
+          "proactiveHeld": "proactive 보류 {{count}}건",
+          "linkedSessions": "연결 세션 {{count}}건"
+        }
+      }
+    },
     "scrollToBottom": "맨 아래로 스크롤"
   },
-  "dashboard": {
-    "hero": {
-      "title": "오늘 처리할 것과 최근 assistant 상태",
-      "hasItems": "오늘 바로 처리할 항목 {{total}}개가 있습니다. 승인 {{approvals}}건, 막힘 {{blocked}}건, held update {{held}}건입니다.",
-      "empty": "지금 급한 queue 는 비어 있습니다. 최근 결과를 확인하거나 새 작업을 시작할 수 있습니다."
+  "settings": {
+    "backToChat": "채팅으로 돌아가기",
+    "title": "일반",
+    "description": "모델 선택, 테마, 채팅 가독성을 위한 기본 assistant 설정입니다.",
+    "loading": "설정을 불러오는 중...",
+    "loadErrorTitle": "설정을 불러올 수 없습니다",
+    "managedByRuntimeBody": "provider 또는 model 값은 현재 runtime 설정에서 잠겨 있습니다.",
+    "toggleTheme": "테마 전환",
+    "decreaseChatFontSize": "채팅 글자 크기 줄이기",
+    "increaseChatFontSize": "채팅 글자 크기 키우기",
+    "theme": {
+      "light": "라이트",
+      "dark": "다크"
     },
     "sections": {
-      "priorityQueue": "Priority queue",
-      "todayBrief": "Today brief",
-      "quickActions": "Quick actions",
-      "recentOutcomes": "Recent outcomes",
-      "linkedChannels": "Linked channels"
+      "assistant": "Assistant",
+      "themes": "테마",
+      "interface": "인터페이스"
+    },
+    "rows": {
+      "defaultProvider": "기본 provider",
+      "defaultModel": "기본 model",
+      "managedByRuntime": "runtime에서 관리됨",
+      "theme": "테마",
+      "chatFontSize": "채팅 글자 크기",
+      "language": "언어"
+    }
+  },
+  "dashboard": {
+    "label": "Assistant 대시보드",
+    "hero": {
+      "title": "오늘 처리할 것과 최근 assistant 상태",
+      "hasItems": "오늘 바로 처리할 항목 {{total}}개가 있습니다. 승인 {{approvals}}건, 막힘 {{blocked}}건, 보류된 update {{held}}건입니다.",
+      "empty": "지금 급한 대기열은 비어 있습니다. 최근 결과를 확인하거나 새 작업을 시작할 수 있습니다."
+    },
+    "sections": {
+      "priorityQueue": "우선순위 대기열",
+      "todayBrief": "오늘 브리프",
+      "quickActions": "빠른 작업",
+      "recentOutcomes": "최근 결과",
+      "linkedChannels": "연결된 채널"
     },
     "cta": {
       "openApproval": "승인 열기",
@@ -126,7 +316,7 @@
       "openThread": "해당 thread 열기"
     },
     "priority": {
-      "empty": "지금 바로 triage 할 queue 는 없습니다."
+      "empty": "지금 바로 분류할 대기열은 없습니다."
     },
     "todayBrief": {
       "calendarFallback": "최근 일정 요약이 있습니다.",
@@ -144,10 +334,22 @@
       "summaryFallback": "최근 완료된 작업입니다.",
       "empty": "최근 완료된 assistant 결과가 아직 없습니다."
     },
+    "fallback": {
+      "approvalRequired": "승인 필요",
+      "reviewPendingApproval": "대기 중인 승인 요청을 검토하세요.",
+      "blockedTask": "막힌 작업",
+      "reopenBlockedThread": "중단된 thread를 다시 열고 중단된 작업을 이어가세요.",
+      "waitingInput": "입력 대기",
+      "provideMissingInput": "thread를 열고 필요한 입력을 이어서 주세요.",
+      "proactiveReviewNeeded": "Proactive 검토 필요",
+      "proactiveHeldForWebUI": "외부 전달이 보류되어 WebUI에서 proactive update를 검토해야 합니다.",
+      "completedResult": "완료된 결과",
+      "recentlyUpdated": "방금 업데이트됨"
+    },
     "linkedChannels": {
-      "proactiveUpdate": "Proactive update",
+      "proactiveUpdate": "Proactive 업데이트",
       "held": "{{title}} 항목이 WebUI에 보류되어 있습니다.",
-      "connected": "연결되어 있으며 cross-thread 후속 작업에 사용할 수 있습니다.",
+      "connected": "연결되어 있으며 thread 간 후속 작업에 사용할 수 있습니다.",
       "empty": "현재 WebUI 외 연결된 외부 채널 상태가 없습니다."
     }
   },

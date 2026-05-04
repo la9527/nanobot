@@ -18,7 +18,9 @@
     }
   },
   "sidebar": {
+    "home": "Dashboard",
     "collapse": "Collapse sidebar",
+    "settings": "Settings",
     "toggleTheme": "Toggle theme",
     "newChat": "New chat",
     "recent": "Recent",
@@ -54,13 +56,119 @@
     "closed": "Disconnected",
     "error": "Connection error"
   },
+  "channels": {
+    "webui": "WebUI",
+    "telegram": "Telegram",
+    "discord": "Discord",
+    "email": "Email",
+    "slack": "Slack"
+  },
   "thread": {
     "loadingConversation": "Loading conversation…",
     "empty": {
-      "description": "Ask questions, continue local work, or start a new thread."
+      "title": "No chats yet",
+      "description": "Ask questions, continue local work, or start a new thread.",
+      "body": "Start a conversation. Your sessions are stored locally in the nanobot workspace and stay available across reloads."
     },
     "header": {
       "toggleSidebar": "Toggle sidebar"
+    },
+    "headerBadges": {
+      "target": "Target {{label}}",
+      "channel": "Channel {{channel}}",
+      "linkedSession": "Linked session",
+      "assistantActive": "Assistant active"
+    },
+    "statusRail": {
+      "detailsButton": "Assistant details",
+      "approvalPending": "Approval pending",
+      "approvals": "Approvals {{count}}",
+      "blocked": "Blocked",
+      "blockedCount": "Blocked {{count}}",
+      "held": "Held {{count}}",
+      "linkedSessions": "Linked {{count}}",
+      "linkedChannel": "Linked {{channel}}",
+      "updated": "Updated {{time}}"
+    },
+    "statusTone": {
+      "unknown": "Unknown",
+      "running": "Running",
+      "waitingApproval": "Waiting approval",
+      "blocked": "Blocked",
+      "completed": "Completed",
+      "failed": "Failed",
+      "scheduled": "Scheduled"
+    },
+    "approval": {
+      "toolFallback": "tool",
+      "pendingBadge": "Approval pending",
+      "calendarCreatePending": "Calendar create approval pending.",
+      "calendarCreatePendingTitle": "Calendar create approval pending: {{title}}",
+      "calendarCreatePendingWindow": "Calendar create approval pending: {{title}} ({{startAt}} -> {{endAt}})",
+      "pendingWithPreview": "{{toolName}}: {{promptPreview}}",
+      "pendingWithTool": "{{toolName}} approval pending"
+    },
+    "inlineAction": {
+      "label": {
+        "calendar": "Calendar result",
+        "mail": "Mail result",
+        "latest": "Latest result"
+      },
+      "status": {
+        "approvalPending": "Approval pending"
+      },
+      "badge": {
+        "eventPreview": "Event preview",
+        "draftPreview": "Draft preview",
+        "conflictCheck": "Conflict check",
+        "threadSummary": "Thread summary"
+      },
+      "actions": {
+        "details": "Details",
+        "hide": "Hide"
+      },
+      "fields": {
+        "to": "To:",
+        "subject": "Subject:",
+        "preview": "Preview:",
+        "title": "Title:",
+        "when": "When:",
+        "location": "Location:",
+        "details": "Details:",
+        "reason": "Reason:"
+      },
+      "conflict": {
+        "withTitle": "Conflicts with {{title}}",
+        "moreCount": "+{{count}} more"
+      },
+      "fallback": {
+        "untitledEvent": "(Untitled event)",
+        "noSubject": "(No subject)",
+        "noSummary": "No summary available."
+      }
+    },
+    "statusSummary": {
+      "error": {
+        "messageRejected": "Message rejected",
+        "messageTooBig": "The last message exceeded the upload size limit. Remove some attachments or use smaller files, then try again."
+      },
+      "waitingApproval": {
+        "title": "Assistant is waiting for confirmation",
+        "body": "Review the pending action and choose how to continue."
+      },
+      "running": {
+        "title": "Assistant is working",
+        "applyingTarget": "Applying the selected target for this session.",
+        "preparingChat": "Preparing the new chat before sending your first message.",
+        "waitingExternal": "Waiting for the linked external session to return a reply.",
+        "streaming": "Streaming the current assistant response."
+      },
+      "completed": {
+        "latestActionTitle": "Latest assistant action is ready",
+        "latestActionBody": "The latest assistant action finished.",
+        "latestUpdateTitle": "Latest assistant update is ready",
+        "latestUpdateBody": "The most recent assistant turn finished successfully."
+      }
     },
     "composer": {
       "placeholderThread": "Type your message…",
@@ -103,9 +211,91 @@
         "storeUserOrMemory": "Store: USER.md or memory/MEMORY.md"
       }
     },
+    "details": {
+      "title": "Assistant details",
+      "description": "Thread-level metadata and power tools live here so the conversation stays primary.",
+      "noExtra": {
+        "title": "No extra details",
+        "body": "This thread does not have additional owner or task metadata yet."
+      },
+      "assistantOverview": {
+        "title": "Assistant overview"
+      },
+      "currentTask": {
+        "title": "Current task",
+        "origin": "Origin {{channel}}",
+        "nextStep": "Next step: {{hint}}"
+      },
+      "ownerDefaults": {
+        "title": "Owner defaults",
+        "unknownLanguage": "unknown language",
+        "unknownTimezone": "unknown timezone",
+        "defaultTone": "default tone",
+        "defaultLength": "default length"
+      },
+      "linkedExternalSession": {
+        "title": "Linked external session",
+        "bodySimple": "This thread is attached to the current {{channel}} conversation. Replies and approval steps may continue against that linked session.",
+        "bodyWithOwner": "This thread is attached to the current {{channel}} conversation for owner {{owner}}.",
+        "identity": "Linked identity: {{identity}}.",
+        "trust": "Trust: {{trust}}.",
+        "repliesContinue": "Replies and approval steps may continue against that linked session."
+      },
+      "memoryTools": {
+        "title": "Memory tools",
+        "description": "Use these only when you want to correct durable memory, not for normal conversation turns."
+      },
+      "ownerSummary": {
+        "latestProactiveUpdate": "the latest proactive update",
+        "updatedSuffix": " updated {{updated}}",
+        "updatedLead": " {{updated}}",
+        "latestExternalActivity": "Latest external activity: {{channel}}{{updatedSuffix}}.",
+        "recentCompletion": "Recent completion: {{channel}}{{updatedSuffix}}.",
+        "quietHoursHeld": "Quiet hours held {{title}} for {{channel}}{{updatedSuffix}}.",
+        "nextStepReviewApproval": "Next step: review the pending approval request.",
+        "nextStepReopenBlocked": "Next step: reopen the blocked session and continue the interrupted action.",
+        "nextStepOpenWebUI": "Next step: open WebUI to review the held proactive update.",
+        "metrics": {
+          "activeNow": "{{count}} active now",
+          "approvalPending": "{{count}} approval pending",
+          "blocked": "{{count}} blocked",
+          "proactiveHeld": "{{count}} proactive held",
+          "linkedSessions": "{{count}} linked sessions"
+        }
+      }
+    },
     "scrollToBottom": "Scroll to bottom"
   },
+  "settings": {
+    "backToChat": "Back to chat",
+    "title": "General",
+    "description": "Default assistant settings for model selection, theme, and chat readability.",
+    "loading": "Loading settings...",
+    "loadErrorTitle": "Could not load settings",
+    "managedByRuntimeBody": "Provider or model is locked by the current runtime configuration.",
+    "toggleTheme": "Toggle theme",
+    "decreaseChatFontSize": "Decrease chat font size",
+    "increaseChatFontSize": "Increase chat font size",
+    "theme": {
+      "light": "Light",
+      "dark": "Dark"
+    },
+    "sections": {
+      "assistant": "Assistant",
+      "themes": "Themes",
+      "interface": "Interface"
+    },
+    "rows": {
+      "defaultProvider": "Default provider",
+      "defaultModel": "Default model",
+      "managedByRuntime": "Managed by runtime",
+      "theme": "Theme",
+      "chatFontSize": "Chat font size",
+      "language": "Language"
+    }
+  },
   "dashboard": {
+    "label": "Assistant dashboard",
     "hero": {
       "title": "What needs attention today and recent assistant status",
       "hasItems": "There are {{total}} items to handle today: {{approvals}} approvals, {{blocked}} blocked items, and {{held}} held updates.",
@@ -143,6 +333,18 @@
     "recentOutcomes": {
       "summaryFallback": "This task completed recently.",
       "empty": "There are no completed assistant results yet."
+    },
+    "fallback": {
+      "approvalRequired": "Approval required",
+      "reviewPendingApproval": "Review the pending approval request.",
+      "blockedTask": "Blocked task",
+      "reopenBlockedThread": "Reopen the blocked thread and continue the interrupted action.",
+      "waitingInput": "Waiting input",
+      "provideMissingInput": "Open the thread and provide the missing input.",
+      "proactiveReviewNeeded": "Proactive review needed",
+      "proactiveHeldForWebUI": "A proactive update is waiting in WebUI because external delivery was held.",
+      "completedResult": "Completed result",
+      "recentlyUpdated": "recently updated"
     },
     "linkedChannels": {
       "proactiveUpdate": "Proactive update",
