@@ -1045,6 +1045,7 @@ async def test_runner_blocks_tool_when_approval_is_denied():
         ),
         [ToolCallRequest(id="danger_1", name="danger", arguments={"command": "rm -rf tmp"})],
         {},
+        {},
     )
 
     assert tool.executed == 0
@@ -1072,6 +1073,7 @@ async def test_runner_executes_tool_after_approval():
             tool_approval_callback=AsyncMock(return_value=(True, None)),
         ),
         [ToolCallRequest(id="danger_1", name="danger", arguments={"command": "rm -rf tmp"})],
+        {},
         {},
     )
 
@@ -1269,7 +1271,7 @@ async def test_loop_stream_filter_hides_partial_trailing_think_prefix(tmp_path):
     async def on_stream(delta: str) -> None:
         deltas.append(delta)
 
-    final_content, _, _, _, _ = await loop._run_agent_loop([], on_stream=on_stream)
+    final_content, _, _, _, _, _ = await loop._run_agent_loop([], on_stream=on_stream)
 
     assert final_content == "Hello World"
     assert deltas == ["Hello", " World"]
@@ -1290,7 +1292,7 @@ async def test_loop_stream_filter_hides_complete_trailing_think_tag(tmp_path):
     async def on_stream(delta: str) -> None:
         deltas.append(delta)
 
-    final_content, _, _, _, _ = await loop._run_agent_loop([], on_stream=on_stream)
+    final_content, _, _, _, _, _ = await loop._run_agent_loop([], on_stream=on_stream)
 
     assert final_content == "Hello World"
     assert deltas == ["Hello", " World"]
