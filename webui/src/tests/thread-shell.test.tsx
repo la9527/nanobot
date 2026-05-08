@@ -105,6 +105,26 @@ describe("ThreadShell", () => {
     );
   });
 
+  it("does not navigate away when clicking the chat title", async () => {
+    const client = makeClient();
+    const onGoHome = vi.fn();
+    render(wrap(
+      client,
+      <ThreadShell
+        session={session("chat-title")}
+        title="Important conversation"
+        onToggleSidebar={() => {}}
+        onGoHome={onGoHome}
+        onNewChat={() => {}}
+      />,
+    ));
+
+    await waitFor(() => expect(screen.getByText("Important conversation")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("Important conversation"));
+
+    expect(onGoHome).not.toHaveBeenCalled();
+  });
+
   it("restores in-memory messages when switching away and back to a session", async () => {
     const client = makeClient();
     const onNewChat = vi.fn().mockResolvedValue("chat-a");
@@ -222,30 +242,135 @@ describe("ThreadShell", () => {
     await waitFor(() => {
       expect(screen.queryByText("delete me cleanly")).not.toBeInTheDocument();
     });
-    expect(screen.queryByRole("textbox", { name: "메시지 입력" })).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Ask anything...")).toBeInTheDocument();
   });
 
-  it("does not use the thread title as dashboard navigation anymore", async () => {
+  it("creates a chat only when the blank landing sends a first message", async () => {
     const client = makeClient();
-    const onGoHome = vi.fn();
+    const onNewChat = vi.fn();
+    const onCreateChat = vi.fn().mockResolvedValue("chat-new");
 
     render(
       wrap(
         client,
         <ThreadShell
-          session={session("chat-a")}
-          title="Chat chat-a"
+          session={null}
+          title="nanobot"
           onToggleSidebar={() => {}}
-          onGoHome={onGoHome}
-          onNewChat={vi.fn().mockResolvedValue("chat-a")}
+          onGoHome={() => {}}
+          onNewChat={onNewChat}
+          onCreateChat={onCreateChat}
         />,
       ),
     );
 
-    const title = await screen.findByText("Chat chat-a");
-    await userEvent.click(title);
+    fireEvent.change(screen.getByLabelText("Message input"), {
+      target: { value: "start for real" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
 
-    expect(onGoHome).not.toHaveBeenCalled();
+    await waitFor(() => expect(onCreateChat).toHaveBeenCalledTimes(1));
+    expect(onNewChat).not.toHaveBeenCalled();
+  });
+
+  it("keeps the first landing message when new chat history is still empty", async () => {
+    const client = makeClient();
+    const onCreateChat = vi.fn().mockResolvedValue("chat-new");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: false,
+        status: 404,
+        json: async () => ({}),
+      })),
+    );
+
+    const { rerender } = render(
+      wrap(
+        client,
+        <ThreadShell
+          session={null}
+          title="nanobot"
+          onToggleSidebar={() => {}}
+          onCreateChat={onCreateChat}
+        />,
+      ),
+    );
+
+    fireEvent.change(screen.getByLabelText("Message input"), {
+      target: { value: "first message should stay" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+
+    await waitFor(() => expect(onCreateChat).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      rerender(
+        wrap(
+          client,
+          <ThreadShell
+            session={session("chat-new")}
+            title="Chat chat-new"
+            onToggleSidebar={() => {}}
+            onCreateChat={onCreateChat}
+          />,
+        ),
+      );
+    });
+
+    await waitFor(() =>
+      expect(client.sendMessage).toHaveBeenCalledWith(
+        "chat-new",
+        "first message should stay",
+        undefined,
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.getByText("first message should stay")).toBeInTheDocument(),
+    );
+    expect(screen.queryByText("What can I do for you?")).not.toBeInTheDocument();
+  });
+
+  it("sends quick action prompts from the empty thread landing", async () => {
+    const client = makeClient();
+    const onCreateChat = vi.fn().mockResolvedValue("chat-a");
+
+    function Harness() {
+      const [activeSession, setActiveSession] = useState<ReturnType<typeof session> | null>(null);
+
+      return (
+        <ThreadShell
+          session={activeSession}
+          title={activeSession ? "Chat chat-a" : "nanobot"}
+          onToggleSidebar={() => {}}
+          onGoHome={() => {}}
+          onCreateChat={async () => {
+            const chatId = await onCreateChat();
+            if (chatId) {
+              setActiveSession(session(chatId));
+            }
+            return chatId;
+          }}
+        />
+      );
+    }
+
+    render(wrap(client, <Harness />));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Write code" })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Write code" }));
+
+    await waitFor(() =>
+      expect(client.sendMessage).toHaveBeenCalledWith(
+        "chat-a",
+        "Help me write the code for this task, starting with the smallest useful change.",
+        undefined,
+      ),
+    );
+    expect(onCreateChat).toHaveBeenCalledTimes(1);
   });
 
   it("does not leak the previous thread when opening a brand-new chat", async () => {
@@ -306,11 +431,11 @@ describe("ThreadShell", () => {
 
     expect(screen.queryAllByText("old answer")).toHaveLength(0);
     await waitFor(() =>
-      expect(screen.getByPlaceholderText("What's on your mind?")).toBeInTheDocument(),
+      expect(screen.getByPlaceholderText("Ask anything...")).toBeInTheDocument(),
     );
-    const input = screen.getByPlaceholderText("What's on your mind?");
-    expect(input.className).toContain("min-h-[96px]");
-    expect(screen.queryAllByText("old answer")).toHaveLength(0);
+    const input = screen.getByPlaceholderText("Ask anything...");
+    expect(input.className).toContain("min-h-[78px]");
+    expect(screen.queryByText("old answer")).not.toBeInTheDocument();
   });
 
   it("loads and changes the active model target for the current session", async () => {
@@ -381,6 +506,249 @@ describe("ThreadShell", () => {
     });
   });
 
+  it("does not cache optimistic messages under the next chat during a session switch", async () => {
+    const client = makeClient();
+    const onNewChat = vi.fn().mockResolvedValue("chat-b");
+
+    const { rerender } = render(
+      wrap(
+        client,
+        <ThreadShell
+          session={session("chat-a")}
+          title="Chat chat-a"
+          onToggleSidebar={() => {}}
+          onGoHome={() => {}}
+          onNewChat={onNewChat}
+        />,
+      ),
+    );
+
+    fireEvent.change(screen.getByLabelText("Message input"), {
+      target: { value: "only in chat a" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+
+    await waitFor(() =>
+      expect(client.sendMessage).toHaveBeenCalledWith(
+        "chat-a",
+        "only in chat a",
+        undefined,
+      ),
+    );
+    expect(screen.getByText("only in chat a")).toBeInTheDocument();
+
+    await act(async () => {
+      rerender(
+        wrap(
+          client,
+          <ThreadShell
+            session={session("chat-b")}
+            title="Chat chat-b"
+            onToggleSidebar={() => {}}
+            onGoHome={() => {}}
+            onNewChat={onNewChat}
+          />,
+        ),
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText("only in chat a")).not.toBeInTheDocument();
+    });
+
+    await act(async () => {
+      rerender(
+        wrap(
+          client,
+          <ThreadShell
+            session={session("chat-a")}
+            title="Chat chat-a"
+            onToggleSidebar={() => {}}
+            onGoHome={() => {}}
+            onNewChat={onNewChat}
+          />,
+        ),
+      );
+    });
+
+    expect(screen.getByText("only in chat a")).toBeInTheDocument();
+
+    await act(async () => {
+      rerender(
+        wrap(
+          client,
+          <ThreadShell
+            session={session("chat-b")}
+            title="Chat chat-b"
+            onToggleSidebar={() => {}}
+            onGoHome={() => {}}
+            onNewChat={onNewChat}
+          />,
+        ),
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText("only in chat a")).not.toBeInTheDocument();
+    });
+  });
+
+  it("keeps live assistant replies after visiting the blank new-chat page", async () => {
+    const client = makeClient();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("websocket%3Achat-a/messages")) {
+          return httpJson({
+            key: "websocket:chat-a",
+            created_at: null,
+            updated_at: null,
+            // Simulate a stale history response that has not persisted the
+            // just-received assistant reply yet.
+            messages: [{ role: "user", content: "hello" }],
+          });
+        }
+        return {
+          ok: false,
+          status: 404,
+          json: async () => ({}),
+        };
+      }),
+    );
+
+    const { rerender } = render(
+      wrap(
+        client,
+        <ThreadShell
+          session={session("chat-a")}
+          title="Chat chat-a"
+          onToggleSidebar={() => {}}
+          onNewChat={() => {}}
+        />,
+      ),
+    );
+
+    await waitFor(() => expect(screen.getByText("hello")).toBeInTheDocument());
+    await act(async () => {
+      client._emitChat("chat-a", {
+        event: "message",
+        chat_id: "chat-a",
+        text: "live assistant reply",
+      });
+    });
+    expect(screen.getAllByText("live assistant reply").length).toBeGreaterThan(0);
+
+    await act(async () => {
+      rerender(
+        wrap(
+          client,
+          <ThreadShell
+            session={null}
+            title="nanobot"
+            onToggleSidebar={() => {}}
+            onNewChat={() => {}}
+          />,
+        ),
+      );
+    });
+
+    expect(screen.queryByText("live assistant reply")).not.toBeInTheDocument();
+    expect(screen.getByText("Assistant dashboard")).toBeInTheDocument();
+
+    await act(async () => {
+      rerender(
+        wrap(
+          client,
+          <ThreadShell
+            session={session("chat-a")}
+            title="Chat chat-a"
+            onToggleSidebar={() => {}}
+            onNewChat={() => {}}
+          />,
+        ),
+      );
+    });
+
+    await waitFor(() => expect(screen.getAllByText("live assistant reply").length).toBeGreaterThan(0));
+  });
+
+  it("does not open slash commands on the blank welcome page", async () => {
+    const client = makeClient();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/api/commands")) {
+          return httpJson({
+            commands: [
+              {
+                command: "/stop",
+                title: "Stop current task",
+                description: "Cancel the active agent turn.",
+                icon: "square",
+              },
+            ],
+          });
+        }
+        return {
+          ok: false,
+          status: 404,
+          json: async () => ({}),
+        };
+      }),
+    );
+
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={null}
+          title="nanobot"
+          onToggleSidebar={() => {}}
+          onNewChat={() => {}}
+        />,
+      ),
+    );
+
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith(
+      "/api/commands",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer tok" },
+      }),
+    ));
+
+    fireEvent.change(screen.getByLabelText("Message input"), {
+      target: { value: "/" },
+    });
+
+    expect(screen.queryByRole("listbox", { name: "Slash commands" })).not.toBeInTheDocument();
+  });
+
+  it("switches welcome quick actions when image mode is enabled", async () => {
+    const client = makeClient();
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={null}
+          title="nanobot"
+          onToggleSidebar={() => {}}
+          onNewChat={() => {}}
+        />,
+      ),
+    );
+    await act(async () => {});
+
+    expect(screen.getByText("Write code")).toBeInTheDocument();
+    expect(screen.queryByText("Design an app icon")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Toggle image generation mode" }));
+
+    expect(screen.getByText("Design an app icon")).toBeInTheDocument();
+    expect(screen.queryByText("Write code")).not.toBeInTheDocument();
+  });
+
   it("surfaces a dismissible banner when the stream reports message_too_big", async () => {
     const client = makeClient();
     const onNewChat = vi.fn().mockResolvedValue("chat-a");
@@ -401,6 +769,7 @@ describe("ThreadShell", () => {
     // No banner yet: only appears once the client emits a matching error.
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 
+    await act(async () => {});
     await act(async () => {
       client._emitError({ kind: "message_too_big" });
     });
@@ -432,6 +801,7 @@ describe("ThreadShell", () => {
       ),
     );
 
+    await act(async () => {});
     await act(async () => {
       client._emitError({ kind: "message_too_big" });
     });
@@ -615,19 +985,19 @@ describe("ThreadShell", () => {
     });
   });
 
-  it("renders remote telegram user turns immediately through websocket mirror events", async () => {
+  it("renders remote user turns immediately through websocket mirror events", async () => {
     const client = makeClient();
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.includes("telegram%3A12345/messages")) {
+      if (url.includes("websocket%3Achat-a/messages")) {
         return httpJson({
-          key: "telegram:12345",
+          key: "websocket:chat-a",
           created_at: null,
           updated_at: null,
-          messages: [{ role: "user", content: "older telegram user turn" }],
+          messages: [{ role: "user", content: "older websocket user turn" }],
         });
       }
-      if (url.includes("telegram%3A12345/model-target")) {
+      if (url.includes("websocket%3Achat-a/model-target")) {
         return {
           ok: false,
           status: 404,
@@ -646,8 +1016,8 @@ describe("ThreadShell", () => {
       wrap(
         client,
         <ThreadShell
-          session={telegramSession("12345")}
-          title="Telegram 12345"
+          session={session("chat-a")}
+          title="Chat chat-a"
           onToggleSidebar={() => {}}
           onGoHome={() => {}}
           onNewChat={vi.fn().mockResolvedValue("chat-a")}
@@ -655,12 +1025,12 @@ describe("ThreadShell", () => {
       ),
     );
 
-    await waitFor(() => expect(screen.getByText("older telegram user turn")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("older websocket user turn")).toBeInTheDocument());
 
     act(() => {
-      client._emitChat("telegram:12345", {
+      client._emitChat("chat-a", {
         event: "message",
-        chat_id: "telegram:12345",
+        chat_id: "chat-a",
         text: "fresh telegram push",
         kind: "remote_user",
       });
@@ -1678,7 +2048,15 @@ describe("ThreadShell", () => {
       wrap(
         client,
         <ThreadShell
-          session={telegramSession("12345")}
+          session={telegramSession("12345", undefined, {
+            calendar_pending_interaction: {
+              id: "calendar-interaction-1",
+              kind: "conflict_review",
+              status: "pending",
+              question: "Choose how to continue before approval.",
+              buttons: [["그래도 생성 승인 요청", "새 시간 다시 입력"], ["취소"]],
+            },
+          })}
           title="Telegram 12345"
           onToggleSidebar={() => {}}
           onGoHome={() => {}}
@@ -1687,21 +2065,8 @@ describe("ThreadShell", () => {
       ),
     );
 
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    await act(async () => {
-      client._emitChat("telegram:12345", {
-        event: "message",
-        chat_id: "telegram:12345",
-        text: "Choose how to continue before approval.",
-        buttons: [["그래도 생성 승인 요청", "새 시간 다시 입력"], ["취소"]],
-      });
-    });
-
     await waitFor(() => {
-      expect(screen.getByRole("group", { name: "Question" })).toHaveTextContent(
+      expect(screen.getByRole("group", { name: /Question|Approval request/ })).toHaveTextContent(
         "Choose how to continue before approval.",
       );
     });
@@ -1780,12 +2145,18 @@ describe("ThreadShell", () => {
         event: "stream_end",
         chat_id: "chat-a",
       });
+      client._emitChat("chat-a", {
+        event: "turn_end",
+        chat_id: "chat-a",
+      });
     });
 
-    const completedStatus = screen.getByRole("status");
-    expect(completedStatus).toHaveTextContent("Completed");
-    expect(completedStatus).toHaveTextContent("Latest assistant update is ready");
-    expect(completedStatus).toHaveTextContent("Working");
+    await waitFor(() => {
+      const completedStatus = screen.getByRole("status");
+      expect(completedStatus).toHaveTextContent("Completed");
+      expect(completedStatus).toHaveTextContent("Latest assistant update is ready");
+      expect(completedStatus).toHaveTextContent("Working");
+    });
 
     await act(async () => {
       client._emitError({ kind: "message_too_big" });

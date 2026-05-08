@@ -19,6 +19,8 @@ interface SettingsViewProps {
   chatFontValue: number;
   onDecreaseChatFont: () => void;
   onIncreaseChatFont: () => void;
+  onLogout?: () => void;
+  onRestart?: () => void;
 }
 
 export function SettingsView({
@@ -30,6 +32,8 @@ export function SettingsView({
   chatFontValue,
   onDecreaseChatFont,
   onIncreaseChatFont,
+  onLogout,
+  onRestart,
 }: SettingsViewProps) {
   const { t } = useTranslation();
   const { token } = useClient();
@@ -147,6 +151,8 @@ export function SettingsView({
             chatFontValue={chatFontValue}
             onDecreaseChatFont={onDecreaseChatFont}
             onIncreaseChatFont={onIncreaseChatFont}
+            onLogout={onLogout}
+            onRestart={onRestart}
           />
         ) : null}
       </main>
@@ -167,6 +173,8 @@ function SettingsSection({
   chatFontValue,
   onDecreaseChatFont,
   onIncreaseChatFont,
+  onLogout,
+  onRestart,
 }: {
   form: {
     model: string;
@@ -186,13 +194,14 @@ function SettingsSection({
   chatFontValue: number;
   onDecreaseChatFont: () => void;
   onIncreaseChatFont: () => void;
+  onLogout?: () => void;
+  onRestart?: () => void;
 }) {
   const { t } = useTranslation();
   const canDecreaseFont = chatFontSize !== "sm";
   const canIncreaseFont = chatFontSize !== "lg";
   const modelLocked = settings.agent.model_locked === true;
   const providerLocked = settings.agent.provider_locked === true;
-
   return (
     <div className="space-y-7">
       <section>
@@ -305,6 +314,32 @@ function SettingsSection({
           </SettingsRow>
         </SettingsGroup>
       </section>
+
+      {onRestart && (
+        <section>
+          <h2 className="mb-2 px-2 text-xs font-medium text-muted-foreground">{t("app.system.section")}</h2>
+          <SettingsGroup>
+            <SettingsRow title={t("app.system.restartHint")}>
+              <Button size="sm" variant="outline" onClick={onRestart}>
+                {t("app.system.restart")}
+              </Button>
+            </SettingsRow>
+          </SettingsGroup>
+        </section>
+      )}
+
+      {onLogout && (
+        <section>
+          <h2 className="mb-2 px-2 text-xs font-medium text-muted-foreground">{t("app.account.section")}</h2>
+          <SettingsGroup>
+            <SettingsRow title={t("app.account.logoutHint")}>
+              <Button size="sm" variant="outline" onClick={onLogout}>
+                {t("app.account.logout")}
+              </Button>
+            </SettingsRow>
+          </SettingsGroup>
+        </section>
+      )}
     </div>
   );
 }

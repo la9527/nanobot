@@ -42,6 +42,18 @@ def _tool_turn(prefix: str, idx: int) -> list[dict]:
     ]
 
 
+def test_list_sessions_includes_metadata_title(tmp_path):
+    manager = SessionManager(tmp_path)
+    session = manager.get_or_create("websocket:chat-title")
+    session.metadata["title"] = "自动生成标题"
+    manager.save(session)
+
+    rows = manager.list_sessions()
+
+    assert rows[0]["key"] == "websocket:chat-title"
+    assert rows[0]["title"] == "自动生成标题"
+
+
 # --- Original regression test (from PR 2075) ---
 
 def test_get_history_drops_orphan_tool_results_when_window_cuts_tool_calls():
@@ -191,6 +203,7 @@ def test_get_history_preserves_reasoning_content():
         "role": "assistant",
         "content": "done",
         "reasoning_content": "hidden chain of thought",
+        "thinking_blocks": [{"type": "thinking", "thinking": "hidden chain of thought", "signature": "sig"}],
     })
 
     history = session.get_history(max_messages=500)
@@ -201,6 +214,11 @@ def test_get_history_preserves_reasoning_content():
             "role": "assistant",
             "content": "done",
             "reasoning_content": "hidden chain of thought",
+            "thinking_blocks": [{
+                "type": "thinking",
+                "thinking": "hidden chain of thought",
+                "signature": "sig",
+            }],
         },
     ]
 

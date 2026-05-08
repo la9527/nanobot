@@ -56,6 +56,7 @@ export interface ChatSummary {
   chatId: string;
   createdAt: string | null;
   updatedAt: string | null;
+  title?: string;
   preview: string;
   activeTarget?: string | null;
   metadata?: {
@@ -409,6 +410,14 @@ export interface SettingsUpdate {
   provider?: string;
 }
 
+export interface SlashCommand {
+  command: string;
+  title: string;
+  description: string;
+  icon: string;
+  argHint?: string;
+}
+
 export type ConnectionStatus =
   | "idle"
   | "connecting"
@@ -449,6 +458,8 @@ export type InboundEvent =
       response_model?: string;
       active_target?: string;
     }
+  | { event: "turn_end"; chat_id: string }
+  | { event: "session_updated"; chat_id: string }
   | { event: "error"; chat_id?: string; detail?: string };
 
 /** Base64-encoded image attached to an outbound ``message`` envelope.
@@ -462,6 +473,11 @@ export type InboundEvent =
 export interface OutboundMedia {
   data_url: string;
   name?: string;
+}
+
+export interface OutboundImageGeneration {
+  enabled: true;
+  aspect_ratio?: string | null;
 }
 
 export type Outbound =
@@ -478,4 +494,8 @@ export type Outbound =
       chat_id: string;
       content: string;
       media?: OutboundMedia[];
+      image_generation?: OutboundImageGeneration;
+      /** Marks messages sent by the embedded WebUI, without changing the
+       * generic websocket protocol for other clients. */
+      webui?: true;
     };

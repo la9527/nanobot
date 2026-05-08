@@ -26,10 +26,11 @@ interface ChatListProps {
   onSelect: (key: string) => void;
   onRequestDelete: (key: string, label: string) => void;
   loading?: boolean;
+  emptyLabel?: string;
 }
 
 function titleFor(s: ChatSummary, fallbackTitle: string): string {
-  const p = s.preview?.trim();
+  const p = (s.title || s.preview)?.trim();
   if (p) return p.length > 48 ? `${p.slice(0, 45)}…` : p;
   return fallbackTitle;
 }
@@ -48,6 +49,7 @@ export function ChatList({
   onSelect,
   onRequestDelete,
   loading,
+  emptyLabel,
 }: ChatListProps) {
   const { t } = useTranslation();
   const [expandedApprovalKey, setExpandedApprovalKey] = useState<string | null>(null);
@@ -62,8 +64,8 @@ export function ChatList({
 
   if (sessions.length === 0) {
     return (
-      <div className="px-3 py-6 text-xs text-muted-foreground">
-        {t("chat.noSessions")}
+      <div className="px-3 py-6 text-[12px] leading-5 text-muted-foreground/80">
+        {emptyLabel ?? t("chat.noSessions")}
       </div>
     );
   }

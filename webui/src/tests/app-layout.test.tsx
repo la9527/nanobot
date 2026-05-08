@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ChatSummary } from "@/lib/types";
@@ -9,6 +9,7 @@ const connectSpy = vi.fn();
 const refreshSpy = vi.fn();
 const createChatSpy = vi.fn().mockResolvedValue("chat-1");
 const deleteChatSpy = vi.fn();
+const toggleThemeSpy = vi.fn();
 let mockSessions: ChatSummary[] = [];
 const mockClientInstances: Array<{ onReauth?: () => Promise<string | null> }> = [];
 
@@ -37,7 +38,7 @@ vi.mock("@/hooks/useSessions", async (importOriginal) => {
 vi.mock("@/hooks/useTheme", () => ({
   useTheme: () => ({
     theme: "light" as const,
-    toggle: vi.fn(),
+    toggle: toggleThemeSpy,
   }),
 }));
 
@@ -48,6 +49,9 @@ vi.mock("@/lib/bootstrap", () => ({
     expires_in: 300,
   }),
   deriveWsUrl: vi.fn(() => "ws://test"),
+  loadSavedSecret: vi.fn(() => ""),
+  saveSecret: vi.fn(),
+  clearSavedSecret: vi.fn(),
 }));
 
 vi.mock("@/lib/nanobot-client", () => {
@@ -95,6 +99,7 @@ describe("App layout", () => {
     refreshSpy.mockReset();
     createChatSpy.mockClear();
     deleteChatSpy.mockReset();
+    toggleThemeSpy.mockReset();
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
@@ -177,11 +182,11 @@ describe("App layout", () => {
     await waitFor(() => expect(connectSpy).toHaveBeenCalled());
     fireEvent.click(screen.getByRole("button", { name: "Toggle sidebar" }));
 
-    expect(await findSidebarButton(/^Dashboard$/)).toBeInTheDocument();
+    expect(await findSidebarButton(/^Home$/)).toBeInTheDocument();
     expect(getSidebarButton(/^First chat\b/)).toBeInTheDocument();
   });
 
-  it("shows a fixed Dashboard entry in the sidebar and returns to dashboard home", async () => {
+  it("shows a fixed Home entry in the sidebar and returns to dashboard home", async () => {
     mockSessions = [
       {
         key: "websocket:chat-a",
@@ -199,7 +204,7 @@ describe("App layout", () => {
     await waitFor(() => expect(connectSpy).toHaveBeenCalled());
     expect(await findSidebarButton(/^First chat\b/)).toBeInTheDocument();
 
-    fireEvent.click(getSidebarButton(/^Dashboard$/));
+    fireEvent.click(getSidebarButton(/^Home$/));
 
     expect(await screen.findByText("Assistant dashboard")).toBeInTheDocument();
     expect(screen.queryByRole("textbox", { name: "메시지 입력" })).not.toBeInTheDocument();
@@ -230,7 +235,12 @@ describe("App layout", () => {
     render(<App />);
 
     await waitFor(() => expect(connectSpy).toHaveBeenCalled());
-    expect(await findSidebarButton(/^First chat\b/)).toBeInTheDocument();
+    const sidebar = screen.getByRole("navigation", { name: "Sidebar navigation" });
+    await waitFor(() =>
+      expect(
+        within(sidebar).getAllByRole("button", { name: /First chat/ })[0],
+      ).toBeInTheDocument(),
+    );
     expect(screen.getByText("smart-router")).toBeInTheDocument();
 
     fireEvent.pointerDown(screen.getByLabelText("Chat actions for First chat"), {
@@ -239,7 +249,7 @@ describe("App layout", () => {
     fireEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
 
     await waitFor(() =>
-      expect(screen.getByText('Delete “First chat”?')).toBeInTheDocument(),
+      expect(screen.getByText("Delete this chat?")).toBeInTheDocument(),
     );
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
 
@@ -247,13 +257,25 @@ describe("App layout", () => {
       expect(deleteChatSpy).toHaveBeenCalledWith("websocket:chat-a"),
     );
     await waitFor(() =>
-      expect(getSidebarButton(/^Second chat\b/)).toBeInTheDocument(),
+      expect(
+        within(sidebar).getAllByRole("button", { name: /Second chat/ })[0],
+      ).toBeInTheDocument(),
     );
-    expect(screen.queryByText('Delete “First chat”?')).not.toBeInTheDocument();
+    expect(screen.queryByText("Delete this chat?")).not.toBeInTheDocument();
     expect(document.body.style.pointerEvents).not.toBe("none");
   }, 15_000);
 
-  it("opens the Cursor-style settings view from the sidebar", async () => {
+  it("opens the Cursor-style settings view from the header", async () => {
+    mockSessions = [
+      {
+        key: "websocket:chat-a",
+        channel: "websocket",
+        chatId: "chat-a",
+        createdAt: "2026-04-16T10:00:00Z",
+        updatedAt: "2026-04-16T10:00:00Z",
+        preview: "Existing chat",
+      },
+    ];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
@@ -302,7 +324,7 @@ describe("App layout", () => {
     render(<App />);
 
     await waitFor(() => expect(connectSpy).toHaveBeenCalled());
-    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open settings" }));
 
     expect(await screen.findByRole("heading", { name: "General" })).toBeInTheDocument();
     expect(screen.getByText("Assistant")).toBeInTheDocument();
@@ -373,7 +395,7 @@ describe("App layout", () => {
       await client.onReauth?.();
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open settings" }));
 
     await waitFor(() => expect(screen.getByRole("heading", { name: "General" })).toBeInTheDocument());
     await waitFor(() =>
@@ -552,7 +574,7 @@ describe("App layout", () => {
     render(<App />);
 
     await waitFor(() => expect(connectSpy).toHaveBeenCalled());
-    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open settings" }));
 
     expect(await screen.findByText("Default assistant settings for model selection, theme, and chat readability.")).toBeInTheDocument();
     expect(screen.getByText("Assistant")).toBeInTheDocument();
@@ -565,5 +587,90 @@ describe("App layout", () => {
     expect(providerSelect).toBeDisabled();
     expect(providerSelect.value).toBe("vllm");
     expect(screen.getByText("Provider or model is locked by the current runtime configuration.")).toBeInTheDocument();
+  });
+
+  it("filters sidebar sessions through the lightweight search row", async () => {
+    mockSessions = [
+      {
+        key: "websocket:chat-alpha",
+        channel: "websocket",
+        chatId: "chat-alpha",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        preview: "Project planning notes",
+      },
+      {
+        key: "websocket:chat-beta",
+        channel: "websocket",
+        chatId: "chat-beta",
+        createdAt: "2026-04-15T10:00:00Z",
+        updatedAt: "2026-04-15T10:00:00Z",
+        preview: "Travel ideas",
+      },
+    ];
+
+    render(<App />);
+
+    await waitFor(() => expect(connectSpy).toHaveBeenCalled());
+    const sidebar = screen.getByRole("navigation", { name: "Sidebar navigation" });
+    expect(within(sidebar).getByText("Project planning notes")).toBeInTheDocument();
+    expect(within(sidebar).getByText("Travel ideas")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Search chats" }), {
+      target: { value: "travel" },
+    });
+
+    expect(within(sidebar).queryByText("Project planning notes")).not.toBeInTheDocument();
+    expect(within(sidebar).getByText("Travel ideas")).toBeInTheDocument();
+  });
+
+  it("opens a blank start page without creating an empty chat", async () => {
+    mockSessions = [
+      {
+        key: "websocket:chat-a",
+        channel: "websocket",
+        chatId: "chat-a",
+        createdAt: "2026-04-16T10:00:00Z",
+        updatedAt: "2026-04-16T10:00:00Z",
+        preview: "Existing chat",
+      },
+    ];
+
+    const matchMedia = vi.fn().mockImplementation((query: string) => ({
+      matches: query.includes("1024px"),
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+    vi.stubGlobal("matchMedia", matchMedia);
+
+    const { container } = render(<App />);
+
+    await waitFor(() => expect(connectSpy).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole("button", { name: "Toggle theme from header" }));
+    expect(toggleThemeSpy).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Collapse sidebar" }));
+    const desktopAside = container.querySelector("aside.lg\\:block") as HTMLElement;
+    await waitFor(() => expect(desktopAside.style.width).toBe("0px"));
+
+    expect(screen.queryByRole("button", { name: "Start a new chat" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Toggle sidebar" }));
+    await waitFor(() => expect(desktopAside.style.width).toBe("279px"));
+
+    const sidebar = screen.getByRole("navigation", { name: "Sidebar navigation" });
+    fireEvent.click(within(sidebar).getByRole("button", { name: "New chat" }));
+    expect(createChatSpy).not.toHaveBeenCalled();
+    expect(screen.getByText("Assistant dashboard")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Start a new chat" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Toggle theme from header" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open settings" })).toBeInTheDocument();
+
+    expect(within(sidebar).getByText("Existing chat")).toBeInTheDocument();
   });
 });

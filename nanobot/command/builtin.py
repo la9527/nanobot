@@ -8,6 +8,8 @@ import re
 import shlex
 import sys
 from datetime import datetime, timedelta
+from contextlib import suppress
+from dataclasses import dataclass
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -89,6 +91,87 @@ CONTEXT_CLEAR_METADATA_KEYS = (
 )
 CALENDAR_WEEKDAY_INDEX = CALENDAR_NLP.weekday_index
 
+@dataclass(frozen=True)
+class BuiltinCommandSpec:
+    command: str
+    title: str
+    description: str
+    icon: str
+    arg_hint: str = ""
+
+    def as_dict(self) -> dict[str, str]:
+        return {
+            "command": self.command,
+            "title": self.title,
+            "description": self.description,
+            "icon": self.icon,
+            "arg_hint": self.arg_hint,
+        }
+
+
+BUILTIN_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
+    BuiltinCommandSpec(
+        "/new",
+        "New chat",
+        "Stop the current task and start a fresh conversation.",
+        "square-pen",
+    ),
+    BuiltinCommandSpec(
+        "/stop",
+        "Stop current task",
+        "Cancel the active agent turn for this chat.",
+        "square",
+    ),
+    BuiltinCommandSpec(
+        "/restart",
+        "Restart nanobot",
+        "Restart the bot process in place.",
+        "rotate-cw",
+    ),
+    BuiltinCommandSpec(
+        "/status",
+        "Show status",
+        "Display runtime, provider, and channel status.",
+        "activity",
+    ),
+    BuiltinCommandSpec(
+        "/history",
+        "Show conversation history",
+        "Print the last N persisted conversation messages.",
+        "history",
+        "[n]",
+    ),
+    BuiltinCommandSpec(
+        "/dream",
+        "Run Dream",
+        "Manually trigger memory consolidation.",
+        "sparkles",
+    ),
+    BuiltinCommandSpec(
+        "/dream-log",
+        "Show Dream log",
+        "Show what the last Dream consolidation changed.",
+        "book-open",
+    ),
+    BuiltinCommandSpec(
+        "/dream-restore",
+        "Restore memory",
+        "Revert memory to a previous Dream snapshot.",
+        "undo-2",
+    ),
+    BuiltinCommandSpec(
+        "/help",
+        "Show help",
+        "List available slash commands.",
+        "circle-help",
+    ),
+)
+
+
+def builtin_command_palette() -> list[dict[str, str]]:
+    """Return structured command metadata for UI command palettes."""
+    return [spec.as_dict() for spec in BUILTIN_COMMAND_SPECS]
+
 
 async def cmd_stop(ctx: CommandContext) -> OutboundMessage:
     """Cancel all active tasks and subagents for the session."""
@@ -129,16 +212,15 @@ async def cmd_status(ctx: CommandContext) -> OutboundMessage:
     status_snapshot = loop.build_response_status(session)
     
     ctx_est = 0
-    try:
+    with suppress(Exception):
         ctx_est, _ = loop.consolidator.estimate_session_prompt_tokens(session)
-    except Exception:
-        pass
     if ctx_est <= 0:
         ctx_est = loop._last_usage.get("prompt_tokens", 0)
 
     # Fetch web search provider usage (best-effort, never blocks the response)
     search_usage_text: str | None = None
-    try:
+    # Never let usage fetch break /status
+    with suppress(Exception):
         from nanobot.utils.searchusage import fetch_search_usage
         web_cfg = getattr(loop, "web_config", None)
         search_cfg = getattr(web_cfg, "search", None) if web_cfg else None
@@ -147,14 +229,10 @@ async def cmd_status(ctx: CommandContext) -> OutboundMessage:
             api_key = getattr(search_cfg, "api_key", "") or None
             usage = await fetch_search_usage(provider=provider, api_key=api_key)
             search_usage_text = usage.format()
-    except Exception:
-        pass  # Never let usage fetch break /status
     active_tasks = loop._active_tasks.get(ctx.key, [])
     task_count = sum(1 for t in active_tasks if not t.done())
-    try:
+    with suppress(Exception):
         task_count += loop.subagents.get_running_count_by_session(ctx.key)
-    except Exception:
-        pass
     content = build_status_content(
         version=__version__, model=status_snapshot["model"],
         start_time=loop._start_time, last_usage=status_snapshot["usage"],
@@ -2182,27 +2260,12 @@ async def cmd_calendar(ctx: CommandContext) -> OutboundMessage:
 
 def build_help_text() -> str:
     """Build canonical help text shared across channels."""
-    lines = [
-        "🐈 nanobot commands:",
-        "/new — Stop current task and start a new conversation",
-        "/stop — Stop the current task",
-        "/restart — Restart the bot",
-        "/context clear — Clear this chat's stored conversation context",
-        "/clear — Shortcut for /context clear",
-        "/model — Show or change the active model target",
-        "/status — Show bot status",
-        "/usage — Show or change the reply footer mode",
-        "/mail — Run Gmail pilot read-only and draft actions",
-        "/mail send|approve|deny — Resolve Gmail send approval flow",
-        "/calendar — Run Calendar pilot read, check, and create approval actions",
-        "/history [n] — Show the last N conversation messages (default 10)",
-        "/usage — Show or change the reply footer mode",
-        "/history [n] — Show the last N conversation messages (default 10)",
-        "/dream — Manually trigger Dream consolidation",
-        "/dream-log — Show what the last Dream changed",
-        "/dream-restore — Revert memory to a previous state",
-        "/help — Show available commands",
-    ]
+    lines = ["🐈 nanobot commands:"]
+    for spec in BUILTIN_COMMAND_SPECS:
+        command = spec.command
+        if spec.arg_hint:
+            command = f"{command} {spec.arg_hint}"
+        lines.append(f"{command} — {spec.description}")
     return "\n".join(lines)
 
 
@@ -2233,9 +2296,11 @@ def register_builtin_commands(router: CommandRouter) -> None:
     router.intercept(_calendar_natural_create_interceptor)
     router.exact("/history", cmd_history)
     router.prefix("/history ", cmd_history)
-    router.exact("/usage", cmd_usage)
-    router.prefix("/usage ", cmd_usage)
-    router.exact("/history", cmd_history)
+    router.exact("/dream", cmd_dream)
+    router.exact("/dream-log", cmd_dream_log)
+    router.exact("/dream-restore", cmd_dream_restore)
+    router.prefix("/dream-restore ", cmd_dream_restore)
+    router.exact("/help", cmd_help)
     router.prefix("/history ", cmd_history)
     router.exact("/dream", cmd_dream)
     router.exact("/dream-log", cmd_dream_log)

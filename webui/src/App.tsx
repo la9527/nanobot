@@ -16,14 +16,23 @@ import { preloadMarkdownText } from "@/components/MarkdownText";
 import { useSessions } from "@/hooks/useSessions";
 import { useTheme } from "@/hooks/useTheme";
 import { cn } from "@/lib/utils";
-import { deriveWsUrl, fetchBootstrap } from "@/lib/bootstrap";
+import {
+  clearSavedSecret,
+  deriveWsUrl,
+  fetchBootstrap,
+  loadSavedSecret,
+  saveSecret,
+} from "@/lib/bootstrap";
 import { NanobotClient } from "@/lib/nanobot-client";
-import { ClientProvider } from "@/providers/ClientProvider";
+import { ClientProvider, useClient } from "@/providers/ClientProvider";
 import type { ChatSummary } from "@/lib/types";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 
 type BootState =
   | { status: "loading" }
   | { status: "error"; message: string }
+  | { status: "auth"; failed?: boolean }
   | {
       status: "ready";
       client: NanobotClient;
@@ -35,6 +44,7 @@ type BootState =
 
 const SIDEBAR_STORAGE_KEY = "nanobot-webui.sidebar";
 const CHAT_FONT_SIZE_STORAGE_KEY = "nanobot-webui.chatFontSize";
+const RESTART_STARTED_KEY = "nanobot-webui.restartStartedAt";
 const SIDEBAR_WIDTH = 279;
 type ShellView = "chat" | "settings";
 
@@ -72,6 +82,60 @@ function chatFontCss(size: ChatFontSize): { size: string; lineHeight: string } {
   return { size: "15px", lineHeight: "1.7" };
 }
 
+function AuthForm({
+  failed,
+  onSecret,
+}: {
+  failed: boolean;
+  onSecret: (secret: string) => void;
+}) {
+  const { t } = useTranslation();
+  const [value, setValue] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const secret = value.trim();
+    if (!secret) return;
+    setSubmitting(true);
+    onSecret(secret);
+  };
+
+  return (
+    <div className="flex h-full w-full items-center justify-center px-6">
+      <form
+        onSubmit={handleSubmit}
+        className="flex w-full max-w-sm flex-col gap-4"
+      >
+        <div className="flex flex-col items-center gap-1 text-center">
+          <p className="text-lg font-semibold">{t("app.auth.title")}</p>
+          <p className="text-sm text-muted-foreground">{t("app.auth.hint")}</p>
+        </div>
+        {failed && (
+          <p className="text-center text-sm text-destructive">
+            {t("app.auth.invalid")}
+          </p>
+        )}
+        <Input
+          type="password"
+          placeholder={t("app.auth.placeholder")}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          disabled={submitting}
+          autoFocus
+        />
+        <Button
+          type="submit"
+          className="w-full"
+          disabled={!value.trim() || submitting}
+        >
+          {t("app.auth.submit")}
+        </Button>
+      </form>
+    </div>
+  );
+}
+
 function readSidebarOpen(): boolean {
   if (typeof window === "undefined") return true;
   try {
@@ -95,54 +159,69 @@ export default function App() {
     };
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const boot = await fetchBootstrap();
-        if (cancelled) return;
-        const url = deriveWsUrl(boot.ws_path, boot.token);
-        const client = new NanobotClient({
-          url,
-          onReauth: async () => {
-            try {
-              const refreshed = await fetchBootstrap();
-              if (mountedRef.current) {
-                setState((prev) => {
-                  if (prev.status !== "ready") return prev;
-                  return {
-                    ...prev,
-                    token: refreshed.token,
-                    modelName: refreshed.model_name ?? prev.modelName,
-                    activeTarget: refreshed.active_target ?? prev.activeTarget,
-                    modelTargets: refreshed.model_targets ?? prev.modelTargets,
-                  };
-                });
+  const bootstrapWithSecret = useCallback(
+    (secret: string) => {
+      let cancelled = false;
+      (async () => {
+        setState({ status: "loading" });
+        try {
+          const boot = await fetchBootstrap("", secret);
+          if (cancelled) return;
+          if (secret) saveSecret(secret);
+          const url = deriveWsUrl(boot.ws_path, boot.token);
+          const client = new NanobotClient({
+            url,
+            onReauth: async () => {
+              try {
+                const refreshed = await fetchBootstrap("", secret);
+                if (mountedRef.current) {
+                  setState((prev) => {
+                    if (prev.status !== "ready") return prev;
+                    return {
+                      ...prev,
+                      token: refreshed.token,
+                      modelName: refreshed.model_name ?? prev.modelName,
+                      activeTarget: refreshed.active_target ?? prev.activeTarget,
+                      modelTargets: refreshed.model_targets ?? prev.modelTargets,
+                    };
+                  });
+                }
+                return deriveWsUrl(refreshed.ws_path, refreshed.token);
+              } catch {
+                return null;
               }
-              return deriveWsUrl(refreshed.ws_path, refreshed.token);
-            } catch {
-              return null;
-            }
-          },
-        });
-        client.connect();
-        setState({
-          status: "ready",
-          client,
-          token: boot.token,
-          modelName: boot.model_name ?? null,
-          activeTarget: boot.active_target ?? null,
-          modelTargets: boot.model_targets ?? [],
-        });
-      } catch (e) {
-        if (cancelled) return;
-        setState({ status: "error", message: (e as Error).message });
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+            },
+          });
+          client.connect();
+          setState({
+            status: "ready",
+            client,
+            token: boot.token,
+            modelName: boot.model_name ?? null,
+            activeTarget: boot.active_target ?? null,
+            modelTargets: boot.model_targets ?? [],
+          });
+        } catch (e) {
+          if (cancelled) return;
+          const msg = (e as Error).message;
+          if (msg.includes("HTTP 401") || msg.includes("HTTP 403")) {
+            setState({ status: "auth", failed: true });
+          } else {
+            setState({ status: "error", message: msg });
+          }
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
+    },
+    [],
+  );
+
+  useEffect(() => {
+    const saved = loadSavedSecret();
+    return bootstrapWithSecret(saved);
+  }, [bootstrapWithSecret]);
 
   useEffect(() => {
     const warm = () => preloadMarkdownText();
@@ -165,13 +244,6 @@ export default function App() {
     return (
       <div className="flex h-full w-full items-center justify-center">
         <div className="flex flex-col items-center gap-3 animate-in fade-in-0 duration-300">
-          <img
-            src="/brand/nanobot_icon.png"
-            alt=""
-            className="h-10 w-10 animate-pulse select-none"
-            aria-hidden
-            draggable={false}
-          />
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <span className="relative flex h-2 w-2">
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-foreground/40" />
@@ -183,17 +255,18 @@ export default function App() {
       </div>
     );
   }
+  if (state.status === "auth") {
+    return (
+      <AuthForm
+        failed={!!state.failed}
+        onSecret={(s) => bootstrapWithSecret(s)}
+      />
+    );
+  }
   if (state.status === "error") {
     return (
       <div className="flex h-full w-full items-center justify-center px-4 text-center">
         <div className="flex max-w-md flex-col items-center gap-3">
-          <img
-            src="/brand/nanobot_icon.png"
-            alt=""
-            className="h-10 w-10 opacity-60 grayscale select-none"
-            aria-hidden
-            draggable={false}
-          />
           <p className="text-lg font-semibold">{t("app.error.title")}</p>
           <p className="text-sm text-muted-foreground">{state.message}</p>
           <p className="text-xs text-muted-foreground">
@@ -210,6 +283,14 @@ export default function App() {
     );
   };
 
+  const handleLogout = () => {
+    if (state.status === "ready") {
+      state.client.close();
+    }
+    clearSavedSecret();
+    setState({ status: "auth" });
+  };
+
   return (
     <ClientProvider
       client={state.client}
@@ -218,13 +299,14 @@ export default function App() {
       activeTarget={state.activeTarget}
       modelTargets={state.modelTargets}
     >
-      <Shell onModelNameChange={handleModelNameChange} />
+      <Shell onModelNameChange={handleModelNameChange} onLogout={handleLogout} />
     </ClientProvider>
   );
 }
 
-function Shell({ onModelNameChange }: { onModelNameChange: (modelName: string | null) => void }) {
+function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName: string | null) => void; onLogout: () => void }) {
   const { t, i18n } = useTranslation();
+  const { client } = useClient();
   const { theme, toggle } = useTheme();
   const { sessions, loading, refresh, createChat, deleteChat } = useSessions();
   const [activeKey, setActiveKey] = useState<string | null>(null);
@@ -238,6 +320,8 @@ function Shell({ onModelNameChange }: { onModelNameChange: (modelName: string | 
     label: string;
   } | null>(null);
   const lastSessionsLen = useRef(0);
+  const restartSawDisconnectRef = useRef(false);
+  const [restartToast, setRestartToast] = useState<string | null>(null);
 
   useEffect(() => {
     try {
@@ -290,7 +374,7 @@ function Shell({ onModelNameChange }: { onModelNameChange: (modelName: string | 
     }
   }, []);
 
-  const onNewChat = useCallback(async () => {
+  const onCreateChat = useCallback(async () => {
     try {
       const chatId = await createChat();
       setActiveKey(`websocket:${chatId}`);
@@ -303,6 +387,12 @@ function Shell({ onModelNameChange }: { onModelNameChange: (modelName: string | 
     }
   }, [createChat]);
 
+  const onNewChat = useCallback(() => {
+    setActiveKey(null);
+    setView("chat");
+    setMobileSidebarOpen(false);
+  }, []);
+
   const onSelectChat = useCallback(
     (key: string) => {
       setActiveKey(key);
@@ -311,6 +401,52 @@ function Shell({ onModelNameChange }: { onModelNameChange: (modelName: string | 
     },
     [],
   );
+
+  const onOpenSettings = useCallback(() => {
+    setView("settings");
+    setMobileSidebarOpen(false);
+  }, []);
+
+  const onRestart = useCallback(() => {
+    const chatId = activeSession?.chatId ?? client.defaultChatId;
+    if (!chatId) return;
+    restartSawDisconnectRef.current = false;
+    try {
+      window.localStorage.setItem(RESTART_STARTED_KEY, String(Date.now()));
+    } catch {
+      // ignore storage errors
+    }
+    client.sendMessage(chatId, "/restart");
+  }, [activeSession?.chatId, client]);
+
+  useEffect(() => {
+    return client.onStatus((status) => {
+      let startedAt = 0;
+      try {
+        startedAt = Number(window.localStorage.getItem(RESTART_STARTED_KEY) ?? "0");
+      } catch {
+        startedAt = 0;
+      }
+      if (!startedAt) return;
+      if (status !== "open") {
+        restartSawDisconnectRef.current = true;
+        return;
+      }
+      const elapsedMs = Date.now() - startedAt;
+      if (!restartSawDisconnectRef.current && elapsedMs < 1500) return;
+      try {
+        window.localStorage.removeItem(RESTART_STARTED_KEY);
+      } catch {
+        // ignore storage errors
+      }
+      setRestartToast(t("app.restart.completed", { seconds: (elapsedMs / 1000).toFixed(1) }));
+      window.setTimeout(() => setRestartToast(null), 3_500);
+    });
+  }, [client, t]);
+
+  const onTurnEnd = useCallback(() => {
+    void refresh();
+  }, [refresh]);
 
   const onConfirmDelete = useCallback(async () => {
     if (!pendingDelete) return;
@@ -331,7 +467,8 @@ function Shell({ onModelNameChange }: { onModelNameChange: (modelName: string | 
   }, [pendingDelete, deleteChat, activeKey, sessions]);
 
   const headerTitle = activeSession
-    ? activeSession.preview ||
+    ? activeSession.title ||
+      activeSession.preview ||
       t("chat.fallbackTitle", { id: activeSession.chatId.slice(0, 6) })
     : t("app.brand");
 
@@ -356,14 +493,8 @@ function Shell({ onModelNameChange }: { onModelNameChange: (modelName: string | 
       void onNewChat();
     },
     onSelect: onSelectChat,
-    onRefresh: () => void refresh(),
     onRequestDelete: (key: string, label: string) =>
       setPendingDelete({ key, label }),
-    activeView: view,
-    onOpenSettings: () => {
-      setView("settings" as const);
-      setMobileSidebarOpen(false);
-    },
   };
 
   const fontCss = chatFontCss(chatFontSize);
@@ -380,10 +511,11 @@ function Shell({ onModelNameChange }: { onModelNameChange: (modelName: string | 
       >
         <div
           className={cn(
-            "absolute inset-y-0 left-0 h-full w-[279px] overflow-hidden bg-sidebar shadow-inner-right",
+            "absolute inset-y-0 left-0 h-full overflow-hidden bg-sidebar shadow-inner-right",
             "transition-transform duration-300 ease-out",
             desktopSidebarOpen ? "translate-x-0" : "-translate-x-full",
           )}
+          style={{ width: SIDEBAR_WIDTH }}
         >
           <Sidebar {...sidebarProps} onCollapse={closeDesktopSidebar} />
         </div>
@@ -397,7 +529,8 @@ function Shell({ onModelNameChange }: { onModelNameChange: (modelName: string | 
         <SheetContent
           side="left"
           showCloseButton={false}
-          className="w-[279px] p-0 sm:max-w-[279px] lg:hidden"
+          className="p-0 lg:hidden"
+          style={{ width: SIDEBAR_WIDTH, maxWidth: SIDEBAR_WIDTH }}
         >
           <SheetHeader className="sr-only">
             <SheetTitle>{t("sidebar.mobileSheet.title")}</SheetTitle>
@@ -431,6 +564,8 @@ function Shell({ onModelNameChange }: { onModelNameChange: (modelName: string | 
             onIncreaseChatFont={() =>
               setChatFontSize((current) => clampChatFontSize(current, 1))
             }
+            onLogout={onLogout}
+            onRestart={onRestart}
           />
         ) : (
           <ThreadShell
@@ -438,10 +573,14 @@ function Shell({ onModelNameChange }: { onModelNameChange: (modelName: string | 
             sessions={sessions}
             title={headerTitle}
             onToggleSidebar={toggleSidebar}
-            onGoHome={() => setActiveKey(null)}
             onOpenSession={onSelectChat}
             onNewChat={onNewChat}
             onRefreshSessions={refresh}
+            onCreateChat={onCreateChat}
+            onTurnEnd={onTurnEnd}
+            theme={theme}
+            onToggleTheme={toggle}
+            onOpenSettings={onOpenSettings}
             hideSidebarToggleOnDesktop={desktopSidebarOpen}
           />
         )}
@@ -453,6 +592,14 @@ function Shell({ onModelNameChange }: { onModelNameChange: (modelName: string | 
         onCancel={() => setPendingDelete(null)}
         onConfirm={onConfirmDelete}
       />
+      {restartToast ? (
+        <div
+          role="status"
+          className="fixed left-1/2 top-4 z-50 -translate-x-1/2 rounded-full border border-border/70 bg-popover px-4 py-2 text-sm font-medium text-popover-foreground shadow-lg"
+        >
+          {restartToast}
+        </div>
+      ) : null}
     </div>
   );
 }

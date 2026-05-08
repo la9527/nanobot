@@ -1,4 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  BarChart3,
+  BookOpen,
+  ChevronRight,
+  Code2,
+  ImageIcon,
+  LayoutGrid,
+  Lightbulb,
+  MoreHorizontal,
+  Palette,
+  Sparkles,
+} from "lucide-react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 
@@ -13,9 +25,9 @@ import { ThreadStatusBlock } from "@/components/thread/ThreadStatusBlock";
 import type { ThreadStatusTone } from "@/components/thread/ThreadStatusBlock";
 import { ThreadViewport } from "@/components/thread/ThreadViewport";
 import { deriveThreadStatus } from "@/components/thread/threadStatus";
-import { type SendImage, useNanobotStream } from "@/hooks/useNanobotStream";
+import { useNanobotStream, type SendImage, type SendOptions } from "@/hooks/useNanobotStream";
 import { hydrateSessionMessages, useSessionHistory } from "@/hooks/useSessions";
-import { ApiError, fetchSessionMessages, fetchSessionModelTarget, selectSessionModelTarget } from "@/lib/api";
+import { ApiError, fetchSessionMessages, fetchSessionModelTarget, listSlashCommands, selectSessionModelTarget } from "@/lib/api";
 import { relativeTime } from "@/lib/format";
 import {
   approvalPendingBadgeLabel,
@@ -30,7 +42,7 @@ import {
   isBlockedSession,
   toChannelBadgeLabel,
 } from "@/lib/sessionMetadata";
-import type { ChatSummary, ModelTargetOption, SessionModelTargetResponse, UIMessage } from "@/lib/types";
+import type { ChatSummary, ModelTargetOption, SessionModelTargetResponse, SlashCommand, UIMessage } from "@/lib/types";
 import { createUuid } from "@/lib/uuid";
 import { useClient } from "@/providers/ClientProvider";
 
@@ -39,10 +51,15 @@ interface ThreadShellProps {
   sessions?: ChatSummary[];
   title: string;
   onToggleSidebar: () => void;
-  onGoHome: () => void;
+  onGoHome?: () => void;
   onOpenSession?: (key: string) => void;
-  onNewChat: () => Promise<string | null>;
+  onNewChat?: () => void;
+  onCreateChat?: () => Promise<string | null>;
   onRefreshSessions?: () => Promise<void> | void;
+  onTurnEnd?: () => void;
+  theme?: "light" | "dark";
+  onToggleTheme?: () => void;
+  onOpenSettings?: () => void;
   hideSidebarToggleOnDesktop?: boolean;
 }
 
@@ -374,21 +391,51 @@ function applyModelTargetResponse(
   setModelName(deriveModelNameFromTarget(response.target));
 }
 
+const QUICK_ACTION_KEYS = [
+  { key: "plan", icon: LayoutGrid, tone: "text-[#f25b8f]" },
+  { key: "analyze", icon: BarChart3, tone: "text-[#4f9de8]" },
+  { key: "brainstorm", icon: Lightbulb, tone: "text-[#53c59d]" },
+  { key: "code", icon: Code2, tone: "text-[#eba45d]" },
+  { key: "summarize", icon: BookOpen, tone: "text-[#a877e7]" },
+  { key: "more", icon: MoreHorizontal, tone: "text-muted-foreground/65" },
+] as const;
+
+const IMAGE_QUICK_ACTION_KEYS = [
+  { key: "icon", icon: ImageIcon, tone: "text-[#4f9de8]" },
+  { key: "sticker", icon: Sparkles, tone: "text-[#f25b8f]" },
+  { key: "poster", icon: Palette, tone: "text-[#eba45d]" },
+  { key: "product", icon: LayoutGrid, tone: "text-[#53c59d]" },
+  { key: "portrait", icon: ImageIcon, tone: "text-[#a877e7]" },
+  { key: "edit", icon: MoreHorizontal, tone: "text-muted-foreground/65" },
+] as const;
+
+interface PendingFirstMessage {
+  content: string;
+  images?: SendImage[];
+  options?: SendOptions;
+}
+
 export function ThreadShell({
   session,
   sessions = [],
   title,
   onToggleSidebar,
+  onGoHome: _onGoHome,
   onOpenSession,
   onNewChat,
   onRefreshSessions,
+  onCreateChat,
+  onTurnEnd,
+  theme = "light",
+  onToggleTheme = () => {},
+  onOpenSettings = () => {},
   hideSidebarToggleOnDesktop = false,
 }: ThreadShellProps) {
   const { t } = useTranslation();
   const isWebSocketSession = session?.channel === "websocket";
   const chatId = isWebSocketSession ? (session?.chatId ?? null) : null;
   const historyKey = session?.key ?? null;
-  const { messages: historical, loading } = useSessionHistory(historyKey);
+  const { messages: historical, loading, hasPendingToolCalls } = useSessionHistory(historyKey);
   const {
     client,
     token,
@@ -405,10 +452,13 @@ export function ThreadShell({
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [composerDraft, setComposerDraft] = useState<string | null>(null);
   const [composerDraftNonce, setComposerDraftNonce] = useState(0);
-  const pendingFirstRef = useRef<string | null>(null);
+  const [slashCommands, setSlashCommands] = useState<SlashCommand[]>([]);
+  const [heroImageMode, setHeroImageMode] = useState(false);
+  const pendingFirstRef = useRef<PendingFirstMessage | null>(null);
   const pendingSessionRefreshRef = useRef(false);
   const remoteReplyPollRef = useRef(0);
   const messageCacheRef = useRef<Map<string, UIMessage[]>>(new Map());
+  const lastCachedChatIdRef = useRef<string | null>(null);
   const tokenRef = useRef(token);
 
   useEffect(() => {
@@ -424,10 +474,11 @@ export function ThreadShell({
     messages,
     isStreaming,
     send,
+    stop,
     setMessages,
     streamError,
     dismissStreamError,
-  } = useNanobotStream(chatId ?? historyKey, initial, chatId);
+  } = useNanobotStream(chatId, initial, hasPendingToolCalls, onTurnEnd);
   const showHeroComposer = messages.length === 0 && !loading;
   const messagePendingAsk = useMemo(() => {
     for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -622,7 +673,11 @@ export function ThreadShell({
     // When the user switches away and back, keep the local in-memory thread
     // state (including not-yet-persisted messages) instead of replacing it with
     // whatever the history endpoint currently knows about.
-    setMessages(cached && cached.length > 0 ? cached : historical);
+    setMessages((prev) => {
+      if (cached && cached.length > 0) return cached;
+      if (historical.length === 0 && prev.length > 0) return prev;
+      return historical;
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading, chatId, historical]);
 
@@ -632,10 +687,24 @@ export function ThreadShell({
     setMessages(historical);
   }, [chatId, historical, remoteReplyPending, setMessages]);
 
-  useEffect(() => {
-    if (!chatId) return;
+  useLayoutEffect(() => {
+    if (!chatId) {
+      lastCachedChatIdRef.current = null;
+      return;
+    }
+    if (loading) return;
+    // Skip the first cache write after a chat switch. During that render,
+    // `messages` can still belong to the previous chat until the stream hook
+    // resets its local state for the new session.
+    if (lastCachedChatIdRef.current !== chatId) {
+      lastCachedChatIdRef.current = chatId;
+      if (messages.length > 0) {
+        messageCacheRef.current.set(chatId, messages);
+      }
+      return;
+    }
     messageCacheRef.current.set(chatId, messages);
-  }, [chatId, messages]);
+  }, [chatId, loading, messages]);
 
   useEffect(() => {
     if (!historyKey || isWebSocketSession) return;
@@ -690,35 +759,83 @@ export function ThreadShell({
     const pending = pendingFirstRef.current;
     if (!pending) return;
     pendingFirstRef.current = null;
-    client.sendMessage(chatId, pending);
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: createUuid(),
-        role: "user",
-        content: pending,
-        createdAt: Date.now(),
-      },
-    ]);
+    send(pending.content, pending.images, pending.options);
     setBooting(false);
-  }, [chatId, client, setMessages]);
+  }, [chatId, send]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const commands = await listSlashCommands(token);
+        if (!cancelled) setSlashCommands(commands);
+      } catch {
+        if (!cancelled) setSlashCommands([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
 
   useEffect(() => () => {
     remoteReplyPollRef.current += 1;
   }, []);
 
   const handleWelcomeSend = useCallback(
-    async (content: string) => {
+    async (content: string, images?: SendImage[], options?: SendOptions) => {
       if (booting) return;
       setBooting(true);
-      pendingFirstRef.current = content;
-      const newId = await onNewChat();
+      pendingFirstRef.current = { content, images, options };
+      const newId = await onCreateChat?.();
       if (!newId) {
         pendingFirstRef.current = null;
         setBooting(false);
       }
     },
-    [booting, onNewChat],
+    [booting, onCreateChat],
+  );
+
+  const handleQuickAction = useCallback(
+    (prompt: string) => {
+      const options: SendOptions | undefined = heroImageMode
+        ? { imageGeneration: { enabled: true, aspect_ratio: null } }
+        : undefined;
+      if (session) {
+        send(prompt, undefined, options);
+        return;
+      }
+      void handleWelcomeSend(prompt, undefined, options);
+    },
+    [handleWelcomeSend, heroImageMode, send, session],
+  );
+
+  const quickActionItems = heroImageMode ? IMAGE_QUICK_ACTION_KEYS : QUICK_ACTION_KEYS;
+  const quickActionPrefix = heroImageMode
+    ? "thread.empty.imageQuickActions"
+    : "thread.empty.quickActions";
+  const quickActions = (
+    <div className="mx-auto grid w-full max-w-[58rem] grid-cols-2 gap-3 pt-4 sm:grid-cols-3 lg:grid-cols-6 lg:gap-4">
+      {quickActionItems.map(({ key, icon: Icon, tone }) => {
+        const title = t(`${quickActionPrefix}.${key}.title`);
+        const prompt = t(`${quickActionPrefix}.${key}.prompt`);
+        return (
+          <button
+            key={key}
+            type="button"
+            onClick={() => handleQuickAction(prompt)}
+            disabled={booting || isStreaming}
+            className="group flex min-h-[136px] flex-col justify-between rounded-[20px] border border-black/[0.035] bg-card px-5 py-5 text-left shadow-[0_14px_34px_rgba(15,23,42,0.07)] transition-all hover:-translate-y-0.5 hover:shadow-[0_18px_42px_rgba(15,23,42,0.10)] disabled:pointer-events-none disabled:opacity-60 dark:border-white/[0.06] dark:shadow-[0_16px_34px_rgba(0,0,0,0.28)]"
+          >
+            <Icon className={`h-[18px] w-[18px] ${tone}`} strokeWidth={2} />
+            <span className="max-w-[7.5rem] text-[15px] font-medium leading-[1.28] tracking-[-0.01em] text-foreground/82">
+              {title}
+            </span>
+            <ChevronRight className="h-4 w-4 self-end text-muted-foreground/45 transition-colors group-hover:text-muted-foreground" />
+          </button>
+        );
+      })}
+    </div>
   );
 
   const handleApprovalResponse = useCallback(
@@ -810,7 +927,7 @@ export function ThreadShell({
       try {
         let sessionKey = historyKey;
         if (!sessionKey) {
-          const newId = await onNewChat();
+          const newId = await onCreateChat?.();
           if (!newId) return;
           sessionKey = `websocket:${newId}`;
         }
@@ -822,7 +939,7 @@ export function ThreadShell({
         setModelTargetPending(false);
       }
     },
-    [historyKey, modelTargetPending, onNewChat, setActiveTarget, setModelName, token],
+    [historyKey, modelTargetPending, onCreateChat, setActiveTarget, setModelName, token],
   );
 
   const emptyState = loading ? (
@@ -849,7 +966,10 @@ export function ThreadShell({
     <AssistantDashboard
       sessions={sessions}
       onOpenSession={onOpenSession}
-      onNewChat={onNewChat}
+      onNewChat={onCreateChat ?? (async () => {
+        onNewChat?.();
+        return null;
+      })}
     />
   );
   const viewportMessages = session ? messages : [];
@@ -860,8 +980,12 @@ export function ThreadShell({
       <ThreadHeader
         title={title}
         onToggleSidebar={onToggleSidebar}
+        theme={theme}
+        onToggleTheme={onToggleTheme}
+        onOpenSettings={onOpenSettings}
         hideSidebarToggleOnDesktop={hideSidebarToggleOnDesktop}
-        statusBadges={headerStatusBadges}
+        minimal={!session && !loading}
+    statusBadges={headerStatusBadges}
       />
       {(session && (statusRailItems.length > 0 || statusRailCaption || ownerAwareSummary || currentTaskSummary || continuityPlaceholder || memoryCorrectionActions.length > 0)) ? (
         <ThreadStatusRail
@@ -876,7 +1000,7 @@ export function ThreadShell({
         onApprovalResponse={handleApprovalResponse}
         emptyState={emptyState}
         composer={
-          session ? <>
+          <>
             {session ? (
               <ThreadInlineActionResult
                 domain={currentActionDomain}
@@ -896,17 +1020,18 @@ export function ThreadShell({
                 onDismiss={threadStatus.tone === "failed" ? dismissStreamError : undefined}
               />
             ) : null}
-            {session && pendingAsk ? (
+            {pendingAsk ? (
               <AskUserPrompt
                 question={pendingAsk.question}
                 buttons={pendingAsk.buttons}
-                onAnswer={isWebSocketSession ? handleWebSocketSend : handleBridgedSessionSend}
+                onAnswer={session && !isWebSocketSession ? handleBridgedSessionSend : send}
               />
             ) : null}
             {session ? (
               <ThreadComposer
                 onSend={isWebSocketSession ? handleWebSocketSend : handleBridgedSessionSend}
                 disabled={isWebSocketSession ? !chatId : remoteReplyPending}
+                isStreaming={isStreaming}
                 placeholder={
                   showHeroComposer
                     ? t("thread.composer.placeholderHero")
@@ -920,27 +1045,38 @@ export function ThreadShell({
                 modelTargetPending={modelTargetPending}
                 onSelectModelTarget={handleSelectModelTarget}
                 variant={showHeroComposer ? "hero" : "thread"}
+                slashCommands={slashCommands}
+                imageMode={showHeroComposer ? heroImageMode : undefined}
+                onImageModeChange={showHeroComposer ? setHeroImageMode : undefined}
+                onStop={isWebSocketSession ? stop : undefined}
               />
             ) : (
-              <ThreadComposer
-                onSend={handleWelcomeSend}
-                disabled={booting}
-                placeholder={
-                  booting
-                    ? t("thread.composer.placeholderOpening")
-                    : t("thread.composer.placeholderHero")
-                }
-                injectedDraft={composerDraft}
-                injectedDraftNonce={composerDraftNonce}
-                modelLabel={toModelBadgeLabel(modelName, activeTarget)}
-                activeTarget={activeTarget}
-                modelTargets={modelTargets}
-                modelTargetPending={modelTargetPending}
-                onSelectModelTarget={handleSelectModelTarget}
-                variant="hero"
-              />
+              <>
+                <ThreadComposer
+                  onSend={handleWelcomeSend}
+                  disabled={booting}
+                  isStreaming={isStreaming}
+                  placeholder={
+                    booting
+                      ? t("thread.composer.placeholderOpening")
+                      : t("thread.composer.placeholderHero")
+                  }
+                  injectedDraft={composerDraft}
+                  injectedDraftNonce={composerDraftNonce}
+                  modelLabel={toModelBadgeLabel(modelName, activeTarget)}
+                  activeTarget={activeTarget}
+                  modelTargets={modelTargets}
+                  modelTargetPending={modelTargetPending}
+                  onSelectModelTarget={handleSelectModelTarget}
+                  variant="hero"
+                  slashCommands={slashCommands}
+                  imageMode={heroImageMode}
+                  onImageModeChange={setHeroImageMode}
+                />
+                {showHeroComposer ? quickActions : null}
+              </>
             )}
-          </> : null
+          </>
         }
       />
       <ThreadAssistantDetailsSheet

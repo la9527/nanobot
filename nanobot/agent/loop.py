@@ -8,7 +8,7 @@ import json
 import os
 import re
 import time
-from contextlib import AsyncExitStack, nullcontext
+from contextlib import AsyncExitStack, nullcontext, suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
@@ -29,7 +29,9 @@ from nanobot.agent.tools.ask import (
     pending_ask_user_id,
 )
 from nanobot.agent.tools.cron import CronTool
+from nanobot.agent.tools.file_state import FileStateStore, bind_file_states, reset_file_states
 from nanobot.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
+from nanobot.agent.tools.image_generation import ImageGenerationTool
 from nanobot.agent.tools.message import MessageTool
 from nanobot.agent.tools.notebook import NotebookEditTool
 from nanobot.agent.tools.registry import ToolRegistry
@@ -60,9 +62,11 @@ from nanobot.response_status import (
 )
 from nanobot.providers.factory import ProviderSnapshot
 from nanobot.session.manager import Session, SessionManager
+from nanobot.utils.artifacts import generated_image_paths_from_messages
 from nanobot.utils.document import extract_documents
 from nanobot.utils.helpers import image_placeholder_text
 from nanobot.utils.helpers import truncate_text as truncate_text_fn
+from nanobot.utils.image_generation_intent import image_generation_prompt
 from nanobot.utils.progress_events import (
     build_tool_event_finish_payloads,
     build_tool_event_start_payload,
@@ -70,9 +74,16 @@ from nanobot.utils.progress_events import (
     on_progress_accepts_tool_events,
 )
 from nanobot.utils.runtime import EMPTY_FINAL_RESPONSE_MESSAGE
+from nanobot.utils.webui_titles import mark_webui_session, maybe_generate_webui_title_after_turn
 
 if TYPE_CHECKING:
-    from nanobot.config.schema import ChannelsConfig, ExecToolConfig, ToolsConfig, WebToolsConfig
+    from nanobot.config.schema import (
+        ChannelsConfig,
+        ExecToolConfig,
+        ProviderConfig,
+        ToolsConfig,
+        WebToolsConfig,
+    )
     from nanobot.cron.service import CronService
 
 
@@ -127,6 +138,11 @@ class _LoopHook(AgentHook):
 
     async def before_iteration(self, context: AgentHookContext) -> None:
         self._loop._current_iteration = context.iteration
+        logger.debug(
+            "Starting agent loop iteration {} for session {}",
+            context.iteration,
+            self._session_key,
+        )
 
     async def before_execute_tools(self, context: AgentHookContext) -> None:
         if self._on_progress:
@@ -215,6 +231,7 @@ class AgentLoop:
         context_block_limit: int | None = None,
         max_tool_result_chars: int | None = None,
         provider_retry_mode: str = "standard",
+        tool_hint_max_length: int | None = None,
         web_config: WebToolsConfig | None = None,
         exec_config: ExecToolConfig | None = None,
         cron_service: CronService | None = None,
@@ -230,6 +247,8 @@ class AgentLoop:
         unified_session: bool = False,
         disabled_skills: list[str] | None = None,
         tools_config: ToolsConfig | None = None,
+        image_generation_provider_config: ProviderConfig | None = None,
+        image_generation_provider_configs: dict[str, ProviderConfig] | None = None,
         provider_snapshot_loader: Callable[[], ProviderSnapshot] | None = None,
         provider_signature: tuple[object, ...] | None = None,
     ):
@@ -261,9 +280,19 @@ class AgentLoop:
             else defaults.max_tool_result_chars
         )
         self.provider_retry_mode = provider_retry_mode
+        self.tool_hint_max_length = (
+            tool_hint_max_length if tool_hint_max_length is not None
+            else defaults.tool_hint_max_length
+        )
         self.web_config = web_config or WebToolsConfig()
         self.exec_config = exec_config or ExecToolConfig()
         self.tools_config = _tc
+        self._image_generation_provider_configs = dict(image_generation_provider_configs or {})
+        if (
+            image_generation_provider_config is not None
+            and "openrouter" not in self._image_generation_provider_configs
+        ):
+            self._image_generation_provider_configs["openrouter"] = image_generation_provider_config
         self.cron_service = cron_service
         self.restrict_to_workspace = restrict_to_workspace
         self._start_time = time.time()
@@ -273,6 +302,9 @@ class AgentLoop:
         self.context = ContextBuilder(workspace, timezone=timezone, disabled_skills=disabled_skills)
         self.sessions = session_manager or SessionManager(workspace)
         self.tools = ToolRegistry()
+        # One file-read/write tracker per logical session. The tool registry is
+        # shared by this loop, so tools resolve the active state via contextvars.
+        self._file_state_store = FileStateStore()
         self.runner = AgentRunner(provider)
         self.subagents = SubagentManager(
             provider=provider,
@@ -284,6 +316,7 @@ class AgentLoop:
             exec_config=self.exec_config,
             restrict_to_workspace=restrict_to_workspace,
             disabled_skills=disabled_skills,
+            max_iterations=self.max_iterations,
         )
         self._unified_session = unified_session
         self._max_messages = max_messages if max_messages > 0 else 120
@@ -429,6 +462,10 @@ class AgentLoop:
             model = target.name
         return provider, model, target.name
 
+    def _sync_subagent_runtime_limits(self) -> None:
+        """Keep subagent runtime limits aligned with mutable loop settings."""
+        self.subagents.max_iterations = self.max_iterations
+
     def _apply_provider_snapshot(self, snapshot: ProviderSnapshot) -> None:
         """Swap model/provider for future turns without disturbing an active one."""
         provider = snapshot.provider
@@ -467,7 +504,9 @@ class AgentLoop:
         self.tools.register(AskUserTool())
         self.tools.register(
             ReadFileTool(
-                workspace=self.workspace, allowed_dir=allowed_dir, extra_allowed_dirs=extra_read
+                workspace=self.workspace,
+                allowed_dir=allowed_dir,
+                extra_allowed_dirs=extra_read,
             )
         )
         for cls in (WriteFileTool, EditFileTool, ListDirTool):
@@ -487,6 +526,7 @@ class AgentLoop:
                     allowed_env_keys=self.exec_config.allowed_env_keys,
                     allow_patterns=policy["exec_allow_patterns"],
                     deny_patterns=policy["exec_deny_patterns"],
+                    approval_patterns=policy["exec_approval_patterns"],
                 )
             )
         if self.web_config.enable:
@@ -502,6 +542,14 @@ class AgentLoop:
                     config=self.web_config.fetch,
                     proxy=self.web_config.proxy,
                     user_agent=self.web_config.user_agent,
+                )
+            )
+        if self.tools_config.image_generation.enabled:
+            self.tools.register(
+                ImageGenerationTool(
+                    workspace=self.workspace,
+                    config=self.tools_config.image_generation,
+                    provider_configs=self._image_generation_provider_configs,
                 )
             )
         self.tools.register(MessageTool(send_callback=self.bus.publish_outbound, workspace=self.workspace))
@@ -773,7 +821,7 @@ class AgentLoop:
             logger.warning("MCP connection cancelled (will retry next message)")
             self._mcp_stacks.clear()
         except BaseException as e:
-            logger.error("Failed to connect MCP servers (will retry next message): {}", e)
+            logger.warning("Failed to connect MCP servers (will retry next message): {}", e)
             self._mcp_stacks.clear()
         finally:
             self._mcp_connecting = False
@@ -799,6 +847,8 @@ class AgentLoop:
                 if hasattr(tool, "set_context"):
                     if name == "spawn":
                         tool.set_context(channel, chat_id, effective_key=effective_key)
+                        if hasattr(tool, "set_origin_message_id"):
+                            tool.set_origin_message_id(message_id)
                     elif name == "cron":
                         tool.set_context(channel, chat_id, metadata=metadata, session_key=session_key)
                     elif name == "message":
@@ -820,12 +870,11 @@ class AgentLoop:
         """Return the chat id shown in runtime metadata for the model."""
         return str(msg.metadata.get("context_chat_id") or msg.chat_id)
 
-    @staticmethod
-    def _tool_hint(tool_calls: list) -> str:
+    def _tool_hint(self, tool_calls: list) -> str:
         """Format tool calls as concise hints with smart abbreviation."""
         from nanobot.utils.tool_hints import format_tool_hints
 
-        return format_tool_hints(tool_calls)
+        return format_tool_hints(tool_calls, max_length=self.tool_hint_max_length)
 
     async def _dispatch_command_inline(
         self,
@@ -856,10 +905,8 @@ class AgentLoop:
         cancellable = [t for t in tasks if t is not current]
         cancelled = sum(1 for t in cancellable if not t.done() and t.cancel())
         for t in cancellable:
-            try:
+            with suppress(asyncio.CancelledError, Exception):
                 await t
-            except (asyncio.CancelledError, Exception):
-                pass
         sub_cancelled = await self.subagents.cancel_by_session(key)
         return cancelled + sub_cancelled
 
@@ -908,6 +955,8 @@ class AgentLoop:
 
         Returns (final_content, tools_used, messages, stop_reason, had_injections).
         """
+        self._sync_subagent_runtime_limits()
+
         loop_hook = _LoopHook(
             self,
             on_progress=on_progress,
@@ -993,36 +1042,42 @@ class AgentLoop:
 
             return items
 
-        result = await runner.run(AgentRunSpec(
-            initial_messages=initial_messages,
-            tools=effective_tools,
-            model=active_model,
-            max_iterations=self.max_iterations,
-            max_tool_result_chars=self.max_tool_result_chars,
-            hook=hook,
-            error_message="Sorry, I encountered an error calling the AI model.",
-            concurrent_tools=True,
-            workspace=self.workspace,
-            session_key=session.key if session else None,
-            context_window_tokens=self.context_window_tokens,
-            context_block_limit=self.context_block_limit,
-            provider_retry_mode=self.provider_retry_mode,
-            progress_callback=on_progress,
-            retry_wait_callback=on_retry_wait,
-            checkpoint_callback=_checkpoint,
-            injection_callback=_drain_pending,
-            tool_approval_callback=lambda tool_call, _tool, _params, prompt: self._request_tool_approval(
-                session=session,
-                channel=channel,
-                chat_id=chat_id,
-                message_id=message_id,
-                pending_queue=pending_queue,
-                tool_name=tool_call.name,
-                tool_call_id=tool_call.id,
-                prompt=prompt,
-                params=_params,
-            ),
-        ))
+        active_session_key = session.key if session else session_key
+        file_state_token = bind_file_states(self._file_state_store.for_session(active_session_key))
+        try:
+            result = await runner.run(AgentRunSpec(
+                initial_messages=initial_messages,
+                tools=effective_tools,
+                model=active_model,
+                max_iterations=self.max_iterations,
+                max_tool_result_chars=self.max_tool_result_chars,
+                hook=hook,
+                error_message="Sorry, I encountered an error calling the AI model.",
+                concurrent_tools=True,
+                workspace=self.workspace,
+                session_key=session.key if session else None,
+                context_window_tokens=self.context_window_tokens,
+                context_block_limit=self.context_block_limit,
+                provider_retry_mode=self.provider_retry_mode,
+                progress_callback=on_progress,
+                stream_progress_deltas=on_stream is not None,
+                retry_wait_callback=on_retry_wait,
+                checkpoint_callback=_checkpoint,
+                injection_callback=_drain_pending,
+                tool_approval_callback=lambda tool_call, _tool, _params, prompt: self._request_tool_approval(
+                    session=session,
+                    channel=channel,
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    pending_queue=pending_queue,
+                    tool_name=tool_call.name,
+                    tool_call_id=tool_call.id,
+                    prompt=prompt,
+                    params=_params,
+                ),
+            ))
+        finally:
+            reset_file_states(file_state_token)
         self._last_usage = result.usage
         if result.stop_reason == "max_iterations":
             logger.warning("Max iterations ({}) reached", self.max_iterations)
@@ -1208,6 +1263,33 @@ class AgentLoop:
                             channel=msg.channel, chat_id=msg.chat_id,
                             content="", metadata=msg.metadata or {},
                         ))
+                    if msg.channel == "websocket":
+                        # Signal that the turn is fully complete (all tools executed,
+                        # final text streamed).  This lets WS clients know when to
+                        # definitively stop the loading indicator.
+                        await self.bus.publish_outbound(OutboundMessage(
+                            channel=msg.channel, chat_id=msg.chat_id,
+                            content="", metadata={**msg.metadata, "_turn_end": True},
+                        ))
+                        if msg.metadata.get("webui") is True:
+                            async def _generate_title_and_notify() -> None:
+                                generated = await maybe_generate_webui_title_after_turn(
+                                    channel=msg.channel,
+                                    metadata=msg.metadata,
+                                    sessions=self.sessions,
+                                    session_key=session_key,
+                                    provider=self.provider,
+                                    model=self.model,
+                                )
+                                if generated:
+                                    await self.bus.publish_outbound(OutboundMessage(
+                                        channel=msg.channel,
+                                        chat_id=msg.chat_id,
+                                        content="",
+                                        metadata={**msg.metadata, "_session_updated": True},
+                                    ))
+
+                            self._schedule_background(_generate_title_and_notify())
                 except asyncio.CancelledError:
                     logger.info("Task cancelled for session {}", session_key)
                     # Preserve partial context from the interrupted turn so
@@ -1311,10 +1393,13 @@ class AgentLoop:
                 self.sessions.save(session)
 
             session, pending = self.auto_compact.prepare_session(session, key)
+            if pending:
+                logger.info("Memory compact triggered for session {}", key)
 
             await self.consolidator.maybe_consolidate_by_tokens(
                 session,
                 session_summary=pending,
+                replay_max_messages=self._max_messages,
             )
             # Persist subagent follow-ups into durable history BEFORE prompt
             # assembly. ContextBuilder merges adjacent same-role messages for
@@ -1323,6 +1408,7 @@ class AgentLoop:
             # LLM via the merged prompt. See _persist_subagent_followup.
             is_subagent = msg.sender_id == "subagent"
             if is_subagent and self._persist_subagent_followup(session, msg):
+                logger.debug("Subagent result persisted for session {}", key)
                 self.sessions.save(session)
             self._set_tool_context(
                 channel, chat_id, msg.metadata.get("message_id"),
@@ -1346,6 +1432,7 @@ class AgentLoop:
                 chat_id=chat_id,
                 session_summary=pending,
                 current_role=current_role,
+                sender_id=msg.sender_id,
             )
             final_content, _, all_msgs, stop_reason, _had_injections, _response_meta = await self._run_agent_loop(
                 messages, session=session, channel=channel, chat_id=chat_id,
@@ -1360,7 +1447,12 @@ class AgentLoop:
             session.enforce_file_cap(on_archive=self.context.memory.raw_archive)
             self._clear_runtime_checkpoint(session)
             self.sessions.save(session)
-            self._schedule_background(self.consolidator.maybe_consolidate_by_tokens(session))
+            self._schedule_background(
+                self.consolidator.maybe_consolidate_by_tokens(
+                    session,
+                    replay_max_messages=self._max_messages,
+                )
+            )
             options = ask_user_options_from_messages(all_msgs) if stop_reason == "ask_user" else []
             content, buttons = ask_user_outbound(
                 final_content or "Background task completed.",
@@ -1375,6 +1467,8 @@ class AgentLoop:
             outbound_metadata: dict[str, Any] = {}
             if channel == "slack" and key.startswith("slack:") and key.count(":") >= 2:
                 outbound_metadata["slack"] = {"thread_ts": key.split(":", 2)[2]}
+            if origin_message_id := msg.metadata.get("origin_message_id"):
+                outbound_metadata["origin_message_id"] = origin_message_id
             return OutboundMessage(
                 channel=channel,
                 chat_id=chat_id,
@@ -1394,6 +1488,7 @@ class AgentLoop:
 
         key = session_key or msg.session_key
         session = self.sessions.get_or_create(key)
+        mark_webui_session(session, msg.metadata)
         if self._restore_runtime_checkpoint(session):
             self.sessions.save(session)
         if self._restore_pending_user_turn(session):
@@ -1427,6 +1522,7 @@ class AgentLoop:
         await self.consolidator.maybe_consolidate_by_tokens(
             session,
             session_summary=pending,
+            replay_max_messages=self._max_messages,
         )
 
         self._set_tool_context(
@@ -1452,16 +1548,17 @@ class AgentLoop:
                 self.context.build_system_prompt(channel=msg.channel),
                 history,
                 pending_ask_id,
-                msg.content,
+                image_generation_prompt(msg.content, msg.metadata),
             )
         else:
             initial_messages = self.context.build_messages(
                 history=history,
-                current_message=msg.content,
+                current_message=image_generation_prompt(msg.content, msg.metadata),
                 session_summary=pending,
                 media=msg.media if msg.media else None,
                 channel=msg.channel,
                 chat_id=self._runtime_chat_id(msg),
+                sender_id=msg.sender_id,
             )
 
         async def _bus_progress(
@@ -1611,12 +1708,22 @@ class AgentLoop:
 
         # Skip the already-persisted user message when saving the turn
         save_skip = 1 + len(history) + (1 if user_persisted_early else 0)
+        generated_media = generated_image_paths_from_messages(all_msgs[save_skip:])
+        if generated_media and all_msgs and all_msgs[-1].get("role") == "assistant":
+            existing_media = all_msgs[-1].get("media")
+            media = existing_media if isinstance(existing_media, list) else []
+            all_msgs[-1]["media"] = list(dict.fromkeys([*media, *generated_media]))
         self._save_turn(session, all_msgs, save_skip)
         session.enforce_file_cap(on_archive=self.context.memory.raw_archive)
         self._clear_pending_user_turn(session)
         self._clear_runtime_checkpoint(session)
         self.sessions.save(session)
-        self._schedule_background(self.consolidator.maybe_consolidate_by_tokens(session))
+        self._schedule_background(
+            self.consolidator.maybe_consolidate_by_tokens(
+                session,
+                replay_max_messages=self._max_messages,
+            )
+        )
 
         status_snapshot = self.build_response_status(session)
         if (
@@ -1680,12 +1787,13 @@ class AgentLoop:
             ask_user_options_from_messages(all_msgs) if stop_reason == "ask_user" else [],
             msg.channel,
         )
-        if on_stream is not None and stop_reason not in {"ask_user", "error"}:
+        if on_stream is not None and stop_reason not in {"ask_user", "error", "tool_error"}:
             meta["_streamed"] = True
         return OutboundMessage(
             channel=msg.channel,
             chat_id=msg.chat_id,
             content=final_content,
+            media=generated_media,
             metadata=meta,
             buttons=buttons,
         )
