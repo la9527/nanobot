@@ -6,6 +6,12 @@ Before scheduling reminders, check available skills and follow skill guidance fi
 Use the built-in `cron` tool to create/list/remove jobs (do not call `nanobot cron` via `exec`).
 Get USER_ID and CHANNEL from the current session (e.g., `8281248569` and `telegram` from `telegram:8281248569`).
 
+Use `cron` for exact wall-clock schedules or user-visible timed delivery, such as:
+
+- specific times like `07:00`, `12:20`, `21:30`
+- daily/weekday schedules
+- timezone-aware scheduled briefings or reminders
+
 **Do NOT just write reminders to MEMORY.md** — that won't trigger actual notifications.
 
 ## Heartbeat Tasks
@@ -16,4 +22,6 @@ Get USER_ID and CHANNEL from the current session (e.g., `8281248569` and `telegr
 - **Remove**: `edit_file` to delete completed tasks
 - **Rewrite**: `write_file` to replace all tasks
 
-When the user asks for a recurring/periodic task, update `HEARTBEAT.md` instead of creating a one-time cron reminder.
+Use `HEARTBEAT.md` for situation-aware periodic review tasks that can run on the heartbeat interval, such as morning digests, blocked-task follow-up, pending approval checks, or proactive summaries.
+
+Do not put exact-time schedules into `HEARTBEAT.md`. If the user asks for specific times or cron-like delivery, use `cron` instead.

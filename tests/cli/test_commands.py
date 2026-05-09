@@ -940,6 +940,117 @@ def test_heartbeat_retains_recent_messages_by_default():
     assert config.gateway.heartbeat.keep_recent_messages == 8
 
 
+def test_gateway_heartbeat_executes_explicit_tasks_without_proactive_context(
+    monkeypatch, tmp_path: Path
+) -> None:
+    config_file = _write_instance_config(tmp_path)
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path / "config-workspace")
+    captured: dict[str, object] = {}
+
+    class _FakeSession:
+        def retain_recent_legal_suffix(self, _count: int) -> None:
+            return None
+
+    class _FakeSessions:
+        def __init__(self) -> None:
+            self.session = _FakeSession()
+
+        def get_or_create(self, key: str) -> _FakeSession:
+            captured["heartbeat_session_key"] = key
+            return self.session
+
+        def save(self, session: _FakeSession) -> None:
+            captured["saved_heartbeat_session"] = session
+
+    class _FakeAgentLoop:
+        def __init__(self, *args, **kwargs) -> None:
+            self.model = "test-model"
+            self.tools = {}
+            self.sessions = _FakeSessions()
+
+        async def process_direct(self, prompt: str, **kwargs):
+            captured["heartbeat_prompt"] = prompt
+            captured["process_direct_kwargs"] = kwargs
+            return OutboundMessage(
+                channel="telegram",
+                chat_id="user-1",
+                content="뉴스 브리핑 전달",
+            )
+
+        async def close_mcp(self) -> None:
+            return None
+
+        async def run(self) -> None:
+            return None
+
+        def stop(self) -> None:
+            return None
+
+    class _FakeSessionManager:
+        def __init__(self, _workspace: Path) -> None:
+            return None
+
+        def list_sessions(self) -> list[dict[str, object]]:
+            return []
+
+        def get_or_create(self, _key: str):
+            raise AssertionError("heartbeat execution should not touch channel sessions here")
+
+        def save(self, _session) -> None:
+            raise AssertionError("heartbeat execution should only save the heartbeat session")
+
+    class _FakeCronService:
+        def __init__(self, _store_path: Path) -> None:
+            return None
+
+        def status(self) -> dict[str, int]:
+            return {"jobs": 0}
+
+    class _FakeChannelManager:
+        def __init__(self, _config, _bus, session_manager=None) -> None:
+            self.enabled_channels = ["telegram"]
+
+    class _FakeHeartbeatService:
+        def __init__(self, **kwargs) -> None:
+            captured["on_heartbeat_execute"] = kwargs["on_execute"]
+            raise _StopGatewayError("stop")
+
+    _patch_cli_command_runtime(
+        monkeypatch,
+        config,
+        message_bus=lambda: object(),
+        session_manager=_FakeSessionManager,
+        cron_service=_FakeCronService,
+    )
+    monkeypatch.setattr("nanobot.agent.loop.AgentLoop", _FakeAgentLoop)
+    monkeypatch.setattr("nanobot.channels.manager.ChannelManager", _FakeChannelManager)
+    monkeypatch.setattr("nanobot.heartbeat.service.HeartbeatService", _FakeHeartbeatService)
+
+    result = runner.invoke(app, ["gateway", "--config", str(config_file)])
+
+    assert isinstance(result.exception, _StopGatewayError)
+    on_execute = captured["on_heartbeat_execute"]
+    assert callable(on_execute)
+
+    response = asyncio.run(on_execute("News briefing schedule: deliver the scheduled briefing now."))
+
+    assert response == "뉴스 브리핑 전달"
+    assert captured["heartbeat_session_key"] == "heartbeat"
+    assert captured["saved_heartbeat_session"] is not None
+    heartbeat_prompt = captured["heartbeat_prompt"]
+    assert isinstance(heartbeat_prompt, str)
+    assert "Current proactive context:" not in heartbeat_prompt
+    assert heartbeat_prompt.endswith("News briefing schedule: deliver the scheduled briefing now.")
+    process_kwargs = captured["process_direct_kwargs"]
+    assert process_kwargs == {
+        "session_key": "heartbeat",
+        "channel": "cli",
+        "chat_id": "direct",
+        "on_progress": process_kwargs["on_progress"],
+    }
+
+
 def _write_instance_config(tmp_path: Path) -> Path:
     config_file = tmp_path / "instance" / "config.json"
     config_file.parent.mkdir(parents=True)

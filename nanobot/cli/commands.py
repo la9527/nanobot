@@ -943,15 +943,22 @@ def _run_gateway(
             session_manager.list_sessions(),
             max_digest_items=heartbeat_policy.max_digest_items,
         )
-        if not proactive_context.strip():
-            logger.info("Heartbeat: no actionable proactive context, skipping execution")
+        if not proactive_context.strip() and not tasks.strip():
+            logger.info("Heartbeat: no proactive context or explicit tasks, skipping execution")
             return ""
+        if not proactive_context.strip():
+            logger.info("Heartbeat: no actionable proactive context, executing explicit tasks only")
+
+        heartbeat_prompt = heartbeat_preamble
+        if proactive_context.strip():
+            heartbeat_prompt += proactive_context
+        heartbeat_prompt += tasks
 
         async def _silent(*_args, **_kwargs):
             pass
 
         resp = await agent.process_direct(
-            heartbeat_preamble + proactive_context + tasks,
+            heartbeat_prompt,
             session_key="heartbeat",
             channel=channel,
             chat_id=chat_id,
