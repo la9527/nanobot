@@ -422,6 +422,10 @@ async def cmd_new(ctx: CommandContext) -> OutboundMessage:
     loop = ctx.loop
     await loop._cancel_active_tasks(ctx.key)
     session = ctx.session or loop.sessions.get_or_create(ctx.key)
+    owner_profile = session.metadata.get("owner_profile") if isinstance(session.metadata, dict) else None
+    locale = owner_profile.get("preferred_language") if isinstance(owner_profile, dict) else None
+    if not isinstance(locale, str) or not locale.strip():
+        locale = CALENDAR_DEFAULT_LOCALE
     snapshot = session.messages[session.last_consolidated:]
     session.clear()
     loop.sessions.save(session)
@@ -430,7 +434,7 @@ async def cmd_new(ctx: CommandContext) -> OutboundMessage:
         loop._schedule_background(loop.consolidator.archive(snapshot))
     return OutboundMessage(
         channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
-        content="New session started.",
+        content=_t("builtin.new_session.started", locale=locale),
         metadata=dict(ctx.msg.metadata or {})
     )
 

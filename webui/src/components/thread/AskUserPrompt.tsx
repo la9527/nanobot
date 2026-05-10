@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { MessageSquareText } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -15,6 +16,7 @@ export function AskUserPrompt({
   buttons,
   onAnswer,
 }: AskUserPromptProps) {
+  const { t } = useTranslation();
   const [customOpen, setCustomOpen] = useState(false);
   const [custom, setCustom] = useState("");
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -37,8 +39,21 @@ export function AskUserPrompt({
   if (options.length === 0) return null;
 
   const normalizedOptions = options.map((option) => option.trim().toLowerCase());
+  const approvalAffirmative = [
+    "yes",
+    "approve",
+    t("thread.askUser.approvalOptions.yes"),
+    t("thread.askUser.approvalOptions.approve"),
+  ].map((option) => option.trim().toLowerCase());
+  const approvalNegative = [
+    "no",
+    "cancel",
+    t("thread.askUser.approvalOptions.no"),
+    t("thread.askUser.approvalOptions.cancel"),
+  ].map((option) => option.trim().toLowerCase());
   const looksLikeApproval =
-    normalizedOptions.includes("yes") && normalizedOptions.includes("no");
+    normalizedOptions.some((option) => approvalAffirmative.includes(option))
+    && normalizedOptions.some((option) => approvalNegative.includes(option));
 
   return (
     <div
@@ -49,7 +64,7 @@ export function AskUserPrompt({
           : "border-primary/30 bg-card/95",
       )}
       role="group"
-      aria-label={looksLikeApproval ? "Approval request" : "Question"}
+      aria-label={looksLikeApproval ? t("thread.askUser.aria.approvalRequest") : t("thread.askUser.aria.question")}
     >
       <div className="mb-2 flex items-start gap-2">
         <div
@@ -72,12 +87,12 @@ export function AskUserPrompt({
                   : "bg-primary/10 text-primary",
               )}
             >
-              {looksLikeApproval ? "Waiting approval" : "Action prompt"}
+              {looksLikeApproval ? t("thread.askUser.status.waitingApproval") : t("thread.askUser.status.actionPrompt")}
             </span>
             <span className="text-[11px] text-muted-foreground">
               {looksLikeApproval
-                ? "Review and choose how to continue."
-                : "Choose an answer to continue."}
+                ? t("thread.askUser.hint.reviewAndChoose")
+                : t("thread.askUser.hint.chooseAnswer")}
             </span>
           </div>
           <p className="min-w-0 flex-1 text-sm font-medium leading-5 text-foreground">
@@ -106,7 +121,7 @@ export function AskUserPrompt({
           onClick={() => setCustomOpen((open) => !open)}
           className="justify-start rounded-[10px] px-3 text-muted-foreground"
         >
-          Other...
+          {t("thread.askUser.actions.other")}
         </Button>
       </div>
 
@@ -123,7 +138,7 @@ export function AskUserPrompt({
               }
             }}
             rows={1}
-            placeholder="Type your own answer..."
+            placeholder={t("thread.askUser.placeholder.customAnswer")}
             className={cn(
               "min-h-9 flex-1 resize-none rounded-[10px] border border-border/70 bg-background",
               "px-3 py-2 text-sm leading-5 outline-none placeholder:text-muted-foreground",
@@ -131,7 +146,7 @@ export function AskUserPrompt({
             )}
           />
           <Button type="button" size="sm" onClick={submitCustom} disabled={!custom.trim()}>
-            Send
+            {t("thread.askUser.actions.send")}
           </Button>
         </div>
       ) : null}

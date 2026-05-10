@@ -688,6 +688,10 @@ class WebSocketChannel(BaseChannel):
         if m:
             return self._handle_session_messages(request, m.group(1))
 
+        m = re.match(r"^/api/sessions/([^/]+)/action-result/clear$", got)
+        if m:
+            return self._handle_session_action_result_clear(request, m.group(1))
+
         m = re.match(r"^/api/sessions/([^/]+)/model-target$", got)
         if m:
             return self._handle_session_model_target(request, m.group(1))
@@ -991,6 +995,23 @@ class WebSocketChannel(BaseChannel):
         # the client never needs them once it has the signed fetch URL.
         self._augment_media_urls(data)
         return _http_json_response(data)
+
+    def _handle_session_action_result_clear(self, request: WsRequest, key: str) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        if self._session_manager is None:
+            return _http_error(503, "session manager unavailable")
+        decoded_key = self._decode_webui_session_key(key)
+        if decoded_key is None:
+            return _http_error(404, "session not found")
+        if self._session_manager.read_session_file(decoded_key) is None:
+            return _http_error(404, "session not found")
+
+        session = self._session_manager.get_or_create(decoded_key)
+        had_action_result = "action_result" in session.metadata
+        self._session_manager.clear_action_result(session)
+        self._session_manager.save(session)
+        return _http_json_response({"key": decoded_key, "cleared": had_action_result})
 
     def _load_model_target_context(self) -> tuple[Any, dict[str, Any]] | tuple[None, None]:
         try:

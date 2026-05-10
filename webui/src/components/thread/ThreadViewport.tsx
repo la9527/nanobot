@@ -5,11 +5,13 @@ import { useTranslation } from "react-i18next";
 import { ThreadMessages } from "@/components/thread/ThreadMessages";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import type { UIMessage } from "@/lib/types";
+import type { ReasoningVisibility, UIMessage } from "@/lib/types";
 
 interface ThreadViewportProps {
   messages: UIMessage[];
   isStreaming: boolean;
+  reasoningVisibility?: ReasoningVisibility;
+  historySupplement?: ReactNode;
   composer: ReactNode;
   emptyState?: ReactNode;
   onApprovalResponse?: (messageId: string, decision: "yes" | "no") => void | Promise<void>;
@@ -20,6 +22,8 @@ const NEAR_BOTTOM_PX = 48;
 export function ThreadViewport({
   messages,
   isStreaming,
+  reasoningVisibility = "summary",
+  historySupplement,
   composer,
   emptyState,
   onApprovalResponse,
@@ -27,9 +31,7 @@ export function ThreadViewport({
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
-  const composerWrapRef = useRef<HTMLDivElement>(null);
   const [atBottom, setAtBottom] = useState(true);
-  const [composerHeight, setComposerHeight] = useState(112);
   const initialBottomPinnedRef = useRef(false);
   const atBottomRef = useRef(true);
   const hasMessages = messages.length > 0;
@@ -103,19 +105,6 @@ export function ThreadViewport({
     return () => el.removeEventListener("scroll", onScroll);
   }, []);
 
-  useEffect(() => {
-    const el = composerWrapRef.current;
-    if (!el) return;
-    const update = () => {
-      const next = Math.max(72, Math.ceil(el.getBoundingClientRect().height));
-      setComposerHeight(next);
-    };
-    update();
-    const observer = new ResizeObserver(update);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [composer]);
-
   return (
     <div className="relative flex min-h-0 flex-1 overflow-hidden">
       <div
@@ -130,11 +119,20 @@ export function ThreadViewport({
       >
         {hasMessages ? (
           <div ref={contentRef} className="mx-auto flex min-h-full w-full max-w-[60rem] flex-col">
-            <div className="flex-1 px-3 pt-3" style={{ paddingBottom: composerHeight + 10 }}>
-              <ThreadMessages messages={messages} onApprovalResponse={onApprovalResponse} />
+            <div className="flex-1 px-3 pb-3 pt-3">
+              <ThreadMessages
+                messages={messages}
+                reasoningVisibility={reasoningVisibility}
+                onApprovalResponse={onApprovalResponse}
+              />
+              {historySupplement ? (
+                <div className="mt-4">
+                  {historySupplement}
+                </div>
+              ) : null}
             </div>
 
-            <div ref={composerWrapRef} className="sticky bottom-0 z-10 mt-auto bg-background/95 backdrop-blur-sm">
+            <div className="sticky bottom-0 z-10 mt-auto bg-background/95 backdrop-blur-sm">
               <div className="px-3 pb-2">
                 {composer}
               </div>

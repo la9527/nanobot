@@ -125,7 +125,7 @@ async def test_summarize_threads_builds_digest_from_thread_payload(monkeypatch) 
     )
 
     client = N8NGmailAutomationClient(
-        N8NGmailAutomationConfig(base_url="http://127.0.0.1:5678")
+        N8NGmailAutomationConfig(base_url="http://127.0.0.1:5678", locale="en")
     )
 
     result = await client.summarize_threads(thread_ids=["thread-1"])
@@ -157,7 +157,7 @@ async def test_create_draft_normalizes_preview_and_reference(monkeypatch) -> Non
     )
 
     client = N8NGmailAutomationClient(
-        N8NGmailAutomationConfig(base_url="http://127.0.0.1:5678")
+        N8NGmailAutomationConfig(base_url="http://127.0.0.1:5678", locale="ko-KR")
     )
     request = MailDraftRequest(
         to_recipients=["alice@example.com"],
@@ -236,7 +236,7 @@ async def test_session_runner_persists_draft_result_and_assistant_turn(monkeypat
     assert restored["metadata"]["action_result"]["action"] == "create_draft"
     assert restored["metadata"]["action_result"]["details"]["draft_id"] == "draft-123"
     assert restored["messages"][-1]["role"] == "assistant"
-    assert "메일 초안을 작성했습니다" in restored["messages"][-1]["content"]
+    assert restored["messages"][-1]["content"] == "alice@example.com에게 보낼 초안을 만들었습니다."
 
 
 @pytest.mark.asyncio
@@ -260,7 +260,7 @@ async def test_send_message_normalizes_success_response(monkeypatch) -> None:
     )
 
     client = N8NGmailAutomationClient(
-        N8NGmailAutomationConfig(base_url="http://127.0.0.1:5678")
+        N8NGmailAutomationConfig(base_url="http://127.0.0.1:5678", locale="ko-KR")
     )
 
     result = await client.send_message(
@@ -316,6 +316,14 @@ async def test_session_runner_requests_send_approval_from_latest_draft(monkeypat
     assert restored["metadata"]["approval_summary"]["status"] == "pending"
     assert restored["metadata"]["action_result"]["status"] == "waiting_approval"
     assert restored["metadata"]["mail_send_approval"]["draft_id"] == "draft-123"
+    assert approval.summary == "'Budget follow-up' 메일을 alice@example.com에게 보내려면 승인이 필요합니다."
+    assert approval.error is not None
+    assert approval.error.message == "이 메일을 보내려면 승인이 필요합니다."
+    assert restored["metadata"]["approval_summary"]["prompt_preview"] == (
+        "이 메일을 보내려면 승인이 필요합니다. "
+        "받는 사람: alice@example.com. 제목: Budget follow-up. "
+        "/mail approve 로 보내거나 /mail deny 로 취소하세요."
+    )
 
 
 @pytest.mark.asyncio

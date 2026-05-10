@@ -206,7 +206,7 @@ describe("App layout", () => {
 
     fireEvent.click(getSidebarButton(/^Home$/));
 
-    expect(await screen.findByText("Assistant dashboard")).toBeInTheDocument();
+    expect(await screen.findByText("Dashboard")).toBeInTheDocument();
     expect(screen.queryByRole("textbox", { name: "메시지 입력" })).not.toBeInTheDocument();
   });
 
@@ -327,8 +327,12 @@ describe("App layout", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open settings" }));
 
     expect(await screen.findByRole("heading", { name: "General" })).toBeInTheDocument();
-    expect(screen.getByText("Assistant")).toBeInTheDocument();
+    expect(screen.getByText("Defaults")).toBeInTheDocument();
     expect(screen.getByText("Themes")).toBeInTheDocument();
+    expect(screen.getByText("System")).toBeInTheDocument();
+    expect(screen.getByText("Account")).toBeInTheDocument();
+    expect(screen.getByText("Disconnect this browser from the gateway.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sign out" })).toBeInTheDocument();
     expect(screen.getByDisplayValue("openai/gpt-4o")).toBeInTheDocument();
     expect(screen.getByText("15")).toBeInTheDocument();
 
@@ -576,8 +580,8 @@ describe("App layout", () => {
     await waitFor(() => expect(connectSpy).toHaveBeenCalled());
     fireEvent.click(screen.getByRole("button", { name: "Open settings" }));
 
-    expect(await screen.findByText("Default assistant settings for model selection, theme, and chat readability.")).toBeInTheDocument();
-    expect(screen.getByText("Assistant")).toBeInTheDocument();
+    expect(await screen.findByText("Default settings for model selection, theme, and chat readability.")).toBeInTheDocument();
+    expect(screen.getByText("Defaults")).toBeInTheDocument();
 
     const modelInput = await screen.findByDisplayValue(
       "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0",
@@ -666,7 +670,7 @@ describe("App layout", () => {
     const sidebar = screen.getByRole("navigation", { name: "Sidebar navigation" });
     fireEvent.click(within(sidebar).getByRole("button", { name: "New chat" }));
     expect(createChatSpy).not.toHaveBeenCalled();
-    expect(screen.getByText("Assistant dashboard")).toBeInTheDocument();
+    expect(screen.getByText("Dashboard")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Start a new chat" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Toggle theme from header" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open settings" })).toBeInTheDocument();

@@ -23,6 +23,7 @@ from nanobot.automation_results import (
     MailThreadSummariesDetails,
     MailThreadSummary,
 )
+from nanobot.i18n import translate as _t
 from nanobot.session.manager import SessionManager
 
 
@@ -42,6 +43,7 @@ class N8NGmailAutomationConfig(_MailAutomationModel):
     draft_path: str = "webhook/assistant-gmail-draft"
     send_path: str = "webhook/assistant-gmail-send"
     timeout_s: float = 20.0
+    locale: str = "ko-KR"
 
     @classmethod
     def from_env(
@@ -59,6 +61,7 @@ class N8NGmailAutomationConfig(_MailAutomationModel):
             thread_path=str(scope.get("N8N_GMAIL_THREAD_WEBHOOK_PATH") or "webhook/assistant-gmail-thread").strip(),
             draft_path=str(scope.get("N8N_GMAIL_DRAFT_WEBHOOK_PATH") or "webhook/assistant-gmail-draft").strip(),
             send_path=str(scope.get("N8N_GMAIL_SEND_WEBHOOK_PATH") or "webhook/assistant-gmail-send").strip(),
+            locale=str(scope.get("GMAIL_LOCALE") or scope.get("NANOBOT_LOCALE") or "ko-KR").strip() or "ko-KR",
         )
 
 
@@ -91,6 +94,9 @@ class N8NGmailAutomationClient:
     def __init__(self, config: N8NGmailAutomationConfig):
         self.config = config
 
+    def _locale(self, locale: str | None = None) -> str:
+        return str(locale or self.config.locale or "ko-KR").strip() or "ko-KR"
+
     async def list_important_threads(
         self,
         *,
@@ -116,21 +122,19 @@ class N8NGmailAutomationClient:
         items = payload.get("items") if isinstance(payload, dict) else None
         threads = [self._thread_from_summary_item(item) for item in items or [] if isinstance(item, dict)]
         shown_count = self._coerce_int(payload.get("shownCount")) if isinstance(payload, dict) else None
-        title = "Important mail summary ready" if threads else "No important mail found"
-        summary = (
-            f"{shown_count or len(threads)} important threads were found."
-            if threads
-            else "No important mail matched the current query."
-        )
+        locale = self._locale()
+        count = shown_count or len(threads)
+        title = _t("mail.result.list.ready_title", locale=locale) if threads else _t("mail.result.list.empty_title", locale=locale)
+        summary = _t("mail.result.list.ready_summary", locale=locale, count=count) if threads else _t("mail.result.list.empty_summary", locale=locale)
         return MailImportantThreadsResult(
             action_id=action_id,
             status="completed",
             title=title,
             summary=summary,
-            next_step="Choose a thread to summarize in more detail." if threads else None,
+            next_step=_t("mail.result.list.review_next_step", locale=locale) if threads else None,
             visibility=ActionVisibility(
                 surfaces=["thread", "sidebar"],
-                badge="Mail",
+                badge=_t("mail.badge.mail", locale=locale),
                 inline_status=summary,
                 linked_summary=summary,
             ),
@@ -149,6 +153,7 @@ class N8NGmailAutomationClient:
         urgency_threshold: str = "medium",
     ) -> MailSummarizeThreadsResult:
         action_id = self._action_id("mail-summarize")
+        locale = self._locale()
         digests: list[MailThreadDigest] = []
         for thread_id in thread_ids:
             try:
@@ -172,9 +177,9 @@ class N8NGmailAutomationClient:
             return MailSummarizeThreadsResult(
                 action_id=action_id,
                 status="blocked",
-                title="Mail thread summary unavailable",
-                summary="The requested thread could not be found in the mailbox context.",
-                visibility=ActionVisibility(surfaces=["thread"], badge="Mail blocked"),
+                title=_t("mail.result.thread.unavailable_title", locale=locale),
+                summary=_t("mail.result.thread.unavailable_summary", locale=locale),
+                visibility=ActionVisibility(surfaces=["thread"], badge=_t("mail.badge.mail_failed", locale=locale)),
                 details=MailThreadSummariesDetails(
                     summary_style=summary_style,
                     urgency_threshold=urgency_threshold,
@@ -182,7 +187,7 @@ class N8NGmailAutomationClient:
                 ),
                 error=ActionFailure(
                     code="not_found",
-                    message="The requested thread could not be found.",
+                    message=_t("mail.result.thread.unavailable_summary", locale=locale),
                     retryable=False,
                 ),
             )
@@ -190,13 +195,13 @@ class N8NGmailAutomationClient:
         return MailSummarizeThreadsResult(
             action_id=action_id,
             status="completed",
-            title="Thread summaries ready",
-            summary=f"Summaries were generated for {len(digests)} threads.",
-            next_step="Create a reply draft for the thread that needs follow-up.",
+            title=_t("mail.result.thread.ready_title", locale=locale),
+            summary=_t("mail.result.thread.ready_summary", locale=locale, count=len(digests)),
+            next_step=_t("mail.result.thread.next_step", locale=locale),
             visibility=ActionVisibility(
                 surfaces=["thread", "sidebar"],
-                badge="Thread summary",
-                inline_status="Mail thread summary ready",
+                badge=_t("mail.badge.thread_summary", locale=locale),
+                inline_status=_t("mail.inline.thread_ready", locale=locale),
             ),
             details=MailThreadSummariesDetails(
                 summary_style=summary_style,
@@ -207,6 +212,7 @@ class N8NGmailAutomationClient:
 
     async def create_draft(self, request: MailDraftRequest) -> MailCreateDraftResult:
         action_id = self._action_id("mail-draft")
+        locale = self._locale()
         preview = MailDraftPreview(
             subject=request.subject,
             body_preview=self._body_preview(request.body),
@@ -233,17 +239,17 @@ class N8NGmailAutomationClient:
             return self._draft_failure_result(action_id, preview, exc)
 
         draft_id = self._coerce_text(payload.get("draft_id")) if isinstance(payload, dict) else None
-        summary = self._coerce_text(payload.get("reply")) if isinstance(payload, dict) else None
+        recipients = ", ".join(request.to_recipients)
         return MailCreateDraftResult(
             action_id=action_id,
             status="completed",
-            title="Draft ready",
-            summary=summary or f"Draft created for {', '.join(request.to_recipients)}.",
-            next_step="Review the draft before requesting send approval.",
+            title=_t("mail.result.draft.ready_title", locale=locale),
+            summary=_t("mail.result.draft.ready_summary", locale=locale, recipients=recipients),
+            next_step=_t("mail.result.draft.next_step", locale=locale),
             visibility=ActionVisibility(
                 surfaces=["thread", "sidebar"],
-                badge="Draft ready",
-                inline_status="Mail draft created",
+                badge=_t("mail.badge.draft_ready", locale=locale),
+                inline_status=_t("mail.inline.draft_created", locale=locale),
                 linked_summary=request.subject,
             ),
             references=ActionReferences(thread_id=request.thread_id, draft_id=draft_id),
@@ -252,6 +258,7 @@ class N8NGmailAutomationClient:
 
     async def send_message(self, request: MailSendRequest) -> MailSendMessageResult:
         action_id = self._action_id("mail-send")
+        locale = self._locale()
         preview = MailDraftPreview(
             subject=request.subject,
             body_preview=self._body_preview(request.body),
@@ -279,16 +286,16 @@ class N8NGmailAutomationClient:
             return self._send_failure_result(action_id, request, preview, exc)
 
         message_id = self._coerce_text(payload.get("message_id")) if isinstance(payload, dict) else None
-        summary = self._coerce_text(payload.get("reply")) if isinstance(payload, dict) else None
+        recipients = ", ".join(request.to_recipients)
         return MailSendMessageResult(
             action_id=action_id,
             status="completed",
-            title="Message sent",
-            summary=summary or f"Email sent to {', '.join(request.to_recipients)}.",
+            title=_t("mail.result.send.sent_title", locale=locale),
+            summary=_t("mail.result.send.sent_summary", locale=locale, recipients=recipients),
             visibility=ActionVisibility(
                 surfaces=["thread", "sidebar", "linked_session"],
-                badge="Sent",
-                inline_status="Mail sent",
+                badge=_t("mail.badge.sent", locale=locale),
+                inline_status=_t("mail.inline.sent", locale=locale),
                 linked_summary=request.subject,
             ),
             references=ActionReferences(
@@ -331,12 +338,13 @@ class N8NGmailAutomationClient:
         exc: httpx.HTTPError,
     ) -> MailImportantThreadsResult:
         failure = self._map_http_error(exc, missing_code="service_unavailable")
+        locale = self._locale()
         return MailImportantThreadsResult(
             action_id=action_id,
             status="blocked" if failure.code == "authentication_needed" else "failed",
-            title="Important mail summary unavailable",
+            title=_t("mail.result.list.unavailable_title", locale=locale),
             summary=failure.message,
-            visibility=ActionVisibility(surfaces=["thread"], badge="Mail failed"),
+            visibility=ActionVisibility(surfaces=["thread"], badge=_t("mail.badge.mail_failed", locale=locale)),
             details=MailImportantThreadsDetails(threads=[]),
             error=failure,
         )
@@ -347,12 +355,13 @@ class N8NGmailAutomationClient:
         exc: httpx.HTTPError,
     ) -> MailSummarizeThreadsResult:
         failure = self._map_http_error(exc, missing_code="service_unavailable")
+        locale = self._locale()
         return MailSummarizeThreadsResult(
             action_id=action_id,
             status="blocked" if failure.code == "authentication_needed" else "failed",
-            title="Mail thread summary unavailable",
+            title=_t("mail.result.thread.unavailable_title", locale=locale),
             summary=failure.message,
-            visibility=ActionVisibility(surfaces=["thread"], badge="Mail failed"),
+            visibility=ActionVisibility(surfaces=["thread"], badge=_t("mail.badge.mail_failed", locale=locale)),
             details=MailThreadSummariesDetails(threads=[]),
             error=failure,
         )
@@ -364,12 +373,13 @@ class N8NGmailAutomationClient:
         exc: httpx.HTTPError,
     ) -> MailCreateDraftResult:
         failure = self._map_http_error(exc, missing_code="service_unavailable")
+        locale = self._locale()
         return MailCreateDraftResult(
             action_id=action_id,
             status="blocked" if failure.code == "authentication_needed" else "failed",
-            title="Draft creation failed",
+            title=_t("mail.result.draft.failed_title", locale=locale),
             summary=failure.message,
-            visibility=ActionVisibility(surfaces=["thread"], badge="Draft failed"),
+            visibility=ActionVisibility(surfaces=["thread"], badge=_t("mail.badge.draft_failed", locale=locale)),
             details=MailCreateDraftDetails(preview=preview),
             error=failure,
         )
@@ -382,12 +392,13 @@ class N8NGmailAutomationClient:
         exc: httpx.HTTPError,
     ) -> MailSendMessageResult:
         failure = self._map_http_error(exc, missing_code="service_unavailable")
+        locale = self._locale()
         return MailSendMessageResult(
             action_id=action_id,
             status="blocked" if failure.code == "authentication_needed" else "failed",
-            title="Mail send failed",
+            title=_t("mail.result.send.failed_title", locale=locale),
             summary=failure.message,
-            visibility=ActionVisibility(surfaces=["thread", "sidebar"], badge="Send failed"),
+            visibility=ActionVisibility(surfaces=["thread", "sidebar"], badge=_t("mail.badge.send_failed", locale=locale)),
             references=ActionReferences(thread_id=request.thread_id, draft_id=request.draft_id),
             details=MailSendMessageDetails(
                 draft_id=request.draft_id,
@@ -397,41 +408,42 @@ class N8NGmailAutomationClient:
         )
 
     def _map_http_error(self, exc: httpx.HTTPError, *, missing_code: str) -> ActionFailure:
+        locale = self._locale()
         if isinstance(exc, httpx.HTTPStatusError):
             status_code = exc.response.status_code
             if status_code in {401, 403}:
                 return ActionFailure(
                     code="authentication_needed",
-                    message="Gmail automation credentials need attention before this action can continue.",
+                    message=_t("mail.error.auth_needed", locale=locale),
                     retryable=False,
                 )
             if status_code == 404:
                 return ActionFailure(
                     code="executor_unavailable",
-                    message="The Gmail automation webhook is not available.",
+                    message=_t("mail.error.webhook_missing", locale=locale),
                     retryable=False,
                 )
             if status_code == 429:
                 return ActionFailure(
                     code="rate_limited",
-                    message="The Gmail automation endpoint is rate limited right now.",
+                    message=_t("mail.error.rate_limited", locale=locale),
                     retryable=True,
                 )
             return ActionFailure(
                 code=missing_code,
-                message="The Gmail automation endpoint could not complete the request.",
+                message=_t("mail.error.request_failed", locale=locale),
                 retryable=status_code >= 500,
                 detail=f"HTTP {status_code}",
             )
         if isinstance(exc, httpx.TimeoutException):
             return ActionFailure(
                 code="service_unavailable",
-                message="The Gmail automation endpoint timed out.",
+                message=_t("mail.error.timeout", locale=locale),
                 retryable=True,
             )
         return ActionFailure(
             code="service_unavailable",
-            message="The Gmail automation endpoint is temporarily unavailable.",
+            message=_t("mail.error.temporarily_unavailable", locale=locale),
             retryable=True,
         )
 
@@ -439,10 +451,11 @@ class N8NGmailAutomationClient:
         unread = bool(item.get("unread"))
         has_attachments = bool(item.get("hasAttachments"))
         importance_hint = "high" if unread else "medium" if has_attachments else None
+        locale = self._locale()
         return MailThreadSummary(
             thread_id=self._coerce_text(item.get("threadId")) or self._coerce_text(item.get("messageId")) or "unknown-thread",
-            subject=self._coerce_text(item.get("subject")) or "(No subject)",
-            sender_summary=self._coerce_text(item.get("sender")) or "Unknown sender",
+            subject=self._coerce_text(item.get("subject")) or _t("mail.fallback.no_subject", locale=locale),
+            sender_summary=self._coerce_text(item.get("sender")) or _t("mail.fallback.unknown_sender", locale=locale),
             last_update_at=self._coerce_text(item.get("date")) or "",
             unread=unread,
             importance_hint=importance_hint,
@@ -459,16 +472,23 @@ class N8NGmailAutomationClient:
         latest = normalized_items[-1]
         unread = any(bool(item.get("unread")) for item in normalized_items)
         body = self._coerce_text(latest.get("body")) or self._coerce_text(latest.get("snippet")) or ""
-        sender = self._coerce_text(latest.get("sender")) or "Unknown sender"
-        subject = self._coerce_text(payload.get("subject")) or self._coerce_text(latest.get("subject")) or "(No subject)"
+        locale = self._locale()
+        sender = self._coerce_text(latest.get("sender")) or _t("mail.fallback.unknown_sender", locale=locale)
+        subject = self._coerce_text(payload.get("subject")) or self._coerce_text(latest.get("subject")) or _t("mail.fallback.no_subject", locale=locale)
         message_count = self._coerce_int(payload.get("messageCount")) or len(normalized_items)
-        summary = f"{sender} thread with {message_count} messages. {self._body_preview(body, limit=180)}".strip()
+        summary = _t(
+            "mail.digest.summary",
+            locale=locale,
+            sender=sender,
+            message_count=message_count,
+            preview=self._body_preview(body, limit=180),
+        ).strip()
         return MailThreadDigest(
             thread_id=self._coerce_text(payload.get("threadId")) or self._coerce_text(latest.get("threadId")) or "unknown-thread",
             subject=subject,
             summary=summary,
             urgency="high" if unread else "medium" if message_count >= 3 else "low",
-            recommended_next_action="Create a reply draft." if unread or message_count >= 2 else None,
+            recommended_next_action=_t("mail.digest.next_action", locale=locale) if unread or message_count >= 2 else None,
         )
 
     def _action_id(self, prefix: str) -> str:
@@ -548,6 +568,7 @@ class MailAutomationSessionRunner:
         session_key: str,
         request: MailSendRequest,
     ) -> MailSendMessageResult:
+        locale = self._locale()
         preview = MailDraftPreview(
             subject=request.subject,
             body_preview=self.client._body_preview(request.body),
@@ -560,21 +581,21 @@ class MailAutomationSessionRunner:
         result = MailSendMessageResult(
             action_id=self.client._action_id("mail-send-approval"),
             status="waiting_approval",
-            title="Mail send approval required",
-            summary=f"Approval required before sending '{request.subject}' to {recipients}.",
-            next_step="Approve or deny the pending mail send request.",
+            title=_t("mail.result.send.approval_title", locale=locale),
+            summary=_t("mail.result.send.approval_summary", locale=locale, subject=request.subject, recipients=recipients),
+            next_step=_t("mail.result.send.approval_next_step", locale=locale),
             visibility=ActionVisibility(
                 surfaces=["thread", "sidebar", "linked_session"],
-                badge="Approval pending",
-                inline_status="Mail send approval pending",
+                badge=_t("mail.badge.approval_pending", locale=locale),
+                inline_status=_t("mail.inline.send_approval_pending", locale=locale),
                 linked_summary=request.subject,
-                approval_summary="Mail send approval pending",
+                approval_summary=_t("mail.inline.send_approval_pending", locale=locale),
             ),
             references=ActionReferences(thread_id=request.thread_id, draft_id=request.draft_id),
             details=MailSendMessageDetails(draft_id=request.draft_id, preview=preview),
             error=ActionFailure(
                 code="approval_needed",
-                message="Approval is required before sending this email.",
+                message=_t("mail.error.approval_needed", locale=locale),
                 retryable=True,
             ),
         )
@@ -604,16 +625,16 @@ class MailAutomationSessionRunner:
                 MailSendMessageResult(
                     action_id=self.client._action_id("mail-send-missing-draft"),
                     status="blocked",
-                    title="Mail send approval unavailable",
-                    summary="There is no saved draft in this session to approve for sending.",
-                    next_step="Create a draft first, then request send approval.",
-                    visibility=ActionVisibility(surfaces=["thread", "sidebar"], badge="Send blocked"),
+                    title=_t("mail.result.send.no_draft_title", locale=self._locale()),
+                    summary=_t("mail.result.send.no_draft_summary", locale=self._locale()),
+                    next_step=_t("mail.result.send.no_draft_next_step", locale=self._locale()),
+                    visibility=ActionVisibility(surfaces=["thread", "sidebar"], badge=_t("mail.badge.send_blocked", locale=self._locale())),
                     details=MailSendMessageDetails(
-                        preview=MailDraftPreview(subject="(No subject)", body_preview="", to_recipients=[]),
+                        preview=MailDraftPreview(subject=_t("mail.fallback.no_subject", locale=self._locale()), body_preview="", to_recipients=[]),
                     ),
                     error=ActionFailure(
                         code="not_found",
-                        message="No saved draft is available for send approval.",
+                        message=_t("mail.result.send.no_draft_summary", locale=self._locale()),
                         retryable=False,
                     ),
                 ),
@@ -628,16 +649,16 @@ class MailAutomationSessionRunner:
                 MailSendMessageResult(
                     action_id=self.client._action_id("mail-send-no-pending"),
                     status="blocked",
-                    title="No pending mail approval",
-                    summary="There is no pending mail send approval in this session.",
-                    next_step="Request mail send approval first.",
-                    visibility=ActionVisibility(surfaces=["thread", "sidebar"], badge="Send blocked"),
+                    title=_t("mail.result.send.no_pending_title", locale=self._locale()),
+                    summary=_t("mail.result.send.no_pending_summary", locale=self._locale()),
+                    next_step=_t("mail.result.send.no_pending_next_step", locale=self._locale()),
+                    visibility=ActionVisibility(surfaces=["thread", "sidebar"], badge=_t("mail.badge.send_blocked", locale=self._locale())),
                     details=MailSendMessageDetails(
-                        preview=MailDraftPreview(subject="(No subject)", body_preview="", to_recipients=[]),
+                        preview=MailDraftPreview(subject=_t("mail.fallback.no_subject", locale=self._locale()), body_preview="", to_recipients=[]),
                     ),
                     error=ActionFailure(
                         code="not_found",
-                        message="No pending mail approval is available.",
+                        message=_t("mail.result.send.no_pending_summary", locale=self._locale()),
                         retryable=False,
                     ),
                 ),
@@ -655,6 +676,7 @@ class MailAutomationSessionRunner:
         request = self._pending_send_request(session_key)
         if request is None:
             return await self.approve_send(session_key)
+        locale = self._locale()
         preview = MailDraftPreview(
             subject=request.subject,
             body_preview=self.client._body_preview(request.body),
@@ -666,15 +688,15 @@ class MailAutomationSessionRunner:
         result = MailSendMessageResult(
             action_id=self.client._action_id("mail-send-denied"),
             status="rejected",
-            title="Mail send cancelled",
-            summary="The pending mail send request was cancelled.",
-            next_step="Review the draft and request approval again when ready.",
-            visibility=ActionVisibility(surfaces=["thread", "sidebar"], badge="Send cancelled"),
+            title=_t("mail.result.send.cancelled_title", locale=locale),
+            summary=_t("mail.result.send.cancelled_summary", locale=locale),
+            next_step=_t("mail.result.send.cancelled_next_step", locale=locale),
+            visibility=ActionVisibility(surfaces=["thread", "sidebar"], badge=_t("mail.badge.send_cancelled", locale=locale)),
             references=ActionReferences(thread_id=request.thread_id, draft_id=request.draft_id),
             details=MailSendMessageDetails(draft_id=request.draft_id, preview=preview),
             error=ActionFailure(
                 code="approval_rejected",
-                message="The pending mail send request was cancelled.",
+                message=_t("mail.error.approval_rejected", locale=locale),
                 retryable=False,
             ),
         )
@@ -748,8 +770,12 @@ class MailAutomationSessionRunner:
 
     def _approval_prompt(self, request: MailSendRequest) -> str:
         recipients = ", ".join(request.to_recipients)
-        return (
-            "Approval required before sending this email. "
-            f"To: {recipients}. Subject: {request.subject}. "
-            "Use /mail approve to send or /mail deny to cancel."
+        return _t(
+            "mail.approval.prompt.send",
+            locale=self._locale(),
+            recipients=recipients,
+            subject=request.subject,
         )
+
+    def _locale(self) -> str:
+        return self.client._locale()

@@ -59,7 +59,7 @@ describe("MessageBubble", () => {
     expect(screen.queryByRole("button", { name: "Copy reply" })).not.toBeInTheDocument();
   });
 
-  it("renders trace messages as collapsible tool groups", () => {
+  it("renders completed trace messages as collapsed reasoning cards", () => {
     const message: UIMessage = {
       id: "t1",
       role: "tool",
@@ -72,11 +72,92 @@ describe("MessageBubble", () => {
     render(<MessageBubble message={message} />);
     const toggle = screen.getByRole("button", { name: /used 2 tools/i });
 
-    expect(screen.getByText('weather("get")')).toBeInTheDocument();
     expect(screen.getByText('search "hk weather"')).toBeInTheDocument();
+    expect(screen.queryByText('weather("get")')).not.toBeInTheDocument();
 
     fireEvent.click(toggle);
+    expect(screen.getByText('weather("get")')).toBeInTheDocument();
+  });
+
+  it("auto-collapses streaming trace cards when the turn completes", () => {
+    const message: UIMessage = {
+      id: "t-live",
+      role: "tool",
+      kind: "trace",
+      content: 'search "hk weather"',
+      traces: ['weather("get")', 'search "hk weather"'],
+      isStreaming: true,
+      createdAt: Date.now(),
+    };
+
+    const { rerender } = render(<MessageBubble message={message} />);
+
+    expect(screen.getByText('weather("get")')).toBeInTheDocument();
+    expect(screen.getAllByText('search "hk weather"')).toHaveLength(2);
+
+    rerender(
+      <MessageBubble
+        message={{
+          ...message,
+          isStreaming: false,
+        }}
+      />,
+    );
+
     expect(screen.queryByText('weather("get")')).not.toBeInTheDocument();
+  });
+
+  it("hides trace cards entirely when reasoning visibility is off", () => {
+    const message: UIMessage = {
+      id: "t-hidden",
+      role: "tool",
+      kind: "trace",
+      content: "step",
+      traces: ["step"],
+      createdAt: Date.now(),
+    };
+
+    const { container } = render(
+      <MessageBubble message={message} reasoningVisibility="off" />,
+    );
+
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("renders compact reasoning cards in status_only mode", () => {
+    const message: UIMessage = {
+      id: "t-status",
+      role: "tool",
+      kind: "trace",
+      content: 'search "hk weather"',
+      traces: ['weather("get")', 'search "hk weather"'],
+      isStreaming: true,
+      createdAt: Date.now(),
+    };
+
+    render(<MessageBubble message={message} reasoningVisibility="status_only" />);
+
+    expect(screen.getByText(/used 2 tools/i)).toBeInTheDocument();
+    expect(screen.queryByText('weather("get")')).not.toBeInTheDocument();
+  });
+
+  it("renders status trace rows as one-line thinking entries", () => {
+    const message: UIMessage = {
+      id: "t-status-line",
+      role: "tool",
+      kind: "trace",
+      traceVariant: "status",
+      content: "현재 assistant 응답을 스트리밍하고 있습니다.",
+      traces: ["현재 assistant 응답을 스트리밍하고 있습니다."],
+      isStreaming: true,
+      createdAt: Date.now(),
+    };
+
+    render(<MessageBubble message={message} reasoningVisibility="debug_trace" />);
+
+    expect(screen.getByText(/현재 assistant 응답을 스트리밍하고 있습니다\./)).toBeInTheDocument();
+    expect(screen.getByText(/thinking/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /used/i })).not.toBeInTheDocument();
   });
 
   it("renders approval messages with approve and block actions", () => {

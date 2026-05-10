@@ -4,6 +4,8 @@ export type Role = "user" | "assistant" | "tool" | "system";
  * progress pings) that should not be rendered as conversational replies. */
 export type MessageKind = "message" | "trace" | "approval";
 
+export type ReasoningVisibility = "off" | "status_only" | "summary" | "debug_trace";
+
 /** One image attached to a UIMessage.
  *
  * ``url`` can arrive in three different shapes, which the bubble renders
@@ -35,6 +37,7 @@ export interface UIMessage {
   role: Role;
   content: string;
   kind?: MessageKind;
+  traceVariant?: "tool" | "status";
   isStreaming?: boolean;
   createdAt: number;
   /** For trace rows: each individual hint line, so consecutive hints can
@@ -348,6 +351,7 @@ export interface SessionMessagesResponse {
     role: string;
     content: string;
     timestamp?: string;
+    visible_reasoning?: string;
     tool_calls?: unknown;
     tool_call_id?: string;
     name?: string;

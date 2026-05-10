@@ -52,6 +52,7 @@ from nanobot.model_targets import (
     get_active_model_target_name,
     resolve_model_target,
 )
+from nanobot.i18n import translate as _t
 from nanobot.providers.base import LLMProvider
 from nanobot.response_status import (
     DEFAULT_RESPONSE_FOOTER_MODE,
@@ -1879,9 +1880,39 @@ class AgentLoop:
                     if not filtered:
                         continue
                     entry["content"] = filtered
+            visible_reasoning = self._assistant_visible_reasoning(session, entry)
+            if visible_reasoning:
+                entry.setdefault("visible_reasoning", visible_reasoning)
             entry.setdefault("timestamp", datetime.now().isoformat())
             session.messages.append(entry)
         session.updated_at = datetime.now()
+
+    @staticmethod
+    def _assistant_visible_reasoning(session: Session, entry: dict[str, Any]) -> str | None:
+        if entry.get("role") != "assistant":
+            return None
+        if entry.get("tool_calls"):
+            return None
+        if entry.get("injected_event") == "subagent_result":
+            return None
+
+        content = entry.get("content")
+        if not isinstance(content, str):
+            return None
+
+        normalized = content.strip()
+        if not normalized or normalized == EMPTY_FINAL_RESPONSE_MESSAGE or normalized.startswith("Error:"):
+            return None
+
+        locale: str | None = None
+        metadata = session.metadata if isinstance(session.metadata, dict) else None
+        owner_profile = metadata.get("owner_profile") if isinstance(metadata, dict) else None
+        if isinstance(owner_profile, dict):
+            preferred_language = owner_profile.get("preferred_language")
+            if isinstance(preferred_language, str) and preferred_language.strip():
+                locale = preferred_language.strip()
+
+        return _t("assistant.visible_reasoning.reply_ready", locale=locale)
 
     def _persist_subagent_followup(self, session: Session, msg: InboundMessage) -> bool:
         """Persist subagent follow-ups before prompt assembly so history stays durable.

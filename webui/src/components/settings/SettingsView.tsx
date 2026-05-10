@@ -8,12 +8,14 @@ import { Input } from "@/components/ui/input";
 import { fetchSettings, updateSettings } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useClient } from "@/providers/ClientProvider";
-import type { SettingsPayload } from "@/lib/types";
+import type { ReasoningVisibility, SettingsPayload } from "@/lib/types";
 
 interface SettingsViewProps {
   theme: "light" | "dark";
   onToggleTheme: () => void;
   onBackToChat: () => void;
+  reasoningVisibility: ReasoningVisibility;
+  onReasoningVisibilityChange: (next: ReasoningVisibility) => void;
   onModelNameChange: (modelName: string | null) => void;
   chatFontSize: "sm" | "md" | "lg";
   chatFontValue: number;
@@ -27,6 +29,8 @@ export function SettingsView({
   theme,
   onToggleTheme,
   onBackToChat,
+  reasoningVisibility,
+  onReasoningVisibilityChange,
   onModelNameChange,
   chatFontSize,
   chatFontValue,
@@ -147,6 +151,8 @@ export function SettingsView({
             onSave={save}
             theme={theme}
             onToggleTheme={onToggleTheme}
+            reasoningVisibility={reasoningVisibility}
+            onReasoningVisibilityChange={onReasoningVisibilityChange}
             chatFontSize={chatFontSize}
             chatFontValue={chatFontValue}
             onDecreaseChatFont={onDecreaseChatFont}
@@ -169,6 +175,8 @@ function SettingsSection({
   onSave,
   theme,
   onToggleTheme,
+  reasoningVisibility,
+  onReasoningVisibilityChange,
   chatFontSize,
   chatFontValue,
   onDecreaseChatFont,
@@ -190,6 +198,8 @@ function SettingsSection({
   onSave: () => void;
   theme: "light" | "dark";
   onToggleTheme: () => void;
+  reasoningVisibility: ReasoningVisibility;
+  onReasoningVisibilityChange: (next: ReasoningVisibility) => void;
   chatFontSize: "sm" | "md" | "lg";
   chatFontValue: number;
   onDecreaseChatFont: () => void;
@@ -312,6 +322,22 @@ function SettingsSection({
           <SettingsRow title={t("settings.rows.language")}>
             <LanguageSwitcher />
           </SettingsRow>
+
+          <SettingsRow title={t("settings.rows.reasoningVisibility")}>
+            <select
+              value={reasoningVisibility}
+              onChange={(event) => onReasoningVisibilityChange(event.target.value as ReasoningVisibility)}
+              className={cn(
+                "h-8 w-[210px] rounded-md border border-input bg-background px-2 text-sm",
+                "outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring",
+              )}
+            >
+              <option value="off">{t("settings.reasoningVisibility.off")}</option>
+              <option value="status_only">{t("settings.reasoningVisibility.statusOnly")}</option>
+              <option value="summary">{t("settings.reasoningVisibility.summary")}</option>
+              <option value="debug_trace">{t("settings.reasoningVisibility.debugTrace")}</option>
+            </select>
+          </SettingsRow>
         </SettingsGroup>
       </section>
 
@@ -380,13 +406,15 @@ function SettingsFooter({
   saved: boolean;
   onSave: () => void;
 }) {
+  const { t } = useTranslation();
+
   return (
     <div className="flex min-h-[52px] items-center justify-between gap-4 px-3 py-2.5">
       <div className="text-sm text-muted-foreground">
-        {saved ? "Saved. Restart nanobot to apply." : "Unsaved changes."}
+        {saved ? t("settings.footer.saved") : t("settings.footer.unsaved")}
       </div>
       <Button size="sm" variant="outline" onClick={onSave} disabled={!dirty || saving}>
-        {saving ? "Saving" : "Save"}
+        {saving ? t("settings.footer.saving") : t("settings.footer.save")}
       </Button>
     </div>
   );

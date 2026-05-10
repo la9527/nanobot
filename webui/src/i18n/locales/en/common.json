@@ -164,10 +164,10 @@
       "target": "Target {{label}}",
       "channel": "Channel {{channel}}",
       "linkedSession": "Linked session",
-      "assistantActive": "Assistant active"
+      "assistantActive": "Task in progress"
     },
     "statusRail": {
-      "detailsButton": "Assistant details",
+      "detailsButton": "Details",
       "approvalPending": "Approval pending",
       "approvals": "Approvals {{count}}",
       "blocked": "Blocked",
@@ -181,6 +181,7 @@
       "unknown": "Unknown",
       "running": "Running",
       "waitingApproval": "Waiting approval",
+      "rejected": "Rejected",
       "blocked": "Blocked",
       "completed": "Completed",
       "failed": "Failed",
@@ -194,6 +195,39 @@
       "calendarCreatePendingWindow": "Calendar create approval pending: {{title}} ({{startAt}} -> {{endAt}})",
       "pendingWithPreview": "{{toolName}}: {{promptPreview}}",
       "pendingWithTool": "{{toolName}} approval pending"
+    },
+    "askUser": {
+      "aria": {
+        "approvalRequest": "Approval request",
+        "question": "Question"
+      },
+      "status": {
+        "waitingApproval": "Waiting approval",
+        "actionPrompt": "Action prompt"
+      },
+      "hint": {
+        "reviewAndChoose": "Review and choose how to continue.",
+        "chooseAnswer": "Choose an answer to continue."
+      },
+      "actions": {
+        "other": "Other...",
+        "send": "Send"
+      },
+      "placeholder": {
+        "customAnswer": "Type your own answer..."
+      },
+      "approvalOptions": {
+        "yes": "Yes",
+        "no": "No",
+        "approve": "Approve",
+        "cancel": "Cancel"
+      }
+    },
+    "modelTarget": {
+      "auto": "Auto",
+      "local": "Local",
+      "mini": "Mini",
+      "full": "Full"
     },
     "inlineAction": {
       "label": {
@@ -228,6 +262,170 @@
         "withTitle": "Conflicts with {{title}}",
         "moreCount": "+{{count}} more"
       },
+      "reason": {
+        "overlap_detected": "Overlaps with an existing event"
+      },
+      "result": {
+        "calendar": {
+          "create": {
+            "approval": {
+              "title": "Calendar create approval required",
+              "summary": "Approval required before creating '{{title}}'.",
+              "nextStep": "Approve or deny the pending calendar create request."
+            },
+            "cancelled": {
+              "title": "Calendar create cancelled",
+              "summary": "The pending calendar create request was cancelled.",
+              "nextStep": "Review the proposed event and request approval again when ready."
+            },
+            "created": {
+              "title": "Calendar event created",
+              "summary": "Created calendar event '{{title}}'."
+            },
+            "noPending": {
+              "title": "No pending calendar approval",
+              "summary": "There is no pending calendar create approval in this session.",
+              "nextStep": "Request calendar create approval first."
+            },
+            "failed": {
+              "title": "Calendar create failed"
+            }
+          },
+          "update": {
+            "approval": {
+              "title": "Calendar update approval required",
+              "summary": "Approval required before updating '{{title}}'.",
+              "nextStep": "Approve or deny the pending calendar update request."
+            },
+            "cancelled": {
+              "title": "Calendar update cancelled",
+              "summary": "The pending calendar update request was cancelled.",
+              "nextStep": "Request the update again if you still want to change the event."
+            },
+            "updated": {
+              "title": "Calendar event updated",
+              "summary": "Updated calendar event '{{title}}'."
+            },
+            "noPending": {
+              "title": "No pending calendar update approval",
+              "summary": "There is no pending calendar update approval in this session.",
+              "nextStep": "Request calendar update approval first."
+            },
+            "failed": {
+              "title": "Calendar update failed"
+            }
+          },
+          "delete": {
+            "approval": {
+              "title": "Calendar delete approval required",
+              "summary": "Approval required before deleting '{{title}}'.",
+              "nextStep": "Approve or deny the pending calendar delete request."
+            },
+            "cancelled": {
+              "title": "Calendar delete cancelled",
+              "summary": "The pending calendar delete request was cancelled.",
+              "nextStep": "Request the delete again if you still want to remove the event."
+            },
+            "deleted": {
+              "title": "Calendar event deleted",
+              "summary": "Deleted calendar event '{{title}}'."
+            },
+            "noPending": {
+              "title": "No pending calendar delete approval",
+              "summary": "There is no pending calendar delete approval in this session.",
+              "nextStep": "Request calendar delete approval first."
+            },
+            "failed": {
+              "title": "Calendar delete failed"
+            }
+          }
+        },
+        "mail": {
+          "list": {
+            "ready": {
+              "title": "Important mail summary ready",
+              "summary": "{{count}} important threads were found."
+            },
+            "empty": {
+              "title": "No important mail found",
+              "summary": "No important mail matched the current query."
+            },
+            "nextStep": "Choose a thread to summarize in more detail.",
+            "unavailable": {
+              "title": "Important mail summary unavailable"
+            }
+          },
+          "summaries": {
+            "ready": {
+              "title": "Thread summaries ready",
+              "summary": "Summaries were generated for {{count}} threads."
+            },
+            "nextStep": "Create a reply draft for the thread that needs follow-up.",
+            "unavailable": {
+              "title": "Mail thread summary unavailable",
+              "summary": "The requested thread could not be found in the mailbox context."
+            }
+          },
+          "draft": {
+            "ready": {
+              "title": "Draft ready",
+              "summary": "Draft created for {{recipients}}.",
+              "nextStep": "Review the draft before requesting send approval."
+            },
+            "failed": {
+              "title": "Draft creation failed"
+            }
+          },
+          "send": {
+            "sent": {
+              "title": "Message sent",
+              "summary": "Email sent to {{recipients}}."
+            },
+            "approval": {
+              "title": "Mail send approval required",
+              "summary": "Approval required before sending '{{subject}}' to {{recipients}}.",
+              "nextStep": "Approve or deny the pending mail send request.",
+              "inlineStatus": "Mail send approval pending"
+            },
+            "noDraft": {
+              "title": "Mail send approval unavailable",
+              "summary": "There is no saved draft in this session to approve for sending.",
+              "nextStep": "Create a draft first, then request send approval."
+            },
+            "noPending": {
+              "title": "No pending mail approval",
+              "summary": "There is no pending mail send approval in this session.",
+              "nextStep": "Request mail send approval first."
+            },
+            "cancelled": {
+              "title": "Mail send cancelled",
+              "summary": "The pending mail send request was cancelled.",
+              "nextStep": "Review the draft and request approval again when ready."
+            },
+            "failed": {
+              "title": "Mail send failed"
+            }
+          }
+        }
+      },
+      "error": {
+        "calendar": {
+          "approval_needed": "Approval is required before continuing this calendar action.",
+          "approval_rejected": "The pending calendar request was cancelled.",
+          "not_found": "No pending calendar approval is available.",
+          "authentication_needed": "Google Calendar credentials need attention before this action can continue.",
+          "rate_limited": "The calendar automation endpoint is rate limited right now.",
+          "service_unavailable": "The calendar automation endpoint is currently unavailable."
+        },
+        "mail": {
+          "approval_needed": "Approval is required before sending this email.",
+          "approval_rejected": "The pending mail send request was cancelled.",
+          "authentication_needed": "Gmail automation credentials need attention before this action can continue.",
+          "executor_unavailable": "The Gmail automation webhook is not available.",
+          "rate_limited": "The Gmail automation endpoint is rate limited right now.",
+          "service_unavailable": "The Gmail automation endpoint is currently unavailable."
+        }
+      },
       "fallback": {
         "untitledEvent": "(Untitled event)",
         "noSubject": "(No subject)",
@@ -240,21 +438,21 @@
         "messageTooBig": "The last message exceeded the upload size limit. Remove some attachments or use smaller files, then try again."
       },
       "waitingApproval": {
-        "title": "Assistant is waiting for confirmation",
+        "title": "Task needs confirmation",
         "body": "Review the pending action and choose how to continue."
       },
       "running": {
-        "title": "Assistant is working",
+        "title": "Task is in progress",
         "applyingTarget": "Applying the selected target for this session.",
         "preparingChat": "Preparing the new chat before sending your first message.",
         "waitingExternal": "Waiting for the linked external session to return a reply.",
-        "streaming": "Streaming the current assistant response."
+        "streaming": "Generating the current response."
       },
       "completed": {
-        "latestActionTitle": "Latest assistant action is ready",
-        "latestActionBody": "The latest assistant action finished.",
-        "latestUpdateTitle": "Latest assistant update is ready",
-        "latestUpdateBody": "The most recent assistant turn finished successfully."
+        "latestActionTitle": "Latest task result is ready",
+        "latestActionBody": "The latest task finished.",
+        "latestUpdateTitle": "Latest update is ready",
+        "latestUpdateBody": "The most recent response finished successfully."
       }
     },
     "composer": {
@@ -367,14 +565,14 @@
       }
     },
     "details": {
-      "title": "Assistant details",
-      "description": "Thread-level metadata and power tools live here so the conversation stays primary.",
+      "title": "Task details",
+      "description": "Thread-level task context and power tools live here so the conversation stays primary.",
       "noExtra": {
         "title": "No extra details",
         "body": "This thread does not have additional owner or task metadata yet."
       },
       "assistantOverview": {
-        "title": "Assistant overview"
+        "title": "Task overview"
       },
       "currentTask": {
         "title": "Current task",
@@ -424,7 +622,7 @@
   "settings": {
     "backToChat": "Back to chat",
     "title": "General",
-    "description": "Default assistant settings for model selection, theme, and chat readability.",
+    "description": "Default settings for model selection, theme, and chat readability.",
     "loading": "Loading settings...",
     "loadErrorTitle": "Could not load settings",
     "managedByRuntimeBody": "Provider or model is locked by the current runtime configuration.",
@@ -436,7 +634,7 @@
       "dark": "Dark"
     },
     "sections": {
-      "assistant": "Assistant",
+      "assistant": "Defaults",
       "themes": "Themes",
       "interface": "Interface"
     },
@@ -446,13 +644,26 @@
       "managedByRuntime": "Managed by runtime",
       "theme": "Theme",
       "chatFontSize": "Chat font size",
-      "language": "Language"
+      "language": "Language",
+      "reasoningVisibility": "Reasoning visibility"
+    },
+    "reasoningVisibility": {
+      "off": "Off",
+      "statusOnly": "Status only",
+      "summary": "Summary",
+      "debugTrace": "Debug trace"
+    },
+    "footer": {
+      "saved": "Saved. Restart nanobot to apply.",
+      "unsaved": "Unsaved changes.",
+      "save": "Save",
+      "saving": "Saving"
     }
   },
   "dashboard": {
-    "label": "Assistant dashboard",
+    "label": "Dashboard",
     "hero": {
-      "title": "What needs attention today and recent assistant status",
+      "title": "What needs attention today and recent status",
       "hasItems": "There are {{total}} items to handle today: {{approvals}} approvals, {{blocked}} blocked items, and {{held}} held updates.",
       "empty": "The urgent queue is empty. Review recent results or start a new task."
     },
@@ -487,7 +698,7 @@
     },
     "recentOutcomes": {
       "summaryFallback": "This task completed recently.",
-      "empty": "There are no completed assistant results yet."
+      "empty": "There are no completed results yet."
     },
     "fallback": {
       "approvalRequired": "Approval required",
@@ -510,7 +721,9 @@
   },
   "message": {
     "streaming": "streaming",
-    "assistantTyping": "Assistant is typing",
+    "assistantTyping": "Composing response",
+    "reasoningWorking": "Thinking",
+    "reasoningDone": "Thought",
     "toolSingle": "Using a tool",
     "toolMany": "Used {{count}} tools",
     "imageAttachment": "Image attachment",

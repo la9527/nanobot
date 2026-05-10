@@ -9,6 +9,11 @@
       "title": "nanobot에 연결할 수 없습니다",
       "gatewayHint": "gateway(`nanobot gateway`)가 실행 중인지, 그리고 이 페이지가 같은 머신에서 열려 있는지 확인하세요."
     },
+    "account": {
+      "section": "계정",
+      "logoutHint": "이 브라우저와 gateway 연결을 해제합니다.",
+      "logout": "로그아웃"
+    },
     "system": {
       "section": "시스템",
       "restartHint": "런타임 변경 사항을 적용하려면 nanobot을 다시 시작하세요.",
@@ -26,11 +31,17 @@
     }
   },
   "sidebar": {
+    "navigation": "사이드바 탐색",
+    "globalActions": "전역 작업",
     "home": "대시보드",
     "collapse": "사이드바 접기",
     "settings": "설정",
     "toggleTheme": "테마 전환",
     "newChat": "새 채팅",
+    "searchAria": "채팅 검색",
+    "searchPlaceholder": "채팅 검색",
+    "searchResults": "검색 결과",
+    "noSearchResults": "일치하는 채팅이 없습니다.",
     "recent": "최근 대화",
     "refreshSessions": "세션 새로고침",
     "mobileSheet": {
@@ -132,29 +143,33 @@
       }
     },
     "header": {
-      "toggleSidebar": "사이드바 전환"
+      "toggleSidebar": "사이드바 전환",
+      "newChat": "새 채팅 시작",
+      "toggleTheme": "헤더에서 테마 전환",
+      "settings": "설정 열기"
     },
     "headerBadges": {
       "target": "타깃 {{label}}",
       "channel": "채널 {{channel}}",
       "linkedSession": "연결된 세션",
-      "assistantActive": "Assistant 동작 중"
+      "assistantActive": "작업 진행 중"
     },
     "statusRail": {
-      "detailsButton": "Assistant 세부 정보",
+      "detailsButton": "세부 정보",
       "approvalPending": "승인 대기",
       "approvals": "승인 {{count}}건",
       "blocked": "막힘",
       "blockedCount": "막힘 {{count}}건",
       "held": "보류 {{count}}건",
-      "linkedSessions": "연결 {{count}}건",
-      "linkedChannel": "연결 {{channel}}",
-      "updated": "업데이트 {{time}}"
+      "linkedSessions": "관련 세션 {{count}}개",
+      "linkedChannel": "채널 {{channel}}",
+      "updated": "최근 활동 {{time}}"
     },
     "statusTone": {
       "unknown": "알 수 없음",
       "running": "실행 중",
       "waitingApproval": "승인 대기",
+      "rejected": "거절됨",
       "blocked": "막힘",
       "completed": "완료됨",
       "failed": "실패",
@@ -168,6 +183,39 @@
       "calendarCreatePendingWindow": "일정 생성 승인이 대기 중입니다: {{title}} ({{startAt}} -> {{endAt}})",
       "pendingWithPreview": "{{toolName}}: {{promptPreview}}",
       "pendingWithTool": "{{toolName}} 승인 대기"
+    },
+    "askUser": {
+      "aria": {
+        "approvalRequest": "승인 요청",
+        "question": "질문"
+      },
+      "status": {
+        "waitingApproval": "승인 대기",
+        "actionPrompt": "응답 요청"
+      },
+      "hint": {
+        "reviewAndChoose": "검토한 뒤 어떻게 진행할지 선택하세요.",
+        "chooseAnswer": "계속하려면 답변을 선택하세요."
+      },
+      "actions": {
+        "other": "직접 입력...",
+        "send": "보내기"
+      },
+      "placeholder": {
+        "customAnswer": "직접 답변을 입력하세요..."
+      },
+      "approvalOptions": {
+        "yes": "예",
+        "no": "아니오",
+        "approve": "승인",
+        "cancel": "취소"
+      }
+    },
+    "modelTarget": {
+      "auto": "자동",
+      "local": "로컬",
+      "mini": "미니",
+      "full": "풀"
     },
     "inlineAction": {
       "label": {
@@ -202,6 +250,170 @@
         "withTitle": "{{title}} 일정과 충돌",
         "moreCount": "외 {{count}}건"
       },
+      "reason": {
+        "overlap_detected": "기존 일정과 겹침"
+      },
+      "result": {
+        "calendar": {
+          "create": {
+            "approval": {
+              "title": "일정 생성 승인 필요",
+              "summary": "'{{title}}' 일정을 생성하려면 승인이 필요합니다.",
+              "nextStep": "보류 중인 일정 생성 요청을 승인하거나 취소하세요."
+            },
+            "cancelled": {
+              "title": "일정 생성 취소됨",
+              "summary": "보류 중이던 일정 생성 요청을 취소했습니다.",
+              "nextStep": "필요하면 제안된 일정을 검토한 뒤 다시 승인 요청을 올리세요."
+            },
+            "created": {
+              "title": "일정 생성 완료",
+              "summary": "'{{title}}' 일정을 생성했습니다."
+            },
+            "noPending": {
+              "title": "보류 중인 일정 생성 승인 없음",
+              "summary": "이 세션에는 보류 중인 일정 생성 승인 요청이 없습니다.",
+              "nextStep": "먼저 일정 생성 승인을 요청하세요."
+            },
+            "failed": {
+              "title": "일정 생성 실패"
+            }
+          },
+          "update": {
+            "approval": {
+              "title": "일정 수정 승인 필요",
+              "summary": "'{{title}}' 일정을 수정하려면 승인이 필요합니다.",
+              "nextStep": "보류 중인 일정 수정 요청을 승인하거나 취소하세요."
+            },
+            "cancelled": {
+              "title": "일정 수정 취소됨",
+              "summary": "보류 중이던 일정 수정 요청을 취소했습니다.",
+              "nextStep": "여전히 일정을 수정하려면 수정 요청을 다시 보내세요."
+            },
+            "updated": {
+              "title": "일정 수정 완료",
+              "summary": "'{{title}}' 일정을 수정했습니다."
+            },
+            "noPending": {
+              "title": "보류 중인 일정 수정 승인 없음",
+              "summary": "이 세션에는 보류 중인 일정 수정 승인 요청이 없습니다.",
+              "nextStep": "먼저 일정 수정 승인을 요청하세요."
+            },
+            "failed": {
+              "title": "일정 수정 실패"
+            }
+          },
+          "delete": {
+            "approval": {
+              "title": "일정 삭제 승인 필요",
+              "summary": "'{{title}}' 일정을 삭제하려면 승인이 필요합니다.",
+              "nextStep": "보류 중인 일정 삭제 요청을 승인하거나 취소하세요."
+            },
+            "cancelled": {
+              "title": "일정 삭제 취소됨",
+              "summary": "보류 중이던 일정 삭제 요청을 취소했습니다.",
+              "nextStep": "여전히 일정을 삭제하려면 삭제 요청을 다시 보내세요."
+            },
+            "deleted": {
+              "title": "일정 삭제 완료",
+              "summary": "'{{title}}' 일정을 삭제했습니다."
+            },
+            "noPending": {
+              "title": "보류 중인 일정 삭제 승인 없음",
+              "summary": "이 세션에는 보류 중인 일정 삭제 승인 요청이 없습니다.",
+              "nextStep": "먼저 일정 삭제 승인을 요청하세요."
+            },
+            "failed": {
+              "title": "일정 삭제 실패"
+            }
+          }
+        },
+        "mail": {
+          "list": {
+            "ready": {
+              "title": "중요 메일 요약 준비됨",
+              "summary": "중요 메일 {{count}}건을 찾았습니다."
+            },
+            "empty": {
+              "title": "중요 메일 없음",
+              "summary": "현재 조건에 맞는 중요 메일이 없습니다."
+            },
+            "nextStep": "더 자세히 요약할 스레드를 선택하세요.",
+            "unavailable": {
+              "title": "중요 메일 요약 불가"
+            }
+          },
+          "summaries": {
+            "ready": {
+              "title": "스레드 요약 준비됨",
+              "summary": "{{count}}개 스레드 요약을 생성했습니다."
+            },
+            "nextStep": "후속 조치가 필요한 스레드의 답장 초안을 만드세요.",
+            "unavailable": {
+              "title": "메일 스레드 요약 불가",
+              "summary": "요청한 스레드를 메일함 맥락에서 찾지 못했습니다."
+            }
+          },
+          "draft": {
+            "ready": {
+              "title": "초안 준비됨",
+              "summary": "{{recipients}}에게 보낼 초안을 만들었습니다.",
+              "nextStep": "발송 승인을 요청하기 전에 초안을 검토하세요."
+            },
+            "failed": {
+              "title": "초안 생성 실패"
+            }
+          },
+          "send": {
+            "sent": {
+              "title": "메일 발송 완료",
+              "summary": "{{recipients}}에게 메일을 보냈습니다."
+            },
+            "approval": {
+              "title": "메일 발송 승인 필요",
+              "summary": "'{{subject}}' 메일을 {{recipients}}에게 보내려면 승인이 필요합니다.",
+              "nextStep": "보류 중인 메일 발송 요청을 승인하거나 취소하세요.",
+              "inlineStatus": "메일 발송 승인 대기"
+            },
+            "noDraft": {
+              "title": "메일 발송 승인 불가",
+              "summary": "이 세션에는 발송 승인을 요청할 저장된 초안이 없습니다.",
+              "nextStep": "먼저 초안을 만든 뒤 발송 승인을 요청하세요."
+            },
+            "noPending": {
+              "title": "보류 중인 메일 승인 없음",
+              "summary": "이 세션에는 보류 중인 메일 발송 승인 요청이 없습니다.",
+              "nextStep": "먼저 메일 발송 승인을 요청하세요."
+            },
+            "cancelled": {
+              "title": "메일 발송 취소됨",
+              "summary": "보류 중이던 메일 발송 요청을 취소했습니다.",
+              "nextStep": "초안을 검토한 뒤 준비되면 다시 승인 요청을 보내세요."
+            },
+            "failed": {
+              "title": "메일 발송 실패"
+            }
+          }
+        }
+      },
+      "error": {
+        "calendar": {
+          "approval_needed": "이 일정을 생성하거나 수정하려면 승인이 필요합니다.",
+          "approval_rejected": "보류 중이던 일정 요청을 취소했습니다.",
+          "not_found": "보류 중인 일정 승인 요청이 없습니다.",
+          "authentication_needed": "이 작업을 계속하려면 Google Calendar 인증 상태를 먼저 확인해야 합니다.",
+          "rate_limited": "지금은 calendar automation endpoint 에 요청이 몰려 있습니다.",
+          "service_unavailable": "calendar automation endpoint 를 지금 사용할 수 없습니다."
+        },
+        "mail": {
+          "approval_needed": "이 메일을 보내려면 승인이 필요합니다.",
+          "approval_rejected": "보류 중이던 메일 발송 요청을 취소했습니다.",
+          "authentication_needed": "이 작업을 계속하려면 Gmail automation 인증 상태를 먼저 확인해야 합니다.",
+          "executor_unavailable": "Gmail automation webhook 을 찾을 수 없습니다.",
+          "rate_limited": "지금은 Gmail automation endpoint 에 요청이 몰려 있습니다.",
+          "service_unavailable": "Gmail automation endpoint 를 지금 사용할 수 없습니다."
+        }
+      },
       "fallback": {
         "untitledEvent": "(제목 없는 일정)",
         "noSubject": "(제목 없음)",
@@ -214,21 +426,21 @@
         "messageTooBig": "마지막 메시지가 업로드 크기 제한을 초과했습니다. 첨부를 줄이거나 더 작은 파일로 다시 시도하세요."
       },
       "waitingApproval": {
-        "title": "Assistant가 확인을 기다리고 있습니다",
+        "title": "작업 확인이 필요합니다",
         "body": "대기 중인 작업을 검토하고 어떻게 진행할지 선택하세요."
       },
       "running": {
-        "title": "Assistant가 작업 중입니다",
+        "title": "작업이 진행 중입니다",
         "applyingTarget": "이 세션에 선택한 타깃을 적용하고 있습니다.",
         "preparingChat": "첫 메시지를 보내기 전에 새 채팅을 준비하고 있습니다.",
         "waitingExternal": "연결된 외부 세션의 응답을 기다리고 있습니다.",
-        "streaming": "현재 assistant 응답을 스트리밍하고 있습니다."
+        "streaming": "현재 응답을 생성하고 있습니다."
       },
       "completed": {
-        "latestActionTitle": "최근 assistant 작업이 준비되었습니다",
-        "latestActionBody": "최근 assistant 작업이 완료되었습니다.",
-        "latestUpdateTitle": "최근 assistant 업데이트가 준비되었습니다",
-        "latestUpdateBody": "가장 최근 assistant 응답이 정상적으로 완료되었습니다."
+        "latestActionTitle": "최근 작업 결과가 준비되었습니다",
+        "latestActionBody": "최근 작업이 완료되었습니다.",
+        "latestUpdateTitle": "최근 업데이트가 준비되었습니다",
+        "latestUpdateBody": "가장 최근 응답이 정상적으로 완료되었습니다."
       }
     },
     "composer": {
@@ -290,7 +502,7 @@
           },
           "status": {
             "title": "상태 보기",
-            "description": "런타임, provider, channel 상태를 표시합니다."
+            "description": "런타임, 공급자, 채널 상태를 표시합니다."
           },
           "history": {
             "title": "대화 기록 보기",
@@ -328,29 +540,29 @@
         "preferenceContent": "수정할 기본 선호: [바꿀 선호]",
         "projectMemo": "프로젝트 메모: [남길 종료 메모]",
         "genericContent": "내용: [정리할 내용]",
-        "currentTask": "현재 task: {{title}}",
+        "currentTask": "현재 작업: {{title}}",
         "storeMemory": "저장 위치: memory/MEMORY.md",
         "storeUser": "저장 위치: USER.md",
         "storeUserOrMemory": "저장 위치: USER.md 또는 memory/MEMORY.md"
       }
     },
     "details": {
-      "title": "Assistant 세부 정보",
-      "description": "대화 자체를 중심에 두고, thread 단위 metadata와 보조 도구는 여기에서 확인합니다.",
+      "title": "작업 세부 정보",
+      "description": "대화 자체를 중심에 두고, 대화 단위 작업 맥락과 보조 도구는 여기에서 확인합니다.",
       "noExtra": {
         "title": "추가 세부 정보 없음",
-        "body": "이 thread에는 아직 추가 owner 정보나 task metadata가 없습니다."
+        "body": "이 대화에는 아직 추가 사용자 정보나 작업 메타데이터가 없습니다."
       },
       "assistantOverview": {
-        "title": "Assistant 개요"
+        "title": "작업 개요"
       },
       "currentTask": {
-        "title": "현재 task",
+        "title": "현재 작업",
         "origin": "시작 채널 {{channel}}",
         "nextStep": "다음 단계: {{hint}}"
       },
       "ownerDefaults": {
-        "title": "Owner 기본값",
+        "title": "사용자 기본값",
         "unknownLanguage": "알 수 없는 언어",
         "unknownTimezone": "알 수 없는 시간대",
         "defaultTone": "기본 응답 톤",
@@ -358,18 +570,18 @@
       },
       "linkedExternalSession": {
         "title": "연결된 외부 세션",
-        "bodySimple": "이 thread는 현재 {{channel}} 대화에 연결되어 있습니다. 응답과 승인 흐름은 이 연결된 세션을 기준으로 이어질 수 있습니다.",
-        "bodyWithOwner": "이 thread는 owner {{owner}} 의 현재 {{channel}} 대화에 연결되어 있습니다.",
-        "identity": "연결된 identity: {{identity}}.",
+        "bodySimple": "이 대화는 현재 {{channel}} 대화에 연결되어 있습니다. 응답과 승인 흐름은 이 연결된 세션을 기준으로 이어질 수 있습니다.",
+        "bodyWithOwner": "이 대화는 {{owner}} 사용자의 현재 {{channel}} 대화에 연결되어 있습니다.",
+        "identity": "연결된 식별자: {{identity}}.",
         "trust": "신뢰 수준: {{trust}}.",
         "repliesContinue": "응답과 승인 흐름은 이 연결된 세션을 기준으로 이어질 수 있습니다."
       },
       "memoryTools": {
-        "title": "Memory 도구",
-        "description": "일반 대화가 아니라 오래 유지될 memory를 바로잡고 싶을 때만 사용합니다."
+        "title": "메모리 도구",
+        "description": "일반 대화가 아니라 오래 유지될 메모리를 바로잡고 싶을 때만 사용합니다."
       },
       "ownerSummary": {
-        "latestProactiveUpdate": "가장 최근 proactive update",
+        "latestProactiveUpdate": "가장 최근 선제 업데이트",
         "updatedSuffix": " · {{updated}} 업데이트",
         "updatedLead": " {{updated}} 기준",
         "latestExternalActivity": "가장 최근 외부 활동: {{channel}}{{updatedSuffix}}.",
@@ -377,12 +589,12 @@
         "quietHoursHeld": "조용한 시간대로 인해 {{channel}} 용 {{title}} 이(가){{updatedSuffix}} 보류 중입니다.",
         "nextStepReviewApproval": "다음 단계: 대기 중인 승인 요청을 검토하세요.",
         "nextStepReopenBlocked": "다음 단계: 막힌 세션을 다시 열고 중단된 작업을 이어가세요.",
-        "nextStepOpenWebUI": "다음 단계: WebUI 에서 보류된 proactive update 를 검토하세요.",
+        "nextStepOpenWebUI": "다음 단계: WebUI에서 보류된 선제 업데이트를 검토하세요.",
         "metrics": {
           "activeNow": "현재 활성 {{count}}건",
           "approvalPending": "승인 대기 {{count}}건",
           "blocked": "막힘 {{count}}건",
-          "proactiveHeld": "proactive 보류 {{count}}건",
+          "proactiveHeld": "선제 업데이트 보류 {{count}}건",
           "linkedSessions": "연결 세션 {{count}}건"
         }
       }
@@ -392,10 +604,10 @@
   "settings": {
     "backToChat": "채팅으로 돌아가기",
     "title": "일반",
-    "description": "모델 선택, 테마, 채팅 가독성을 위한 기본 assistant 설정입니다.",
+    "description": "모델 선택, 테마, 채팅 가독성을 조정하는 기본 설정입니다.",
     "loading": "설정을 불러오는 중...",
     "loadErrorTitle": "설정을 불러올 수 없습니다",
-    "managedByRuntimeBody": "provider 또는 model 값은 현재 runtime 설정에서 잠겨 있습니다.",
+    "managedByRuntimeBody": "공급자 또는 모델 값은 현재 런타임 설정에서 잠겨 있습니다.",
     "toggleTheme": "테마 전환",
     "decreaseChatFontSize": "채팅 글자 크기 줄이기",
     "increaseChatFontSize": "채팅 글자 크기 키우기",
@@ -404,24 +616,37 @@
       "dark": "다크"
     },
     "sections": {
-      "assistant": "Assistant",
+      "assistant": "기본값",
       "themes": "테마",
       "interface": "인터페이스"
     },
     "rows": {
-      "defaultProvider": "기본 provider",
-      "defaultModel": "기본 model",
-      "managedByRuntime": "runtime에서 관리됨",
+      "defaultProvider": "기본 공급자",
+      "defaultModel": "기본 모델",
+      "managedByRuntime": "런타임에서 관리됨",
       "theme": "테마",
       "chatFontSize": "채팅 글자 크기",
-      "language": "언어"
+      "language": "언어",
+      "reasoningVisibility": "추론 표시 수준"
+    },
+    "reasoningVisibility": {
+      "off": "끄기",
+      "statusOnly": "상태만",
+      "summary": "요약",
+      "debugTrace": "디버그 추적"
+    },
+    "footer": {
+      "saved": "저장되었습니다. 적용하려면 nanobot을 다시 시작하세요.",
+      "unsaved": "저장되지 않은 변경 사항이 있습니다.",
+      "save": "저장",
+      "saving": "저장 중"
     }
   },
   "dashboard": {
-    "label": "Assistant 대시보드",
+    "label": "대시보드",
     "hero": {
-      "title": "오늘 처리할 것과 최근 assistant 상태",
-      "hasItems": "오늘 바로 처리할 항목 {{total}}개가 있습니다. 승인 {{approvals}}건, 막힘 {{blocked}}건, 보류된 update {{held}}건입니다.",
+      "title": "오늘 처리할 항목과 최근 상태",
+      "hasItems": "오늘 바로 처리할 항목 {{total}}개가 있습니다. 승인 {{approvals}}건, 막힘 {{blocked}}건, 보류된 업데이트 {{held}}건입니다.",
       "empty": "지금 급한 대기열은 비어 있습니다. 최근 결과를 확인하거나 새 작업을 시작할 수 있습니다."
     },
     "sections": {
@@ -436,7 +661,7 @@
       "continueConversation": "대화 이어가기",
       "continueInput": "입력 계속",
       "reviewInWebUI": "WebUI에서 검토",
-      "openThread": "해당 thread 열기"
+      "openThread": "해당 대화 열기"
     },
     "priority": {
       "empty": "지금 바로 분류할 대기열은 없습니다."
@@ -455,30 +680,32 @@
     },
     "recentOutcomes": {
       "summaryFallback": "최근 완료된 작업입니다.",
-      "empty": "최근 완료된 assistant 결과가 아직 없습니다."
+      "empty": "최근 완료된 결과가 아직 없습니다."
     },
     "fallback": {
       "approvalRequired": "승인 필요",
       "reviewPendingApproval": "대기 중인 승인 요청을 검토하세요.",
       "blockedTask": "막힌 작업",
-      "reopenBlockedThread": "중단된 thread를 다시 열고 중단된 작업을 이어가세요.",
+      "reopenBlockedThread": "중단된 대화를 다시 열고 중단된 작업을 이어가세요.",
       "waitingInput": "입력 대기",
-      "provideMissingInput": "thread를 열고 필요한 입력을 이어서 주세요.",
-      "proactiveReviewNeeded": "Proactive 검토 필요",
-      "proactiveHeldForWebUI": "외부 전달이 보류되어 WebUI에서 proactive update를 검토해야 합니다.",
+      "provideMissingInput": "대화를 열고 필요한 입력을 이어서 주세요.",
+      "proactiveReviewNeeded": "선제 업데이트 검토 필요",
+      "proactiveHeldForWebUI": "외부 전달이 보류되어 WebUI에서 선제 업데이트를 검토해야 합니다.",
       "completedResult": "완료된 결과",
       "recentlyUpdated": "방금 업데이트됨"
     },
     "linkedChannels": {
-      "proactiveUpdate": "Proactive 업데이트",
+      "proactiveUpdate": "선제 업데이트",
       "held": "{{title}} 항목이 WebUI에 보류되어 있습니다.",
-      "connected": "연결되어 있으며 thread 간 후속 작업에 사용할 수 있습니다.",
+      "connected": "연결되어 있으며 대화 간 후속 작업에 사용할 수 있습니다.",
       "empty": "현재 WebUI 외 연결된 외부 채널 상태가 없습니다."
     }
   },
   "message": {
-    "streaming": "생성 중",
-    "assistantTyping": "도우미가 입력 중",
+    "empty": "최근 완료된 결과가 아직 없습니다.",
+    "assistantTyping": "응답 작성 중",
+    "reasoningWorking": "생각 중",
+    "reasoningDone": "생각",
     "toolSingle": "도구 사용 중",
     "toolMany": "도구 {{count}}개 사용됨",
     "imageAttachment": "이미지 첨부",

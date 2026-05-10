@@ -23,6 +23,7 @@ export function hydrateSessionMessages(body: SessionMessagesResponse): UIMessage
   return body.messages.flatMap((m, idx) => {
     if (m.role !== "user" && m.role !== "assistant") return [];
     if (typeof m.content !== "string") return [];
+    const createdAt = m.timestamp ? Date.parse(m.timestamp) : Date.now();
     const media =
       Array.isArray(m.media_urls) && m.media_urls.length > 0
         ? m.media_urls.map((mu) => toMediaAttachment(mu))
@@ -33,18 +34,35 @@ export function hydrateSessionMessages(body: SessionMessagesResponse): UIMessage
             .filter((item) => item.kind === "image")
             .map((item) => ({ url: item.url, name: item.name }))
         : undefined;
+    const messageId = `hist-${idx}`;
+    const hydratedMessage: UIMessage = {
+      id: messageId,
+      role: m.role,
+      content: m.content,
+      createdAt,
+      ...(images ? { images } : {}),
+      ...(media ? { media } : {}),
+      ...(Array.isArray(m.buttons) && m.buttons.some((row) => row.length > 0)
+        ? { buttons: m.buttons }
+        : {}),
+    };
+    const visibleReasoning = m.role === "assistant" && typeof m.visible_reasoning === "string"
+      ? m.visible_reasoning.trim()
+      : "";
+    if (!visibleReasoning) {
+      return [hydratedMessage];
+    }
     return [
       {
-        id: `hist-${idx}`,
-        role: m.role,
-        content: m.content,
-        createdAt: m.timestamp ? Date.parse(m.timestamp) : Date.now(),
-        ...(images ? { images } : {}),
-        ...(media ? { media } : {}),
-        ...(Array.isArray(m.buttons) && m.buttons.some((row) => row.length > 0)
-          ? { buttons: m.buttons }
-          : {}),
+        id: `${messageId}-reasoning`,
+        role: "tool",
+        kind: "trace",
+        traceVariant: "status",
+        content: visibleReasoning,
+        traces: [visibleReasoning],
+        createdAt: Math.max(0, createdAt - 1),
       },
+      hydratedMessage,
     ];
   });
 }

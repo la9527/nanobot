@@ -236,8 +236,8 @@ describe("ThreadShell", () => {
     });
 
     expect(screen.queryByText("delete me cleanly")).not.toBeInTheDocument();
-    expect(screen.getByText("Assistant dashboard")).toBeInTheDocument();
-    expect(screen.queryByText("Latest assistant update is ready")).not.toBeInTheDocument();
+    expect(screen.getByText("Dashboard")).toBeInTheDocument();
+    expect(screen.queryByText("Latest update is ready")).not.toBeInTheDocument();
 
     await waitFor(() => {
       expect(screen.queryByText("delete me cleanly")).not.toBeInTheDocument();
@@ -654,7 +654,7 @@ describe("ThreadShell", () => {
     });
 
     expect(screen.queryByText("live assistant reply")).not.toBeInTheDocument();
-    expect(screen.getByText("Assistant dashboard")).toBeInTheDocument();
+    expect(screen.getByText("Dashboard")).toBeInTheDocument();
 
     await act(async () => {
       rerender(
@@ -1074,13 +1074,13 @@ describe("ThreadShell", () => {
       ),
     );
 
-    await userEvent.setup().click(await screen.findByRole("button", { name: "Assistant details" }));
+    await userEvent.setup().click(await screen.findByRole("button", { name: "Details" }));
     expect(screen.getByText("Linked external session")).toBeInTheDocument();
     expect(screen.getByText(/attached to the current Telegram conversation/i)).toBeInTheDocument();
     expect(screen.getByText("Linked session")).toBeInTheDocument();
   });
 
-  it("keeps the continuity placeholder visible alongside completed status for linked sessions", async () => {
+  it("keeps linked session details available after loading completed external history", async () => {
     const client = makeClient();
     vi.stubGlobal(
       "fetch",
@@ -1115,8 +1115,8 @@ describe("ThreadShell", () => {
       ),
     );
 
-    expect(await screen.findByText("Latest assistant update is ready")).toBeInTheDocument();
-    await userEvent.setup().click(screen.getByRole("button", { name: "Assistant details" }));
+    expect(await screen.findByRole("button", { name: "Details" })).toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole("button", { name: "Details" }));
     expect(screen.getByText("Linked external session")).toBeInTheDocument();
   });
 
@@ -1172,7 +1172,7 @@ describe("ThreadShell", () => {
       ),
     );
 
-    await userEvent.setup().click(await screen.findByRole("button", { name: "Assistant details" }));
+    await userEvent.setup().click(await screen.findByRole("button", { name: "Details" }));
     expect(screen.getByText("Linked external session")).toBeInTheDocument();
     expect(screen.getByText(/owner primary-user/i)).toBeInTheDocument();
     expect(screen.getByText(/Linked identity: 12345\./i)).toBeInTheDocument();
@@ -1313,14 +1313,14 @@ describe("ThreadShell", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Assistant details" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Details" })).toBeInTheDocument();
     });
     expect(screen.getByText(/Approval pending/i)).toBeInTheDocument();
     expect(screen.getByText(/Linked 1/i)).toBeInTheDocument();
     expect(screen.getAllByText(/Review the pending approval request\./i).length).toBeGreaterThan(0);
 
-    await user.click(screen.getByRole("button", { name: "Assistant details" }));
-    expect(screen.getByText("Assistant overview")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Details" }));
+    expect(screen.getByText("Task overview")).toBeInTheDocument();
     expect(screen.getByText("Current task")).toBeInTheDocument();
     expect(screen.getByText("Review the local thread summary")).toBeInTheDocument();
     expect(screen.getByText(/Owner defaults/i)).toBeInTheDocument();
@@ -1415,9 +1415,9 @@ describe("ThreadShell", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText(/^Blocked$/i)).toBeInTheDocument();
+      expect(screen.getByText(/Blocked/i)).toBeInTheDocument();
     });
-    await userEvent.setup().click(screen.getByRole("button", { name: "Assistant details" }));
+    await userEvent.setup().click(screen.getByRole("button", { name: "Details" }));
     expect(screen.getByText(/Recent completion: Telegram updated/i)).toBeInTheDocument();
     expect(
       screen.getByText(/Next step: Reopen the interrupted session and continue the task\./i),
@@ -1466,7 +1466,7 @@ describe("ThreadShell", () => {
     await waitFor(() => {
       expect(screen.getByText(/Held 1/i)).toBeInTheDocument();
     });
-    await userEvent.setup().click(screen.getByRole("button", { name: "Assistant details" }));
+    await userEvent.setup().click(screen.getByRole("button", { name: "Details" }));
     expect(screen.getByText(/Quiet hours held Morning briefing ready for Telegram/i)).toBeInTheDocument();
     expect(screen.getByText(/Next step: open WebUI to review the held proactive update\./i)).toBeInTheDocument();
   });
@@ -1543,7 +1543,7 @@ describe("ThreadShell", () => {
 
     render(wrap(client, <Harness />));
 
-    await user.click(screen.getByRole("button", { name: "Assistant details" }));
+    await user.click(screen.getByRole("button", { name: "Details" }));
     expect(screen.getByText(/ko-KR · Asia\/Seoul · direct · balanced/i)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "이건 기본 선호가 아님" }));
     await user.click(screen.getByRole("button", { name: "Send message" }));
@@ -1556,7 +1556,7 @@ describe("ThreadShell", () => {
       });
     });
 
-    await user.click(screen.getByRole("button", { name: "Assistant details" }));
+    await user.click(screen.getByRole("button", { name: "Details" }));
     await waitFor(() => {
       expect(screen.getByText(/ko-KR · Asia\/Seoul · technical · balanced/i)).toBeInTheDocument();
     });
@@ -1625,6 +1625,8 @@ describe("ThreadShell", () => {
     });
     expect(screen.getByText(/Draft created for alice@example.com./)).toBeInTheDocument();
     expect(screen.getByText("Mail result")).toBeInTheDocument();
+    expect(screen.queryByText(/To:/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Subject:/i)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Details" }));
     expect(screen.getByText(/To:/i)).toBeInTheDocument();
     expect(screen.getByText(/Subject:/i)).toBeInTheDocument();
@@ -1800,7 +1802,7 @@ describe("ThreadShell", () => {
       ),
     );
 
-    expect(await screen.findByText("Assistant dashboard")).toBeInTheDocument();
+    expect(await screen.findByText("Dashboard")).toBeInTheDocument();
     expect(screen.getByText(/There are 1 items to handle today/i)).toBeInTheDocument();
     expect(screen.getByText("Priority queue")).toBeInTheDocument();
     expect(screen.queryByRole("textbox", { name: "메시지 입력" })).not.toBeInTheDocument();
@@ -2108,7 +2110,7 @@ describe("ThreadShell", () => {
 
     expect(screen.getAllByText("Approval pending").length).toBeGreaterThan(0);
     const status = screen.getByRole("status");
-    expect(status).toHaveTextContent("Assistant is waiting for confirmation");
+    expect(status).toHaveTextContent("Task needs confirmation");
     expect(status).toHaveTextContent("Approve sending the report email to finance?");
   });
 
@@ -2137,8 +2139,8 @@ describe("ThreadShell", () => {
     });
 
     const runningStatus = screen.getByRole("status");
-    expect(runningStatus).toHaveTextContent("Assistant is working");
-    expect(runningStatus).toHaveTextContent("Streaming the current assistant response.");
+    expect(runningStatus).toHaveTextContent("Task is in progress");
+    expect(runningStatus).toHaveTextContent("Generating the current response.");
 
     await act(async () => {
       client._emitChat("chat-a", {
@@ -2154,7 +2156,7 @@ describe("ThreadShell", () => {
     await waitFor(() => {
       const completedStatus = screen.getByRole("status");
       expect(completedStatus).toHaveTextContent("Completed");
-      expect(completedStatus).toHaveTextContent("Latest assistant update is ready");
+      expect(completedStatus).toHaveTextContent("Latest update is ready");
       expect(completedStatus).toHaveTextContent("Working");
     });
 

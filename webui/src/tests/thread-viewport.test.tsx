@@ -87,4 +87,55 @@ describe("ThreadViewport", () => {
       expect(vi.mocked(HTMLElement.prototype.scrollTo).mock.calls.length).toBeGreaterThan(callsBeforeResize);
     });
   });
+
+  it("renders history supplements in the scrollable history area, not inside the sticky composer", () => {
+    const messages: UIMessage[] = [
+      {
+        id: "m1",
+        role: "assistant",
+        content: "hello",
+        createdAt: Date.now(),
+      },
+    ];
+
+    const { container } = render(
+      <ThreadViewport
+        messages={messages}
+        isStreaming={false}
+        historySupplement={<div data-testid="history-supplement">history supplement</div>}
+        composer={<div data-testid="composer-slot">composer</div>}
+      />,
+    );
+
+    const historySupplement = container.querySelector('[data-testid="history-supplement"]');
+    const composer = container.querySelector('[data-testid="composer-slot"]');
+    const stickyComposer = container.querySelector('.sticky.bottom-0');
+
+    expect(historySupplement).toBeTruthy();
+    expect(composer).toBeTruthy();
+    expect(stickyComposer).toContainElement(composer);
+    expect(stickyComposer).not.toContainElement(historySupplement);
+  });
+
+  it("does not reserve duplicate composer-height padding under the message history", () => {
+    const messages: UIMessage[] = [
+      {
+        id: "m1",
+        role: "assistant",
+        content: "hello",
+        createdAt: Date.now(),
+      },
+    ];
+
+    const { container } = render(
+      <ThreadViewport
+        messages={messages}
+        isStreaming={false}
+        composer={<div data-testid="composer-slot">composer</div>}
+      />,
+    );
+
+    const historyFrame = container.querySelector(".flex-1.px-3.pb-3.pt-3");
+    expect(historyFrame?.getAttribute("style")).toBeNull();
+  });
 });

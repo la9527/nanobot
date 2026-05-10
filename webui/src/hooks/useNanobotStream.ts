@@ -19,6 +19,22 @@ interface StreamBuffer {
   parts: string[];
 }
 
+function hydrateInitialMessages(
+  initialMessages: UIMessage[],
+  hasPendingToolCalls: boolean,
+): UIMessage[] {
+  if (!hasPendingToolCalls || initialMessages.length === 0) return initialMessages;
+  const last = initialMessages[initialMessages.length - 1];
+  if (last.kind !== "trace" || last.isStreaming) return initialMessages;
+  return [
+    ...initialMessages.slice(0, -1),
+    {
+      ...last,
+      isStreaming: true,
+    },
+  ];
+}
+
 /**
  * Subscribe to a chat by ID. Returns the in-memory message list for the chat,
  * a streaming flag, and a ``send`` function. Initial history must be seeded
@@ -59,12 +75,13 @@ export function useNanobotStream(
   dismissStreamError: () => void;
 } {
   const { client, setActiveTarget, setModelName } = useClient();
-  const [messages, setMessages] = useState<UIMessage[]>(initialMessages);
+  const hydratedInitialMessages = hydrateInitialMessages(initialMessages, hasPendingToolCalls);
+  const [messages, setMessages] = useState<UIMessage[]>(hydratedInitialMessages);
   /** If the last loaded message is a trace row (e.g. "Using 2 tools"),
    * the model was still processing when the page loaded — keep the
    * loading spinner alive so the user sees the model is active. */
-  const initialStreaming = initialMessages.length > 0
-    ? initialMessages[initialMessages.length - 1].kind === "trace"
+  const initialStreaming = hydratedInitialMessages.length > 0
+    ? hydratedInitialMessages[hydratedInitialMessages.length - 1].isStreaming === true
     : false;
   const [isStreaming, setIsStreaming] = useState(initialStreaming || hasPendingToolCalls);
   const [streamError, setStreamError] = useState<StreamError | null>(null);
@@ -89,10 +106,11 @@ export function useNanobotStream(
   // ``initialMessages`` update: a brand-new chat can receive an empty/404
   // history response after the optimistic first message has already rendered.
   useEffect(() => {
-    setMessages(initialMessages);
+    const nextInitialMessages = hydrateInitialMessages(initialMessages, hasPendingToolCalls);
+    setMessages(nextInitialMessages);
     setIsStreaming(
-      (initialMessages.length > 0
-        ? initialMessages[initialMessages.length - 1].kind === "trace"
+      (nextInitialMessages.length > 0
+        ? nextInitialMessages[nextInitialMessages.length - 1].isStreaming === true
         : false) || hasPendingToolCalls,
     );
     setStreamError(null);
@@ -221,13 +239,47 @@ export function useNanobotStream(
           const line = ev.text;
           setMessages((prev) => {
             const last = prev[prev.length - 1];
-            if (last && last.kind === "trace" && !last.isStreaming) {
+            if (last && last.kind === "trace") {
               const merged: UIMessage = {
                 ...last,
                 traces: [...(last.traces ?? [last.content]), line],
                 content: line,
+                isStreaming: true,
               };
               return [...prev.slice(0, -1), merged];
+            }
+            const assistantStreamingIndex = findLastIndex(
+              prev,
+              (message) => message.role === "assistant" && Boolean(message.isStreaming),
+            );
+            if (assistantStreamingIndex >= 0) {
+              const beforeAssistant = prev[assistantStreamingIndex - 1];
+              if (beforeAssistant?.kind === "trace") {
+                const merged: UIMessage = {
+                  ...beforeAssistant,
+                  traces: [...(beforeAssistant.traces ?? [beforeAssistant.content]), line],
+                  content: line,
+                  isStreaming: true,
+                };
+                return [
+                  ...prev.slice(0, assistantStreamingIndex - 1),
+                  merged,
+                  ...prev.slice(assistantStreamingIndex),
+                ];
+              }
+              return [
+                ...prev.slice(0, assistantStreamingIndex),
+                {
+                  id: createUuid(),
+                  role: "tool",
+                  kind: "trace",
+                  content: line,
+                  traces: [line],
+                  isStreaming: true,
+                  createdAt: Date.now(),
+                },
+                ...prev.slice(assistantStreamingIndex),
+              ];
             }
             return [
               ...prev,
@@ -237,6 +289,7 @@ export function useNanobotStream(
                 kind: "trace",
                 content: line,
                 traces: [line],
+                isStreaming: true,
                 createdAt: Date.now(),
               },
             ];
@@ -356,4 +409,11 @@ export function useNanobotStream(
     streamError,
     dismissStreamError,
   };
+}
+
+function findLastIndex<T>(items: T[], predicate: (item: T) => boolean): number {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (predicate(items[index])) return index;
+  }
+  return -1;
 }

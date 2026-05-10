@@ -263,6 +263,42 @@ async def test_session_model_target_routes_round_trip(
 
 
 @pytest.mark.asyncio
+async def test_session_action_result_clear_route_removes_persisted_metadata(
+    bus: MagicMock, tmp_path: Path
+) -> None:
+    sm = _seed_session(tmp_path, key="telegram:chat-a")
+    session = sm.get_or_create("telegram:chat-a")
+    session.metadata["action_result"] = {
+        "action_id": "calendar-create-denied-1",
+        "status": "rejected",
+        "title": "Calendar create cancelled",
+    }
+    sm.save(session)
+
+    channel = _ch(bus, session_manager=sm, port=29916)
+    server_task = asyncio.create_task(channel.start())
+    await asyncio.sleep(0.3)
+    try:
+        boot = await _http_get("http://127.0.0.1:29916/webui/bootstrap")
+        token = boot.json()["token"]
+        auth = {"Authorization": f"Bearer {token}"}
+
+        cleared = await _http_get(
+            "http://127.0.0.1:29916/api/sessions/telegram:chat-a/action-result/clear",
+            headers=auth,
+        )
+        assert cleared.status_code == 200
+        assert cleared.json()["cleared"] is True
+
+        restored = sm.read_session_file("telegram:chat-a")
+        assert restored is not None
+        assert "action_result" not in restored.get("metadata", {})
+    finally:
+        await channel.stop()
+        await server_task
+
+
+@pytest.mark.asyncio
 async def test_session_model_target_routes_reject_unknown_target(
     bus: MagicMock, tmp_path: Path
 ) -> None:

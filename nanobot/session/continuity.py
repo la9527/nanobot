@@ -11,6 +11,7 @@ from copy import deepcopy
 import re
 from typing import Any
 
+from nanobot.i18n import translate as _t
 from nanobot.session.memory_correction_nlp import memory_correction_actions
 
 PRIMARY_OWNER_ID = "primary-user"
@@ -149,6 +150,16 @@ def _normalized_memory_correction() -> dict[str, Any]:
     return {"actions": memory_correction_actions("ko-KR")}
 
 
+def _task_summary_locale(base: dict[str, Any]) -> str | None:
+    owner_profile = base.get(OWNER_PROFILE_METADATA_KEY)
+    if not isinstance(owner_profile, dict):
+        return None
+    preferred_language = owner_profile.get("preferred_language")
+    if isinstance(preferred_language, str) and preferred_language.strip():
+        return preferred_language.strip()
+    return None
+
+
 def _task_title_from_metadata(base: dict[str, Any], channel_kind: str) -> str:
     action_result = base.get(ACTION_RESULT_METADATA_KEY)
     if isinstance(action_result, dict):
@@ -197,51 +208,52 @@ def _normalized_task_summary(
     has_pending_user_turn = bool(base.get("pending_user_turn"))
     checkpoint = base.get("runtime_checkpoint")
     checkpoint_phase = checkpoint.get("phase") if isinstance(checkpoint, dict) else None
+    locale = _task_summary_locale(base)
 
     if has_pending_approval:
         status = "waiting-approval"
-        next_step_hint = "Review the pending approval request."
+        next_step_hint = _t("task_summary.next_step.review_pending_approval", locale=locale)
     elif isinstance(action_status, str) and action_status.strip() == "running":
         status = "running"
         next_step_hint = (
             action_next_step.strip()
             if isinstance(action_next_step, str) and action_next_step.strip()
-            else "Wait for the current automation task to finish."
+            else _t("task_summary.next_step.wait_running", locale=locale)
         )
     elif isinstance(action_status, str) and action_status.strip() == "waiting_approval":
         status = "waiting-approval"
         next_step_hint = (
             action_next_step.strip()
             if isinstance(action_next_step, str) and action_next_step.strip()
-            else "Review the pending approval request."
+            else _t("task_summary.next_step.review_pending_approval", locale=locale)
         )
     elif isinstance(action_status, str) and action_status.strip() in {"failed", "blocked"}:
         status = "blocked"
         next_step_hint = (
             action_next_step.strip()
             if isinstance(action_next_step, str) and action_next_step.strip()
-            else "Review the latest failure and retry when ready."
+            else _t("task_summary.next_step.review_failure", locale=locale)
         )
     elif isinstance(action_status, str) and action_status.strip() == "rejected":
         status = "completed"
         next_step_hint = (
             action_next_step.strip()
             if isinstance(action_next_step, str) and action_next_step.strip()
-            else "The request was cancelled; no follow-up is needed unless you start it again."
+            else None
         )
     elif isinstance(action_status, str) and action_status.strip() == "completed":
         status = "completed"
         next_step_hint = (
             action_next_step.strip()
             if isinstance(action_next_step, str) and action_next_step.strip()
-            else "Review the latest completed update if follow-up is needed."
+            else None
         )
     elif has_pending_user_turn or isinstance(checkpoint_phase, str):
         status = "blocked"
-        next_step_hint = "Reopen the interrupted session and continue the task."
+        next_step_hint = _t("task_summary.next_step.reopen_blocked", locale=locale)
     else:
         status = "completed"
-        next_step_hint = "Review the latest completed update if follow-up is needed."
+        next_step_hint = None
 
     task_id = task.get("task_id")
     if not isinstance(task_id, str) or not task_id.strip():

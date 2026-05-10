@@ -189,6 +189,43 @@ def test_save_turn_keeps_tool_results_under_16k() -> None:
     assert session.messages[0]["content"] == content
 
 
+def test_save_turn_persists_visible_reasoning_for_assistant_messages() -> None:
+    loop = _mk_loop()
+    session = Session(
+        key="test:assistant-visible-reasoning",
+        metadata={
+            "owner_profile": {
+                "preferred_language": "ko-KR",
+            }
+        },
+    )
+
+    loop._save_turn(
+        session,
+        [{"role": "assistant", "content": "최종 답변입니다."}],
+        skip=0,
+    )
+
+    assert session.messages[0]["visible_reasoning"] == "답변 방향을 정리한 뒤 응답했습니다."
+
+
+def test_save_turn_skips_visible_reasoning_for_tool_call_scratchpads() -> None:
+    loop = _mk_loop()
+    session = Session(key="test:assistant-tool-call")
+
+    loop._save_turn(
+        session,
+        [{
+            "role": "assistant",
+            "content": "도구를 호출합니다.",
+            "tool_calls": [{"id": "call-1"}],
+        }],
+        skip=0,
+    )
+
+    assert "visible_reasoning" not in session.messages[0]
+
+
 def test_restore_runtime_checkpoint_rehydrates_completed_and_pending_tools() -> None:
     loop = _mk_loop()
     session = Session(

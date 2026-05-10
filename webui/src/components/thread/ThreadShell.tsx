@@ -24,10 +24,10 @@ import { ThreadStatusRail } from "@/components/thread/ThreadStatusRail";
 import { ThreadStatusBlock } from "@/components/thread/ThreadStatusBlock";
 import type { ThreadStatusTone } from "@/components/thread/ThreadStatusBlock";
 import { ThreadViewport } from "@/components/thread/ThreadViewport";
-import { deriveThreadStatus } from "@/components/thread/threadStatus";
+import { deriveThreadStatus, injectSyntheticReasoningTrace } from "@/components/thread/threadStatus";
 import { useNanobotStream, type SendImage, type SendOptions } from "@/hooks/useNanobotStream";
 import { hydrateSessionMessages, useSessionHistory } from "@/hooks/useSessions";
-import { ApiError, fetchSessionMessages, fetchSessionModelTarget, listSlashCommands, selectSessionModelTarget } from "@/lib/api";
+import { ApiError, clearSessionActionResult, fetchSessionMessages, fetchSessionModelTarget, listSlashCommands, selectSessionModelTarget } from "@/lib/api";
 import { relativeTime } from "@/lib/format";
 import {
   approvalPendingBadgeLabel,
@@ -42,7 +42,14 @@ import {
   isBlockedSession,
   toChannelBadgeLabel,
 } from "@/lib/sessionMetadata";
-import type { ChatSummary, ModelTargetOption, SessionModelTargetResponse, SlashCommand, UIMessage } from "@/lib/types";
+import type {
+  ChatSummary,
+  ModelTargetOption,
+  ReasoningVisibility,
+  SessionModelTargetResponse,
+  SlashCommand,
+  UIMessage,
+} from "@/lib/types";
 import { createUuid } from "@/lib/uuid";
 import { useClient } from "@/providers/ClientProvider";
 
@@ -50,6 +57,7 @@ interface ThreadShellProps {
   session: ChatSummary | null;
   sessions?: ChatSummary[];
   title: string;
+  reasoningVisibility?: ReasoningVisibility;
   onToggleSidebar: () => void;
   onGoHome?: () => void;
   onOpenSession?: (key: string) => void;
@@ -69,14 +77,15 @@ type MemoryCorrectionKey = typeof MEMORY_CORRECTION_KEYS[number];
 function toModelBadgeLabel(
   modelName: string | null,
   activeTarget: string | null,
+  t: TFunction,
 ): string | null {
   if (typeof activeTarget === "string") {
     const target = activeTarget.trim();
     if (target && target !== "default") {
-      if (target === "smart-router" || target === "smart_router") return "Auto";
-      if (target === "smart-router-local") return "Local";
-      if (target === "smart-router-mini") return "Mini";
-      if (target === "smart-router-full") return "Full";
+      if (target === "smart-router" || target === "smart_router") return t("thread.modelTarget.auto");
+      if (target === "smart-router-local") return t("thread.modelTarget.local");
+      if (target === "smart-router-mini") return t("thread.modelTarget.mini");
+      if (target === "smart-router-full") return t("thread.modelTarget.full");
       return target;
     }
   }
@@ -85,7 +94,7 @@ function toModelBadgeLabel(
   if (!trimmed) return null;
   const leaf = trimmed.split("/").pop() ?? trimmed;
   const label = leaf || trimmed;
-  if (label === "smart_router") return "smart-router";
+  if (label === "smart_router" || label === "smart-router") return t("thread.modelTarget.auto");
   return label;
 }
 
@@ -344,7 +353,6 @@ function deriveOwnerAwareSummary(params: {
   const nextTaskHint = [
     ownerSessions.find((candidate) => getTaskSummary(candidate)?.status === "waiting-approval"),
     ownerSessions.find((candidate) => getTaskSummary(candidate)?.status === "blocked"),
-    ownerSessions.find((candidate) => getTaskSummary(candidate)?.status === "completed"),
   ]
     .map((candidate) => getTaskSummary(candidate)?.nextStepHint ?? null)
     .find((hint) => Boolean(hint));
@@ -419,6 +427,7 @@ export function ThreadShell({
   session,
   sessions = [],
   title,
+  reasoningVisibility = "summary",
   onToggleSidebar,
   onGoHome: _onGoHome,
   onOpenSession,
@@ -450,6 +459,8 @@ export function ThreadShell({
   const [modelTargetPending, setModelTargetPending] = useState(false);
   const [remoteReplyPending, setRemoteReplyPending] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [dismissingActionResult, setDismissingActionResult] = useState(false);
+  const [dismissedActionSignature, setDismissedActionSignature] = useState<string | null>(null);
   const [composerDraft, setComposerDraft] = useState<string | null>(null);
   const [composerDraftNonce, setComposerDraftNonce] = useState(0);
   const [slashCommands, setSlashCommands] = useState<SlashCommand[]>([]);
@@ -460,6 +471,7 @@ export function ThreadShell({
   const messageCacheRef = useRef<Map<string, UIMessage[]>>(new Map());
   const lastCachedChatIdRef = useRef<string | null>(null);
   const tokenRef = useRef(token);
+  const reasoningLineCacheRef = useRef<Map<string, string>>(new Map());
 
   useEffect(() => {
     tokenRef.current = token;
@@ -521,7 +533,7 @@ export function ThreadShell({
       label: string;
       tone?: "default" | "muted" | "warning" | "active";
     }> = [];
-    const modelLabel = toModelBadgeLabel(modelName, activeTarget);
+    const modelLabel = toModelBadgeLabel(modelName, activeTarget, t);
     if (modelLabel) {
       badges.push({ label: t("thread.headerBadges.target", { label: modelLabel }) });
     }
@@ -571,9 +583,15 @@ export function ThreadShell({
   const currentOwnerProfile = useMemo(() => getOwnerProfile(session), [session]);
   const memoryCorrectionActions = useMemo(() => getMemoryCorrectionActions(session), [session]);
   const actionResult = useMemo(() => getActionResult(session), [session]);
-  const currentActionDetails = session?.metadata?.action_result?.details;
-  const currentActionStatus = session?.metadata?.action_result?.status;
-  const currentActionDomain = session?.metadata?.action_result?.domain;
+  const currentActionSignature = session?.metadata?.action_result?.action_id
+    ? `${session.key}:${session.metadata.action_result.action_id}`
+    : null;
+  const isActionResultDismissed = Boolean(currentActionSignature && dismissedActionSignature === currentActionSignature);
+  const currentActionMetadata = isActionResultDismissed ? null : session?.metadata?.action_result;
+  const effectiveActionResult = isActionResultDismissed ? null : actionResult;
+  const currentActionDetails = currentActionMetadata?.details;
+  const currentActionStatus = currentActionMetadata?.status;
+  const currentActionDomain = currentActionMetadata?.domain;
   const currentActionDraftPreview = currentActionDomain === "mail" ? currentActionDetails?.preview : null;
   const currentCalendarPreview = currentActionDomain === "calendar" ? currentActionDetails?.preview : null;
   const currentCalendarConflict = currentActionDomain === "calendar"
@@ -592,14 +610,30 @@ export function ThreadShell({
     ? currentActionDetails.threads.slice(0, 3)
     : [];
   const hasInlineActionResult = Boolean(
-    actionResult?.title
-    || actionResult?.summary
+    effectiveActionResult?.title
+    || effectiveActionResult?.summary
     || currentActionDraftPreview
     || currentCalendarPreview
     || currentCalendarConflict
     || currentActionThreads.length,
   );
+  const isReasoningThreadStatus = threadStatus?.tone === "running" || threadStatus?.tone === "completed";
+  const reasoningCacheKey = chatId ?? historyKey;
+
+  useEffect(() => {
+    if (!reasoningCacheKey) return;
+    if (threadStatus?.tone === "running") {
+      reasoningLineCacheRef.current.set(reasoningCacheKey, threadStatus.body);
+      return;
+    }
+    if (!messages.some((message) => message.role === "user")) {
+      reasoningLineCacheRef.current.delete(reasoningCacheKey);
+    }
+  }, [messages, reasoningCacheKey, threadStatus?.body, threadStatus?.tone]);
+
   const shouldShowThreadStatus = Boolean(threadStatus) && !(
+    isReasoningThreadStatus
+    || (
     hasInlineActionResult
     && !pendingAsk
     && !pendingApprovalMessage
@@ -608,6 +642,7 @@ export function ThreadShell({
     && !remoteReplyPending
     && !isStreaming
     && !modelTargetPending
+    )
   );
   const handleMemoryCorrectionClick = useCallback((phrase: string) => {
     setComposerDraft(buildMemoryCorrectionDraft(phrase, currentTaskSummary?.title ?? null, t));
@@ -666,6 +701,22 @@ export function ThreadShell({
       console.error("Failed to refresh sessions after memory correction", error);
     }
   }, [onRefreshSessions]);
+
+  const handleDismissActionResult = useCallback(async () => {
+    if (!historyKey || !currentActionSignature || dismissingActionResult) return;
+    setDismissingActionResult(true);
+    try {
+      await clearSessionActionResult(token, historyKey);
+      setDismissedActionSignature(currentActionSignature);
+      if (onRefreshSessions) {
+        await onRefreshSessions();
+      }
+    } catch (error) {
+      console.error("Failed to dismiss action result", error);
+    } finally {
+      setDismissingActionResult(false);
+    }
+  }, [currentActionSignature, dismissingActionResult, historyKey, onRefreshSessions, token]);
 
   useEffect(() => {
     if (!chatId || loading) return;
@@ -972,7 +1023,24 @@ export function ThreadShell({
       })}
     />
   );
-  const viewportMessages = session ? messages : [];
+  const syntheticReasoningLine = isReasoningThreadStatus
+    ? threadStatus?.tone === "running"
+      ? threadStatus.body
+      : (reasoningCacheKey
+        ? reasoningLineCacheRef.current.get(reasoningCacheKey)
+          ?? actionResult?.inlineStatus
+          ?? actionResult?.linkedSummary
+          ?? null
+        : null)
+    : null;
+  const viewportMessages = session
+    ? injectSyntheticReasoningTrace({
+        messages,
+        statusLine: reasoningVisibility === "off" ? null : syntheticReasoningLine,
+        isStreaming: Boolean(isReasoningThreadStatus && threadStatus?.tone === "running"),
+        cacheKey: reasoningCacheKey,
+      })
+    : [];
   const viewportStreaming = Boolean(session) && (isStreaming || remoteReplyPending);
 
   return (
@@ -987,36 +1055,41 @@ export function ThreadShell({
         minimal={!session && !loading}
     statusBadges={headerStatusBadges}
       />
-      {(session && (statusRailItems.length > 0 || statusRailCaption || ownerAwareSummary || currentTaskSummary || continuityPlaceholder || memoryCorrectionActions.length > 0)) ? (
+      {(session && !hasInlineActionResult && (statusRailItems.length > 0 || statusRailCaption || ownerAwareSummary || currentTaskSummary || continuityPlaceholder || memoryCorrectionActions.length > 0)) ? (
         <ThreadStatusRail
           items={statusRailItems}
           caption={statusRailCaption}
           onOpenDetails={() => setDetailsOpen(true)}
         />
       ) : null}
+      {session && hasInlineActionResult ? (
+        <ThreadInlineActionResult
+          placement="pinned"
+          domain={currentActionDomain}
+          status={currentActionStatus}
+          title={effectiveActionResult?.title}
+          summary={effectiveActionResult?.summary}
+          preview={currentActionDomain === "mail" ? currentActionDraftPreview : currentCalendarPreview}
+          conflict={currentCalendarConflict}
+          threads={currentActionThreads}
+          onDismiss={currentActionSignature ? handleDismissActionResult : undefined}
+          dismissDisabled={dismissingActionResult}
+        />
+      ) : null}
       <ThreadViewport
         messages={viewportMessages}
         isStreaming={viewportStreaming}
+        reasoningVisibility={reasoningVisibility}
         onApprovalResponse={handleApprovalResponse}
         emptyState={emptyState}
-        composer={
+        historySupplement={session ? (
           <>
-            {session ? (
-              <ThreadInlineActionResult
-                domain={currentActionDomain}
-                status={currentActionStatus}
-                title={actionResult?.title}
-                summary={actionResult?.summary}
-                preview={currentActionDomain === "mail" ? currentActionDraftPreview : currentCalendarPreview}
-                conflict={currentCalendarConflict}
-                threads={currentActionThreads}
-              />
-            ) : null}
-            {session && threadStatus && shouldShowThreadStatus ? (
+            {threadStatus && shouldShowThreadStatus ? (
               <ThreadStatusBlock
                 tone={threadStatus.tone}
                 title={threadStatus.title}
                 body={threadStatus.body}
+                reasoningVisibility={reasoningVisibility}
                 onDismiss={threadStatus.tone === "failed" ? dismissStreamError : undefined}
               />
             ) : null}
@@ -1027,6 +1100,10 @@ export function ThreadShell({
                 onAnswer={session && !isWebSocketSession ? handleBridgedSessionSend : send}
               />
             ) : null}
+          </>
+        ) : null}
+        composer={
+          <>
             {session ? (
               <ThreadComposer
                 onSend={isWebSocketSession ? handleWebSocketSend : handleBridgedSessionSend}
@@ -1039,7 +1116,7 @@ export function ThreadShell({
                 }
                 injectedDraft={composerDraft}
                 injectedDraftNonce={composerDraftNonce}
-                modelLabel={toModelBadgeLabel(modelName, activeTarget)}
+                modelLabel={toModelBadgeLabel(modelName, activeTarget, t)}
                 activeTarget={activeTarget}
                 modelTargets={modelTargets}
                 modelTargetPending={modelTargetPending}
@@ -1063,7 +1140,7 @@ export function ThreadShell({
                   }
                   injectedDraft={composerDraft}
                   injectedDraftNonce={composerDraftNonce}
-                  modelLabel={toModelBadgeLabel(modelName, activeTarget)}
+                  modelLabel={toModelBadgeLabel(modelName, activeTarget, t)}
                   activeTarget={activeTarget}
                   modelTargets={modelTargets}
                   modelTargetPending={modelTargetPending}

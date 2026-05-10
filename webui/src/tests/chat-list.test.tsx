@@ -91,4 +91,28 @@ describe("ChatList", () => {
     ).toBeInTheDocument();
     expect(screen.queryByText(/Use \/calendar approve/)).not.toBeInTheDocument();
   });
+
+  it("hides chat actions for bridged sessions that cannot be deleted from WebUI", () => {
+    const sessions: ChatSummary[] = [
+      {
+        key: "telegram:12345",
+        channel: "telegram",
+        chatId: "12345",
+        createdAt: "2026-04-30T10:00:00Z",
+        updatedAt: "2026-04-30T10:01:00Z",
+        preview: "Telegram linked chat",
+      },
+    ];
+
+    render(
+      <ChatList
+        sessions={sessions}
+        activeKey={null}
+        onSelect={vi.fn()}
+        onRequestDelete={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: /Chat actions/i })).not.toBeInTheDocument();
+  });
 });

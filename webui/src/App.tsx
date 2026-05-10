@@ -25,7 +25,7 @@ import {
 } from "@/lib/bootstrap";
 import { NanobotClient } from "@/lib/nanobot-client";
 import { ClientProvider, useClient } from "@/providers/ClientProvider";
-import type { ChatSummary } from "@/lib/types";
+import type { ChatSummary, ReasoningVisibility } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -44,6 +44,7 @@ type BootState =
 
 const SIDEBAR_STORAGE_KEY = "nanobot-webui.sidebar";
 const CHAT_FONT_SIZE_STORAGE_KEY = "nanobot-webui.chatFontSize";
+const REASONING_VISIBILITY_STORAGE_KEY = "nanobot-webui.reasoningVisibility";
 const RESTART_STARTED_KEY = "nanobot-webui.restartStartedAt";
 const SIDEBAR_WIDTH = 279;
 type ShellView = "chat" | "settings";
@@ -73,6 +74,24 @@ function readChatFontSize(): ChatFontSize {
     return "md";
   } catch {
     return "md";
+  }
+}
+
+function readReasoningVisibility(): ReasoningVisibility {
+  if (typeof window === "undefined") return "summary";
+  try {
+    const raw = window.localStorage.getItem(REASONING_VISIBILITY_STORAGE_KEY);
+    if (
+      raw === "off"
+      || raw === "status_only"
+      || raw === "summary"
+      || raw === "debug_trace"
+    ) {
+      return raw;
+    }
+    return "summary";
+  } catch {
+    return "summary";
   }
 }
 
@@ -315,6 +334,7 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
     useState<boolean>(readSidebarOpen);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [chatFontSize, setChatFontSize] = useState<ChatFontSize>(readChatFontSize);
+  const [reasoningVisibility, setReasoningVisibility] = useState<ReasoningVisibility>(readReasoningVisibility);
   const [pendingDelete, setPendingDelete] = useState<{
     key: string;
     label: string;
@@ -341,6 +361,14 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
       // ignore storage errors
     }
   }, [chatFontSize]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(REASONING_VISIBILITY_STORAGE_KEY, reasoningVisibility);
+    } catch {
+      // ignore storage errors
+    }
+  }, [reasoningVisibility]);
 
   useEffect(() => {
     if (activeKey) return;
@@ -555,6 +583,8 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
             theme={theme}
             onToggleTheme={toggle}
             onBackToChat={() => setView("chat")}
+            reasoningVisibility={reasoningVisibility}
+            onReasoningVisibilityChange={setReasoningVisibility}
             onModelNameChange={onModelNameChange}
             chatFontSize={chatFontSize}
             chatFontValue={chatFontValue(chatFontSize)}
@@ -572,6 +602,7 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
             session={activeSession}
             sessions={sessions}
             title={headerTitle}
+            reasoningVisibility={reasoningVisibility}
             onToggleSidebar={toggleSidebar}
             onOpenSession={onSelectChat}
             onNewChat={onNewChat}

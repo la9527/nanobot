@@ -95,6 +95,7 @@ describe("useNanobotStream", () => {
     expect(result.current.messages).toHaveLength(1);
     expect(result.current.messages[0].kind).toBe("trace");
     expect(result.current.messages[0].role).toBe("tool");
+    expect(result.current.messages[0].isStreaming).toBe(true);
     expect(result.current.messages[0].traces).toEqual([
       'weather("get")',
       'search "hk weather"',
@@ -111,6 +112,70 @@ describe("useNanobotStream", () => {
     expect(result.current.messages).toHaveLength(2);
     expect(result.current.messages[1].role).toBe("assistant");
     expect(result.current.messages[1].kind).toBeUndefined();
+  });
+
+  it("keeps tool hints ahead of a streaming assistant reply", () => {
+    const fake = fakeClient();
+    const { result } = renderHook(() => useNanobotStream("chat-order", EMPTY_MESSAGES), {
+      wrapper: wrap(fake.client),
+    });
+
+    act(() => {
+      fake.emit("chat-order", {
+        event: "delta",
+        chat_id: "chat-order",
+        text: "Thinking...",
+      });
+      fake.emit("chat-order", {
+        event: "message",
+        chat_id: "chat-order",
+        text: "searching workspace",
+        kind: "tool_hint",
+      });
+    });
+
+    expect(result.current.messages).toHaveLength(2);
+    expect(result.current.messages[0]).toMatchObject({
+      kind: "trace",
+      content: "searching workspace",
+    });
+    expect(result.current.messages[1]).toMatchObject({
+      role: "assistant",
+      content: "Thinking...",
+    });
+  });
+
+  it("marks trace rows complete on turn_end", () => {
+    const fake = fakeClient();
+    const { result } = renderHook(() => useNanobotStream("chat-turn", EMPTY_MESSAGES), {
+      wrapper: wrap(fake.client),
+    });
+
+    act(() => {
+      fake.emit("chat-turn", {
+        event: "message",
+        chat_id: "chat-turn",
+        text: 'calendar lookup',
+        kind: "progress",
+      });
+    });
+
+    expect(result.current.messages[0]).toMatchObject({
+      kind: "trace",
+      isStreaming: true,
+    });
+
+    act(() => {
+      fake.emit("chat-turn", {
+        event: "turn_end",
+        chat_id: "chat-turn",
+      });
+    });
+
+    expect(result.current.messages[0]).toMatchObject({
+      kind: "trace",
+      isStreaming: false,
+    });
   });
 
   it("maps tool_approval frames into approval messages", () => {

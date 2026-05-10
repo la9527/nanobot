@@ -91,6 +91,18 @@ export async function fetchSessionMessages(
   );
 }
 
+export async function clearSessionActionResult(
+  token: string,
+  key: string,
+  base: string = "",
+): Promise<boolean> {
+  const body = await request<{ cleared: boolean }>(
+    `${base}/api/sessions/${encodeURIComponent(key)}/action-result/clear`,
+    token,
+  );
+  return body.cleared;
+}
+
 export async function deleteSession(
   token: string,
   key: string,

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, ChevronRight, Copy, FileIcon, ImageIcon, PlaySquare, Wrench } from "lucide-react";
+import { Check, CheckCircle2, ChevronRight, Copy, FileIcon, ImageIcon, LoaderCircle, PlaySquare } from "lucide-react";
 import { ShieldAlert, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -7,10 +7,11 @@ import { ImageLightbox } from "@/components/ImageLightbox";
 import { MarkdownText } from "@/components/MarkdownText";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import type { UIImage, UIMediaAttachment, UIMessage } from "@/lib/types";
+import type { UIImage, ReasoningVisibility, UIMediaAttachment, UIMessage } from "@/lib/types";
 
 interface MessageBubbleProps {
   message: UIMessage;
+  reasoningVisibility?: ReasoningVisibility;
   onApprovalResponse?: (messageId: string, decision: "yes" | "no") => void | Promise<void>;
 }
 
@@ -23,7 +24,11 @@ interface MessageBubbleProps {
  * Trace rows (tool-call hints, progress breadcrumbs) render as a subdued
  * collapsible group so intermediate steps never masquerade as replies.
  */
-export function MessageBubble({ message, onApprovalResponse }: MessageBubbleProps) {
+export function MessageBubble({
+  message,
+  reasoningVisibility = "summary",
+  onApprovalResponse,
+}: MessageBubbleProps) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   const copyResetRef = useRef<number | null>(null);
@@ -52,7 +57,14 @@ export function MessageBubble({ message, onApprovalResponse }: MessageBubbleProp
   }, [message.content]);
 
   if (message.kind === "trace") {
-    return <TraceGroup message={message} animClass={baseAnim} />;
+    if (reasoningVisibility === "off") return null;
+    return (
+      <TraceGroup
+        message={message}
+        animClass={baseAnim}
+        visibility={reasoningVisibility}
+      />
+    );
   }
 
   if (message.kind === "approval") {
@@ -513,61 +525,184 @@ function Dot({ delay }: { delay: string }) {
 interface TraceGroupProps {
   message: UIMessage;
   animClass: string;
+  visibility: Exclude<ReasoningVisibility, "off">;
 }
 
 /**
- * Collapsible group of tool-call / progress breadcrumbs. Defaults to
- * expanded for discoverability; a single click on the header folds the
- * group down to a one-line summary so it never dominates the thread.
+ * Neutral reasoning card for tool-call / progress breadcrumbs.
+ * While the turn is active it stays expanded; once complete it folds down
+ * to a compact summary that can be reopened on demand.
  */
-function TraceGroup({ message, animClass }: TraceGroupProps) {
+function TraceGroup({ message, animClass, visibility }: TraceGroupProps) {
+  if (message.traceVariant === "status") {
+    return <StatusTraceLine message={message} animClass={animClass} />;
+  }
+
   const { t } = useTranslation();
   const lines = message.traces ?? [message.content];
   const count = lines.length;
-  const [open, setOpen] = useState(true);
+  const latestLine = lines[lines.length - 1] ?? message.content;
+  const allowsExpansion = visibility === "summary" || visibility === "debug_trace";
+  const visibleLines = visibility === "debug_trace" ? lines : lines.slice(-3);
+  const [open, setOpen] = useState(Boolean(message.isStreaming) && allowsExpansion);
+
+  useEffect(() => {
+    if (!allowsExpansion) {
+      setOpen(false);
+      return;
+    }
+    setOpen(Boolean(message.isStreaming));
+  }, [allowsExpansion, message.isStreaming]);
+
   return (
     <div className={cn("w-full", animClass)}>
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
+      <div
         className={cn(
-          "group flex w-full items-center gap-2 rounded-md px-2 py-1.5",
-          "text-xs text-muted-foreground transition-colors hover:bg-muted/45",
+          "overflow-hidden rounded-[18px] border border-slate-300/55 bg-slate-50/90",
+          "shadow-[0_10px_24px_-22px_rgba(15,23,42,0.35)]",
+          "dark:border-slate-700/60 dark:bg-slate-950/30",
         )}
-        aria-expanded={open}
       >
-        <Wrench className="h-3.5 w-3.5" aria-hidden />
-        <span className="font-medium">
-          {count === 1
-            ? t("message.toolSingle")
-            : t("message.toolMany", { count })}
-        </span>
-        <ChevronRight
-          aria-hidden
-          className={cn(
-            "ml-auto h-3.5 w-3.5 transition-transform duration-200",
-            open && "rotate-90",
-          )}
-        />
-      </button>
-      {open && (
-        <ul
-          className={cn(
-            "mt-1 space-y-0.5 border-l border-muted-foreground/20 pl-3",
-            "animate-in fade-in-0 slide-in-from-top-1 duration-200",
-          )}
-        >
-          {lines.map((line, i) => (
-            <li
-              key={i}
-              className="whitespace-pre-wrap break-words font-mono leading-relaxed text-muted-foreground/90"
-              style={{ fontSize: "calc(var(--chat-font-size) * 0.78)" }}
+        {allowsExpansion ? (
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            className={cn(
+              "flex w-full items-start gap-3 px-3 py-2.5 text-left",
+              "transition-colors hover:bg-slate-100/80 dark:hover:bg-slate-900/40",
+            )}
+            aria-expanded={open}
+          >
+            <div
+              className={cn(
+                "mt-0.5 rounded-full p-1.5",
+                "bg-slate-200/80 text-slate-600 dark:bg-slate-800/80 dark:text-slate-300",
+              )}
             >
-              {line}
-            </li>
-          ))}
-        </ul>
-      )}
+              {message.isStreaming ? (
+                <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden />
+              ) : (
+                <CheckCircle2 className="h-4 w-4" aria-hidden />
+              )}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="mb-1 flex flex-wrap items-center gap-2">
+                <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500 dark:text-slate-400">
+                  {message.isStreaming
+                    ? t("message.reasoningWorking", { defaultValue: "Working" })
+                    : t("message.reasoningDone", { defaultValue: "Summary" })}
+                </span>
+                <span className="text-sm font-medium leading-5 text-slate-800 dark:text-slate-100">
+                  {count === 1
+                    ? t("message.toolSingle")
+                    : t("message.toolMany", { count })}
+                </span>
+              </div>
+              <p className="line-clamp-2 whitespace-pre-wrap break-words text-[12px] leading-5 text-slate-600 dark:text-slate-300">
+                {latestLine}
+              </p>
+            </div>
+            <ChevronRight
+              aria-hidden
+              className={cn(
+                "mt-1 h-4 w-4 shrink-0 text-slate-500 transition-transform duration-200 dark:text-slate-400",
+                open && "rotate-90",
+              )}
+            />
+          </button>
+        ) : (
+          <div className="flex w-full items-start gap-3 px-3 py-2.5 text-left">
+            <div
+              className={cn(
+                "mt-0.5 rounded-full p-1.5",
+                "bg-slate-200/80 text-slate-600 dark:bg-slate-800/80 dark:text-slate-300",
+              )}
+            >
+              {message.isStreaming ? (
+                <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden />
+              ) : (
+                <CheckCircle2 className="h-4 w-4" aria-hidden />
+              )}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="mb-1 flex flex-wrap items-center gap-2">
+                <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500 dark:text-slate-400">
+                  {message.isStreaming
+                    ? t("message.reasoningWorking", { defaultValue: "Working" })
+                    : t("message.reasoningDone", { defaultValue: "Summary" })}
+                </span>
+                <span className="text-sm font-medium leading-5 text-slate-800 dark:text-slate-100">
+                  {count === 1
+                    ? t("message.toolSingle")
+                    : t("message.toolMany", { count })}
+                </span>
+              </div>
+              <p className="line-clamp-2 whitespace-pre-wrap break-words text-[12px] leading-5 text-slate-600 dark:text-slate-300">
+                {latestLine}
+              </p>
+            </div>
+          </div>
+        )}
+        {allowsExpansion && open ? (
+          <div className="border-t border-slate-200/80 px-3 pb-3 pt-2 dark:border-slate-800/80">
+            <ul
+              className={cn(
+                "space-y-1.5 border-l border-slate-300/70 pl-3",
+                "animate-in fade-in-0 slide-in-from-top-1 duration-200",
+                "dark:border-slate-700/70",
+              )}
+            >
+              {visibleLines.map((line, i) => (
+                <li
+                  key={i}
+                  className="whitespace-pre-wrap break-words font-mono leading-relaxed text-slate-600 dark:text-slate-300"
+                  style={{ fontSize: "calc(var(--chat-font-size) * 0.78)" }}
+                >
+                  {line}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function StatusTraceLine({
+  message,
+  animClass,
+}: {
+  message: UIMessage;
+  animClass: string;
+}) {
+  const { t } = useTranslation();
+
+  return (
+    <div className={cn("w-full", animClass)}>
+      <div
+        className={cn(
+          "flex items-center gap-2 rounded-[12px] border border-slate-200/80 bg-slate-50/70 px-3 py-2",
+          "text-[12px] leading-5 text-slate-600 shadow-[0_8px_20px_-20px_rgba(15,23,42,0.4)]",
+          "dark:border-slate-800/80 dark:bg-slate-950/25 dark:text-slate-300",
+        )}
+      >
+        <span className="shrink-0 rounded-full bg-slate-200/80 p-1 text-slate-600 dark:bg-slate-800/80 dark:text-slate-300">
+          {message.isStreaming ? (
+            <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden />
+          ) : (
+            <CheckCircle2 className="h-3.5 w-3.5" aria-hidden />
+          )}
+        </span>
+        <span className="shrink-0 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500 dark:text-slate-400">
+          {message.isStreaming
+            ? t("message.reasoningWorking", { defaultValue: "Thinking" })
+            : t("message.reasoningDone", { defaultValue: "Thought" })}
+        </span>
+        <p className="min-w-0 truncate whitespace-pre-wrap break-words text-[12px] leading-5 text-slate-600 dark:text-slate-300">
+          {message.content}
+        </p>
+      </div>
     </div>
   );
 }

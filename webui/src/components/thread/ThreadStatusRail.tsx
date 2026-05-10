@@ -9,21 +9,22 @@ interface ThreadStatusRailProps {
 
 export function ThreadStatusRail({ items, caption = null, onOpenDetails }: ThreadStatusRailProps) {
   const { t } = useTranslation();
+  const summary = [...items, ...(caption ? [caption] : [])].join(" · ");
 
-  if (items.length === 0 && !caption && !onOpenDetails) return null;
+  if (!summary && !onOpenDetails) return null;
 
   return (
     <div className="px-2.5 pb-1.5">
       <div className="rounded-[12px] border border-border/50 bg-muted/10 px-2.5 py-2">
-        <div className="flex flex-wrap items-center gap-1">
-          {items.map((item) => (
-            <span
-              key={item}
-              className="inline-flex items-center rounded-full border border-border/50 bg-background/85 px-2 py-0.5 text-[10px] font-medium tracking-wide text-foreground/82"
+        <div className="flex items-center gap-2">
+          {summary ? (
+            <p
+              className="min-w-0 flex-1 truncate text-[11px] leading-5 text-muted-foreground"
+              title={summary}
             >
-              {item}
-            </span>
-          ))}
+              {summary}
+            </p>
+          ) : <div className="flex-1" />}
           {onOpenDetails ? (
             <Button
               type="button"
@@ -36,9 +37,6 @@ export function ThreadStatusRail({ items, caption = null, onOpenDetails }: Threa
             </Button>
           ) : null}
         </div>
-        {caption ? (
-          <p className="mt-1.5 text-[11px] leading-4.5 text-muted-foreground">{caption}</p>
-        ) : null}
       </div>
     </div>
   );

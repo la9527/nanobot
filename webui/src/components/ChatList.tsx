@@ -141,23 +141,23 @@ export function ChatList({
                     </div>
                   ) : null}
                 </div>
-                <DropdownMenu modal={false}>
-                  <DropdownMenuTrigger
-                    className={cn(
-                      "inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity",
-                      "hover:bg-sidebar-accent hover:text-sidebar-foreground group-hover:opacity-100",
-                      "focus-visible:opacity-100",
-                      active && "opacity-100",
-                    )}
-                    aria-label={t("chat.actions", { title })}
-                  >
-                    <MoreHorizontal className="h-4 w-4" />
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent
-                    align="end"
-                    onCloseAutoFocus={(event) => event.preventDefault()}
-                  >
-                    {canDelete ? (
+                {canDelete ? (
+                  <DropdownMenu modal={false}>
+                    <DropdownMenuTrigger
+                      className={cn(
+                        "inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity",
+                        "hover:bg-sidebar-accent hover:text-sidebar-foreground group-hover:opacity-100",
+                        "focus-visible:opacity-100",
+                        active && "opacity-100",
+                      )}
+                      aria-label={t("chat.actions", { title })}
+                    >
+                      <MoreHorizontal className="h-4 w-4" />
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent
+                      align="end"
+                      onCloseAutoFocus={(event) => event.preventDefault()}
+                    >
                       <DropdownMenuItem
                         onSelect={() => {
                           window.setTimeout(() => onRequestDelete(s.key, title), 0);
@@ -167,9 +167,9 @@ export function ChatList({
                         <Trash2 className="mr-2 h-4 w-4" />
                         {t("chat.delete")}
                       </DropdownMenuItem>
-                    ) : null}
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                ) : null}
               </div>
             </li>
           );
