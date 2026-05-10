@@ -101,7 +101,7 @@ describe("ThreadShell action result placement", () => {
     expect(actionContext).toHaveTextContent("Calendar event created. 5.2. 15:00부터 5.2. 16:00까지 치과 일정을 생성했습니다.");
     expect(scrollArea).toBeTruthy();
     expect(scrollArea).not.toContainElement(actionContext);
-    expect(screen.queryByRole("button", { name: "Details" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Details" })).toBeInTheDocument();
 
     await waitFor(() => {
       expect(screen.getByText(/Calendar event created/)).toBeInTheDocument();

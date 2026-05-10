@@ -143,6 +143,7 @@ export function ThreadViewport({
             <div className="flex w-full flex-1 items-center justify-center pb-[7vh] pt-8">
               <div className="flex w-full max-w-[58rem] flex-col gap-6">
                 {emptyState}
+                {historySupplement ? <div className="w-full">{historySupplement}</div> : null}
                 {composer ? <div className="w-full">{composer}</div> : null}
               </div>
             </div>

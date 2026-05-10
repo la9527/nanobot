@@ -107,9 +107,9 @@ describe("ThreadViewport", () => {
       />,
     );
 
-    const historySupplement = container.querySelector('[data-testid="history-supplement"]');
-    const composer = container.querySelector('[data-testid="composer-slot"]');
-    const stickyComposer = container.querySelector('.sticky.bottom-0');
+    const historySupplement = container.querySelector<HTMLElement>('[data-testid="history-supplement"]');
+    const composer = container.querySelector<HTMLElement>('[data-testid="composer-slot"]');
+    const stickyComposer = container.querySelector<HTMLElement>('.sticky.bottom-0');
 
     expect(historySupplement).toBeTruthy();
     expect(composer).toBeTruthy();

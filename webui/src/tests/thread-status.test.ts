@@ -30,9 +30,18 @@ describe("deriveThreadStatus", () => {
       booting: false,
       modelTargetPending: false,
       actionResult: {
+        actionId: null,
+        domain: "calendar",
+        action: "create_event",
         status: "rejected",
         title: "Calendar create cancelled",
         summary: "The pending calendar create request was cancelled.",
+        nextStep: null,
+        badge: null,
+        inlineStatus: null,
+        linkedSummary: null,
+        errorCode: null,
+        errorMessage: null,
       },
     });
 

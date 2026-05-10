@@ -1562,7 +1562,7 @@ describe("ThreadShell", () => {
     });
   });
 
-  it("renders the latest mail action result from session metadata in the status block", async () => {
+  it("renders the latest mail action result from session metadata in the pinned card", async () => {
     const client = makeClient();
 
     render(
@@ -1620,11 +1620,8 @@ describe("ThreadShell", () => {
       ),
     );
 
-    await waitFor(() => {
-      expect(screen.getByText(/Draft ready/)).toBeInTheDocument();
-    });
-    expect(screen.getByText(/Draft created for alice@example.com./)).toBeInTheDocument();
-    expect(screen.getByText("Mail result")).toBeInTheDocument();
+    const actionContext = await screen.findByTestId("thread-action-context");
+    expect(actionContext).toHaveTextContent("Draft ready. Draft created for alice@example.com.");
     expect(screen.queryByText(/To:/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Subject:/i)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Details" }));
@@ -1686,10 +1683,8 @@ describe("ThreadShell", () => {
       ),
     );
 
-    await waitFor(() => {
-      expect(screen.getByText("Mail result")).toBeInTheDocument();
-    });
-    expect(screen.getByText("Thread summary")).toBeInTheDocument();
+    const actionContext = await screen.findByTestId("thread-action-context");
+    expect(actionContext).toHaveTextContent("Thread summaries ready. Summaries were generated for 1 threads.");
     fireEvent.click(screen.getByRole("button", { name: "Details" }));
     expect(screen.getByText("Budget follow-up")).toBeInTheDocument();
     expect(screen.getByText("Alice is waiting for approval before noon.")).toBeInTheDocument();
@@ -1754,11 +1749,9 @@ describe("ThreadShell", () => {
       ),
     );
 
-    await waitFor(() => {
-      expect(screen.getByText("Mail result")).toBeInTheDocument();
-    });
+    const actionContext = await screen.findByTestId("thread-action-context");
     expect(screen.getAllByText("Approval pending").length).toBeGreaterThan(0);
-    expect(screen.getByText(/Mail send approval required/)).toBeInTheDocument();
+    expect(actionContext).toHaveTextContent("Mail send approval required. Approval required before sending 'Budget follow-up' to alice@example.com.");
   });
 
   it("renders dashboard home when no session is active and opens priority items", async () => {
@@ -1865,9 +1858,7 @@ describe("ThreadShell", () => {
       ),
     );
 
-    await waitFor(() => {
-      expect(screen.getByText("Calendar result")).toBeInTheDocument();
-    });
+    await screen.findByTestId("thread-action-context");
     fireEvent.click(screen.getByRole("button", { name: "Details" }));
     expect(screen.getByText(/Title:/i)).toBeInTheDocument();
     expect(screen.getByText(/When:/i)).toBeInTheDocument();
@@ -1995,9 +1986,7 @@ describe("ThreadShell", () => {
       ),
     );
 
-    await waitFor(() => {
-      expect(screen.getByText("Calendar result")).toBeInTheDocument();
-    });
+    await screen.findByTestId("thread-action-context");
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
@@ -2114,7 +2103,7 @@ describe("ThreadShell", () => {
     expect(status).toHaveTextContent("Approve sending the report email to finance?");
   });
 
-  it("shows running, completed, and failed assistant status blocks", async () => {
+  it("shows running state in the header and reasoning trace, then surfaces failed status", async () => {
     const client = makeClient();
 
     render(
@@ -2138,9 +2127,7 @@ describe("ThreadShell", () => {
       });
     });
 
-    const runningStatus = screen.getByRole("status");
-    expect(runningStatus).toHaveTextContent("Task is in progress");
-    expect(runningStatus).toHaveTextContent("Generating the current response.");
+    expect(screen.getByText("Task in progress")).toBeInTheDocument();
 
     await act(async () => {
       client._emitChat("chat-a", {
@@ -2154,10 +2141,8 @@ describe("ThreadShell", () => {
     });
 
     await waitFor(() => {
-      const completedStatus = screen.getByRole("status");
-      expect(completedStatus).toHaveTextContent("Completed");
-      expect(completedStatus).toHaveTextContent("Latest update is ready");
-      expect(completedStatus).toHaveTextContent("Working");
+      expect(screen.queryByText("Task in progress")).not.toBeInTheDocument();
+      expect(screen.getByText("Working")).toBeInTheDocument();
     });
 
     await act(async () => {

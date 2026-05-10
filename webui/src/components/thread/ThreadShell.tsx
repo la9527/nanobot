@@ -126,6 +126,7 @@ function formatContinuitySummary(session: ChatSummary | null, t: TFunction): {
     parts.push(t("thread.details.linkedExternalSession.trust", { trust: trustLevel }));
   }
   parts.push(t("thread.details.linkedExternalSession.repliesContinue"));
+
   return {
     title: t("thread.details.linkedExternalSession.title"),
     body: parts.join(" "),
