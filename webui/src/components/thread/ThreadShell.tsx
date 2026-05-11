@@ -343,8 +343,13 @@ function deriveOwnerAwareSummary(params: {
     const updatedSuffix = updatedLabel
       ? t("thread.details.ownerSummary.updatedLead", { updated: updatedLabel })
       : "";
+    const heldMessageKey = proactive?.suppressedReason === "quiet_hours"
+      ? "thread.details.ownerSummary.quietHoursHeld"
+      : proactive?.suppressedReason === "duplicate"
+        ? "thread.details.ownerSummary.duplicateHeld"
+        : "thread.details.ownerSummary.held";
     bodyParts.push(
-      t("thread.details.ownerSummary.quietHoursHeld", {
+      t(heldMessageKey, {
         title: proactive?.title ?? t("thread.details.ownerSummary.latestProactiveUpdate"),
         channel: channelLabel,
         updatedSuffix,

@@ -1471,6 +1471,53 @@ describe("ThreadShell", () => {
     expect(screen.getByText(/Next step: open WebUI to review the held proactive update\./i)).toBeInTheDocument();
   });
 
+  it("renders duplicate-suppressed proactive state in the owner-aware summary", async () => {
+    const client = makeClient();
+
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={session("chat-a")}
+          sessions={[
+            {
+              ...telegramSession("12345"),
+              updatedAt: "2026-05-01T06:00:00Z",
+              metadata: {
+                continuity: {
+                  canonical_owner_id: "primary-user",
+                  channel_kind: "telegram",
+                  external_identity: "12345",
+                  trust_level: "linked",
+                },
+                proactive_summary: {
+                  status: "suppressed",
+                  category: "briefing",
+                  title: "Morning briefing ready",
+                  summary: "오늘 일정/승인/막힘 없음, 핵심 작업 1개 시작하라.",
+                  target_channel: "telegram",
+                  suppressed_reason: "duplicate",
+                  updated_at: "2026-05-01T06:00:00Z",
+                },
+              },
+            },
+          ]}
+          title="Chat chat-a"
+          onToggleSidebar={() => {}}
+          onGoHome={() => {}}
+          onNewChat={vi.fn().mockResolvedValue("chat-a")}
+        />,
+      ),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/Held 1/i)).toBeInTheDocument();
+    });
+    await userEvent.setup().click(screen.getByRole("button", { name: "Details" }));
+    expect(screen.getByText(/Duplicate Morning briefing ready for Telegram was held/i)).toBeInTheDocument();
+    expect(screen.getByText(/Next step: open WebUI to review the held proactive update\./i)).toBeInTheDocument();
+  });
+
   it("refreshes owner defaults after a websocket memory correction reply", async () => {
     const client = makeClient();
     const user = userEvent.setup();
