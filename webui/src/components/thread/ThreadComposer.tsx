@@ -10,12 +10,16 @@ import {
   Activity,
   ArrowUp,
   BookOpen,
+  Bot,
+  CalendarDays,
   Check,
   ChevronDown,
   CircleHelp,
+  Gauge,
   History,
   ImageIcon,
   Loader2,
+  Mail,
   Plus,
   RotateCw,
   Sparkles,
@@ -122,9 +126,13 @@ interface ThreadComposerProps {
 
 const COMMAND_ICONS: Record<string, LucideIcon> = {
   activity: Activity,
+  bot: Bot,
   "book-open": BookOpen,
+  "calendar-days": CalendarDays,
   "circle-help": CircleHelp,
+  gauge: Gauge,
   history: History,
+  mail: Mail,
   "rotate-cw": RotateCw,
   sparkles: Sparkles,
   square: Square,
@@ -300,8 +308,7 @@ export function ThreadComposer({
           }),
         ].join(" ").toLowerCase();
         return haystack.includes(slashQuery);
-      })
-      .slice(0, 8);
+      });
   }, [slashCommands, slashQuery, t]);
 
   const showSlashMenu = filteredSlashCommands.length > 0;
@@ -919,12 +926,22 @@ function SlashCommandPalette({
   onChoose,
 }: SlashCommandPaletteProps) {
   const { t } = useTranslation();
+  const optionRefs = useRef(new Map<string, HTMLButtonElement>());
+
+  useEffect(() => {
+    const activeCommand = commands[selectedIndex];
+    if (!activeCommand) return;
+    optionRefs.current.get(activeCommand.command)?.scrollIntoView({
+      block: "nearest",
+    });
+  }, [commands, selectedIndex]);
+
   return (
     <div
       role="listbox"
       aria-label={t("thread.composer.slash.ariaLabel")}
       className={cn(
-        "absolute bottom-full left-1/2 z-30 mb-2 max-h-[22rem] w-[calc(100%-0.5rem)] -translate-x-1/2 overflow-hidden rounded-[18px] border",
+        "absolute bottom-full left-1/2 z-30 mb-2 w-[calc(100%-0.5rem)] -translate-x-1/2 overflow-hidden rounded-[18px] border",
         "border-border/65 bg-popover p-1.5 text-popover-foreground shadow-[0_18px_55px_rgba(15,23,42,0.18)]",
         "dark:border-white/10 dark:shadow-[0_22px_55px_rgba(0,0,0,0.45)]",
         isHero ? "max-w-[58rem]" : "max-w-[49.5rem]",
@@ -933,7 +950,10 @@ function SlashCommandPalette({
       <div className="px-2 pb-1 pt-1 text-[11px] font-medium tracking-[0.08em] text-muted-foreground/70">
         {t("thread.composer.slash.label")}
       </div>
-      <div className="max-h-[18rem] overflow-y-auto pr-0.5">
+      <div
+        className="overflow-y-auto overscroll-contain pr-0.5"
+        style={{ maxHeight: "min(22rem, 45vh)" }}
+      >
         {commands.map((command, index) => {
           const Icon = COMMAND_ICONS[command.icon] ?? CircleHelp;
           const selected = index === selectedIndex;
@@ -947,6 +967,10 @@ function SlashCommandPalette({
           return (
             <button
               key={command.command}
+              ref={(el) => {
+                if (el) optionRefs.current.set(command.command, el);
+                else optionRefs.current.delete(command.command);
+              }}
               type="button"
               role="option"
               aria-selected={selected}

@@ -48,6 +48,7 @@ const REASONING_VISIBILITY_STORAGE_KEY = "nanobot-webui.reasoningVisibility";
 const RESTART_STARTED_KEY = "nanobot-webui.restartStartedAt";
 const SIDEBAR_WIDTH = 279;
 type ShellView = "chat" | "settings";
+type EmptyThreadView = "dashboard" | "new-chat";
 
 type ChatFontSize = "sm" | "md" | "lg";
 
@@ -330,6 +331,7 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
   const { sessions, loading, refresh, createChat, deleteChat } = useSessions();
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [view, setView] = useState<ShellView>("chat");
+  const [emptyThreadView, setEmptyThreadView] = useState<EmptyThreadView>("dashboard");
   const [desktopSidebarOpen, setDesktopSidebarOpen] =
     useState<boolean>(readSidebarOpen);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -406,6 +408,7 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
     try {
       const chatId = await createChat();
       setActiveKey(`websocket:${chatId}`);
+      setEmptyThreadView("new-chat");
       setView("chat");
       setMobileSidebarOpen(false);
       return chatId;
@@ -417,6 +420,14 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
 
   const onNewChat = useCallback(() => {
     setActiveKey(null);
+    setEmptyThreadView("new-chat");
+    setView("chat");
+    setMobileSidebarOpen(false);
+  }, []);
+
+  const onGoHome = useCallback(() => {
+    setActiveKey(null);
+    setEmptyThreadView("dashboard");
     setView("chat");
     setMobileSidebarOpen(false);
   }, []);
@@ -424,6 +435,7 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
   const onSelectChat = useCallback(
     (key: string) => {
       setActiveKey(key);
+      setEmptyThreadView("new-chat");
       setView("chat");
       setMobileSidebarOpen(false);
     },
@@ -485,7 +497,10 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
       ? (sessions[currentIndex + 1]?.key ?? sessions[currentIndex - 1]?.key ?? null)
       : activeKey;
     setPendingDelete(null);
-    if (deletingActive) setActiveKey(fallbackKey);
+    if (deletingActive) {
+      setActiveKey(fallbackKey);
+      if (!fallbackKey) setEmptyThreadView("dashboard");
+    }
     try {
       await deleteChat(key);
     } catch (e) {
@@ -512,11 +527,7 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
     loading,
     theme,
     onToggleTheme: toggle,
-    onGoHome: () => {
-      setView("chat");
-      setActiveKey(null);
-      setMobileSidebarOpen(false);
-    },
+    onGoHome,
     onNewChat: () => {
       void onNewChat();
     },
@@ -601,9 +612,11 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
           <ThreadShell
             session={activeSession}
             sessions={sessions}
+            emptyView={emptyThreadView}
             title={headerTitle}
             reasoningVisibility={reasoningVisibility}
             onToggleSidebar={toggleSidebar}
+            onGoHome={onGoHome}
             onOpenSession={onSelectChat}
             onNewChat={onNewChat}
             onRefreshSessions={refresh}

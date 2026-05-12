@@ -6,6 +6,9 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 
+PROACTIVE_DEDUPE_BASELINE_METADATA_KEY = "proactive_dedupe_baseline"
+
+
 @dataclass(slots=True)
 class HeartbeatProactivePolicy:
     webui_first: bool = True
@@ -114,6 +117,39 @@ def should_suppress_repeated_proactive_delivery(
     previous_summary = _clean_text(previous.get("summary"))
     previous_category = _clean_text(previous.get("category"))
     return previous_summary == response.strip() and previous_category == category
+
+
+def proactive_dedupe_baseline_from_summary(summary: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(summary, dict):
+        return None
+    status = _clean_text(summary.get("status"))
+    suppressed_reason = _clean_text(summary.get("suppressed_reason"))
+    if status != "delivered" and not (status == "suppressed" and suppressed_reason == "duplicate"):
+        return None
+    category = _clean_text(summary.get("category"))
+    response_summary = _clean_text(summary.get("summary"))
+    if not category or not response_summary:
+        return None
+    baseline = {
+        "status": status,
+        "category": category,
+        "summary": response_summary,
+    }
+    if suppressed_reason:
+        baseline["suppressed_reason"] = suppressed_reason
+    return baseline
+
+
+def proactive_dedupe_baseline_from_metadata(metadata: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(metadata, dict):
+        return None
+    active = proactive_dedupe_baseline_from_summary(metadata.get("proactive_summary"))
+    if active is not None:
+        return active
+    stored = metadata.get(PROACTIVE_DEDUPE_BASELINE_METADATA_KEY)
+    if isinstance(stored, dict):
+        return stored
+    return None
 
 
 def classify_proactive_task(tasks: str) -> str:

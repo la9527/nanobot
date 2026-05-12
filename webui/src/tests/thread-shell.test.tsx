@@ -189,6 +189,87 @@ describe("ThreadShell", () => {
     expect(screen.getByText("persist me across tabs")).toBeInTheDocument();
   });
 
+  it("hydrates persisted assistant replies after websocket turn completion even when no live reply frame arrived", async () => {
+    const client = makeClient();
+    let messageFetchCount = 0;
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/commands")) {
+          return httpJson({ commands: [] });
+        }
+        if (url.includes("/api/sessions/websocket%3Achat-sync/messages")) {
+          messageFetchCount += 1;
+          if (messageFetchCount === 1) {
+            return {
+              ok: false,
+              status: 404,
+              json: async () => ({}),
+            };
+          }
+          return httpJson({
+            messages: [
+              {
+                role: "user",
+                content: "show me the latest status",
+                timestamp: "2026-05-12T12:00:00Z",
+              },
+              {
+                role: "assistant",
+                content: "Persisted websocket reply",
+                timestamp: "2026-05-12T12:00:01Z",
+              },
+            ],
+          });
+        }
+        return {
+          ok: false,
+          status: 404,
+          json: async () => ({}),
+        };
+      }),
+    );
+
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={session("chat-sync")}
+          title="Chat chat-sync"
+          onToggleSidebar={() => {}}
+          onGoHome={() => {}}
+          onNewChat={vi.fn().mockResolvedValue("chat-sync")}
+        />,
+      ),
+    );
+
+    fireEvent.change(screen.getByLabelText("Message input"), {
+      target: { value: "show me the latest status" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+
+    await waitFor(() => {
+      expect(client.sendMessage).toHaveBeenCalledWith(
+        "chat-sync",
+        "show me the latest status",
+        undefined,
+      );
+    });
+
+    act(() => {
+      client._emitChat("chat-sync", {
+        event: "turn_end",
+        chat_id: "chat-sync",
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Persisted websocket reply")).toBeInTheDocument();
+    });
+  });
+
   it("clears the old thread when the active session is removed", async () => {
     const client = makeClient();
     const onNewChat = vi.fn().mockResolvedValue("chat-a");
@@ -255,6 +336,7 @@ describe("ThreadShell", () => {
         client,
         <ThreadShell
           session={null}
+          emptyView="new-chat"
           title="nanobot"
           onToggleSidebar={() => {}}
           onGoHome={() => {}}
@@ -290,6 +372,7 @@ describe("ThreadShell", () => {
         client,
         <ThreadShell
           session={null}
+          emptyView="new-chat"
           title="nanobot"
           onToggleSidebar={() => {}}
           onCreateChat={onCreateChat}
@@ -341,6 +424,7 @@ describe("ThreadShell", () => {
       return (
         <ThreadShell
           session={activeSession}
+          emptyView="new-chat"
           title={activeSession ? "Chat chat-a" : "nanobot"}
           onToggleSidebar={() => {}}
           onGoHome={() => {}}
@@ -704,6 +788,7 @@ describe("ThreadShell", () => {
         client,
         <ThreadShell
           session={null}
+          emptyView="new-chat"
           title="nanobot"
           onToggleSidebar={() => {}}
           onNewChat={() => {}}
@@ -732,6 +817,7 @@ describe("ThreadShell", () => {
         client,
         <ThreadShell
           session={null}
+          emptyView="new-chat"
           title="nanobot"
           onToggleSidebar={() => {}}
           onNewChat={() => {}}
@@ -979,10 +1065,190 @@ describe("ThreadShell", () => {
         undefined,
       );
     });
+    await waitFor(() => {
+      expect(screen.getAllByText("telegram assistant answer")).toHaveLength(1);
+    });
+  });
+
+  it("clears the linked-session waiting placeholder when a telegram reply arrives live", async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("telegram%3A12345/messages")) {
+          return httpJson({
+            key: "telegram:12345",
+            created_at: null,
+            updated_at: null,
+            messages: [{ role: "user", content: "older telegram user turn" }],
+          });
+        }
+        if (url.includes("telegram%3A12345/model-target")) {
+          return {
+            ok: false,
+            status: 404,
+            json: async () => ({}),
+          };
+        }
+        return {
+          ok: false,
+          status: 404,
+          json: async () => ({}),
+        };
+      }),
+    );
+
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={telegramSession("12345")}
+          title="Telegram 12345"
+          onToggleSidebar={() => {}}
+          onGoHome={() => {}}
+          onNewChat={vi.fn().mockResolvedValue("chat-a")}
+        />,
+      ),
+    );
+
+    await waitFor(() => expect(screen.getByText("older telegram user turn")).toBeInTheDocument());
+
+    await user.type(screen.getByLabelText("Message input"), "/status");
+    await user.keyboard("{Enter}");
 
     await waitFor(() => {
-      expect(screen.getAllByText("telegram assistant answer").length).toBeGreaterThan(0);
+      expect(client.sendSessionMessage).toHaveBeenCalledWith(
+        "telegram:12345",
+        "/status",
+        undefined,
+      );
     });
+
+    expect(screen.getByText("Waiting for the linked external session to return a reply.")).toBeInTheDocument();
+
+    act(() => {
+      client._emitChat("telegram:12345", {
+        event: "message",
+        chat_id: "telegram:12345",
+        text: "Target: smart-router",
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Target: smart-router")).toBeInTheDocument();
+      expect(screen.queryByText("Waiting for the linked external session to return a reply.")).not.toBeInTheDocument();
+    });
+  });
+
+  it("does not duplicate a telegram assistant reply when the same reply already exists in history", async () => {
+    const client = makeClient();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("telegram%3A12345/messages")) {
+          return httpJson({
+            key: "telegram:12345",
+            created_at: null,
+            updated_at: null,
+            messages: [
+              { role: "user", content: "older telegram user turn" },
+              { role: "assistant", content: "telegram assistant answer" },
+            ],
+          });
+        }
+        if (url.includes("telegram%3A12345/model-target")) {
+          return {
+            ok: false,
+            status: 404,
+            json: async () => ({}),
+          };
+        }
+        return {
+          ok: false,
+          status: 404,
+          json: async () => ({}),
+        };
+      }),
+    );
+
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={telegramSession("12345")}
+          title="Telegram 12345"
+          onToggleSidebar={() => {}}
+          onGoHome={() => {}}
+          onNewChat={vi.fn().mockResolvedValue("chat-a")}
+        />,
+      ),
+    );
+
+    await waitFor(() => expect(screen.getAllByText("telegram assistant answer")).toHaveLength(1));
+
+    act(() => {
+      client._emitChat("telegram:12345", {
+        event: "message",
+        chat_id: "telegram:12345",
+        text: "telegram assistant answer",
+      });
+    });
+
+    expect(screen.getAllByText("telegram assistant answer")).toHaveLength(1);
+  });
+
+  it("does not duplicate a telegram assistant reply when websocket text only differs by whitespace", async () => {
+    const client = makeClient();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("telegram%3A12345/messages")) {
+          return httpJson({
+            key: "telegram:12345",
+            created_at: null,
+            updated_at: null,
+            messages: [
+              { role: "user", content: "older telegram user turn" },
+              { role: "assistant", content: "telegram assistant answer" },
+            ],
+          });
+        }
+        return {
+          ok: false,
+          status: 404,
+          json: async () => ({}),
+        };
+      }),
+    );
+
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={telegramSession("12345")}
+          title="Telegram 12345"
+          onToggleSidebar={() => {}}
+          onGoHome={() => {}}
+          onNewChat={vi.fn().mockResolvedValue("chat-a")}
+        />,
+      ),
+    );
+
+    await waitFor(() => expect(screen.getAllByText("telegram assistant answer")).toHaveLength(1));
+
+    act(() => {
+      client._emitChat("telegram:12345", {
+        event: "message",
+        chat_id: "telegram:12345",
+        text: "telegram assistant answer\n",
+      });
+    });
+
+    expect(screen.getAllByText("telegram assistant answer")).toHaveLength(1);
   });
 
   it("renders remote user turns immediately through websocket mirror events", async () => {
@@ -1031,6 +1297,53 @@ describe("ThreadShell", () => {
       client._emitChat("chat-a", {
         event: "message",
         chat_id: "chat-a",
+        text: "fresh telegram push",
+        kind: "remote_user",
+      });
+    });
+
+    expect(screen.getByText("fresh telegram push")).toBeInTheDocument();
+  });
+
+  it("renders telegram remote user turns immediately through websocket mirror events", async () => {
+    const client = makeClient();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("telegram%3A12345/messages")) {
+        return httpJson({
+          key: "telegram:12345",
+          created_at: null,
+          updated_at: null,
+          messages: [{ role: "user", content: "older telegram user turn" }],
+        });
+      }
+      return {
+        ok: false,
+        status: 404,
+        json: async () => ({}),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={telegramSession("12345")}
+          title="Telegram 12345"
+          onToggleSidebar={() => {}}
+          onGoHome={() => {}}
+          onNewChat={vi.fn().mockResolvedValue("chat-a")}
+        />,
+      ),
+    );
+
+    await waitFor(() => expect(screen.getByText("older telegram user turn")).toBeInTheDocument());
+
+    act(() => {
+      client._emitChat("telegram:12345", {
+        event: "message",
+        chat_id: "telegram:12345",
         text: "fresh telegram push",
         kind: "remote_user",
       });
@@ -1516,6 +1829,87 @@ describe("ThreadShell", () => {
     await userEvent.setup().click(screen.getByRole("button", { name: "Details" }));
     expect(screen.getByText(/Duplicate Morning briefing ready for Telegram was held/i)).toBeInTheDocument();
     expect(screen.getByText(/Next step: open WebUI to review the held proactive update\./i)).toBeInTheDocument();
+  });
+
+  it("clears a held proactive summary after opening that session in WebUI", async () => {
+    const client = makeClient();
+    const refreshSessions = vi.fn(async () => {});
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/commands")) {
+        return httpJson({ commands: [] });
+      }
+      if (url.includes("/api/sessions/telegram%3A12345/proactive-summary/clear")) {
+        return httpJson({ cleared: true });
+      }
+      return {
+        ok: false,
+        status: 404,
+        json: async () => ({}),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    function Harness() {
+      const [activeSession, setActiveSession] = useState({
+        ...telegramSession("12345", "telegram:12345", {
+          continuity: {
+            canonical_owner_id: "primary-user",
+            channel_kind: "telegram",
+            external_identity: "12345",
+            trust_level: "linked",
+          },
+          proactive_summary: {
+            status: "suppressed",
+            category: "briefing",
+            title: "Morning briefing ready",
+            summary: "오늘 일정/승인/막힘 없음, 핵심 작업 1개 시작하라.",
+            target_channel: "telegram",
+            suppressed_reason: "duplicate",
+            updated_at: "2026-05-01T06:00:00Z",
+          },
+        }),
+      });
+
+      return (
+        <ThreadShell
+          session={activeSession}
+          sessions={[activeSession]}
+          title="Chat 12345"
+          onToggleSidebar={() => {}}
+          onGoHome={() => {}}
+          onNewChat={vi.fn().mockResolvedValue("chat-a")}
+          onRefreshSessions={async () => {
+            refreshSessions();
+            setActiveSession({
+              ...activeSession,
+              metadata: {
+                ...activeSession.metadata,
+                proactive_summary: undefined,
+              },
+            });
+          }}
+        />
+      );
+    }
+
+    render(wrap(client, <Harness />));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/api/sessions/telegram%3A12345/proactive-summary/clear"),
+        expect.objectContaining({
+          credentials: "same-origin",
+          headers: expect.objectContaining({ Authorization: "Bearer tok" }),
+        }),
+      );
+    });
+    await waitFor(() => {
+      expect(refreshSessions).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      expect(screen.queryByText(/Held 1/i)).not.toBeInTheDocument();
+    });
   });
 
   it("refreshes owner defaults after a websocket memory correction reply", async () => {

@@ -649,6 +649,10 @@ async def test_commands_api_returns_slash_command_metadata(bus: MagicMock) -> No
         body = response.json()
         commands = {row["command"]: row for row in body["commands"]}
         assert commands["/stop"]["title"] == "Stop current task"
+        assert commands["/model"]["arg_hint"] == "[name|list|clear]"
+        assert commands["/usage"]["arg_hint"] == "[off|tokens|full]"
+        assert commands["/mail"]["title"] == "Manage Gmail"
+        assert commands["/calendar"]["title"] == "Manage calendar"
         assert commands["/history"]["arg_hint"] == "[n]"
         assert all("description" in row for row in body["commands"])
     finally:

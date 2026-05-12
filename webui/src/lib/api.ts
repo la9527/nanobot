@@ -103,6 +103,18 @@ export async function clearSessionActionResult(
   return body.cleared;
 }
 
+export async function clearSessionProactiveSummary(
+  token: string,
+  key: string,
+  base: string = "",
+): Promise<boolean> {
+  const body = await request<{ cleared: boolean }>(
+    `${base}/api/sessions/${encodeURIComponent(key)}/proactive-summary/clear`,
+    token,
+  );
+  return body.cleared;
+}
+
 export async function deleteSession(
   token: string,
   key: string,

@@ -20,7 +20,7 @@ function shouldPollSessionHistory(key: string): boolean {
 }
 
 export function hydrateSessionMessages(body: SessionMessagesResponse): UIMessage[] {
-  return body.messages.flatMap((m, idx) => {
+  const hydrated: UIMessage[] = body.messages.flatMap((m, idx): UIMessage[] => {
     if (m.role !== "user" && m.role !== "assistant") return [];
     if (typeof m.content !== "string") return [];
     const createdAt = m.timestamp ? Date.parse(m.timestamp) : Date.now();
@@ -52,8 +52,7 @@ export function hydrateSessionMessages(body: SessionMessagesResponse): UIMessage
     if (!visibleReasoning) {
       return [hydratedMessage];
     }
-    return [
-      {
+    const reasoningMessage: UIMessage = {
         id: `${messageId}-reasoning`,
         role: "tool",
         kind: "trace",
@@ -61,10 +60,39 @@ export function hydrateSessionMessages(body: SessionMessagesResponse): UIMessage
         content: visibleReasoning,
         traces: [visibleReasoning],
         createdAt: Math.max(0, createdAt - 1),
-      },
+      };
+    return [
+      reasoningMessage,
       hydratedMessage,
     ];
   });
+
+  return collapseConsecutiveAssistantDuplicates(hydrated);
+}
+
+function collapseConsecutiveAssistantDuplicates(messages: UIMessage[]): UIMessage[] {
+  const deduped: UIMessage[] = [];
+  for (const message of messages) {
+    const previous = deduped[deduped.length - 1];
+    if (
+      previous
+      && previous.role === "assistant"
+      && message.role === "assistant"
+      && !previous.isStreaming
+      && !message.isStreaming
+      && normalizeHistoryText(previous.content) === normalizeHistoryText(message.content)
+      && JSON.stringify(previous.buttons ?? []) === JSON.stringify(message.buttons ?? [])
+      && JSON.stringify(previous.media ?? []) === JSON.stringify(message.media ?? [])
+    ) {
+      continue;
+    }
+    deduped.push(message);
+  }
+  return deduped;
+}
+
+function normalizeHistoryText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
 }
 
 /** Sidebar state: fetches the full session list and exposes create / delete actions. */

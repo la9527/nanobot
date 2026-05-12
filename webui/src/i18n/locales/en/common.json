@@ -511,6 +511,22 @@
             "title": "Show status",
             "description": "Display runtime, provider, and channel status."
           },
+          "model": {
+            "title": "Select model target",
+            "description": "Switch model target, list available targets, or clear the override."
+          },
+          "usage": {
+            "title": "Set usage details",
+            "description": "Show or change the token usage detail level."
+          },
+          "mail": {
+            "title": "Manage Gmail",
+            "description": "List threads, inspect mail, draft replies, and approve sends."
+          },
+          "calendar": {
+            "title": "Manage calendar",
+            "description": "Review events, create drafts, and resolve pending approvals."
+          },
           "history": {
             "title": "Show conversation history",
             "description": "Print the last N persisted conversation messages."

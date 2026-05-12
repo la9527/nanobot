@@ -184,6 +184,22 @@
             "title": "Afficher l’état",
             "description": "Afficher l’état du runtime, du provider et des channels."
           },
+          "model": {
+            "title": "Choisir la cible du modèle",
+            "description": "Changer la cible du modèle, afficher les cibles disponibles ou supprimer la surcharge."
+          },
+          "usage": {
+            "title": "Régler le niveau d’usage",
+            "description": "Afficher ou modifier le niveau de détail de l’usage des tokens."
+          },
+          "mail": {
+            "title": "Gérer Gmail",
+            "description": "Lister les fils, consulter les e-mails, rédiger des réponses et approuver les envois."
+          },
+          "calendar": {
+            "title": "Gérer le calendrier",
+            "description": "Examiner les événements, créer des brouillons et résoudre les approbations en attente."
+          },
           "history": {
             "title": "Afficher l’historique",
             "description": "Afficher les N derniers messages persistés de la conversation."

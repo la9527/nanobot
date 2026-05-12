@@ -184,6 +184,22 @@
             "title": "ステータスを表示",
             "description": "ランタイム、provider、channel の状態を表示します。"
           },
+          "model": {
+            "title": "モデル対象を選択",
+            "description": "モデル対象を切り替え、利用可能な対象を表示し、上書きを解除します。"
+          },
+          "usage": {
+            "title": "使用量の詳細を設定",
+            "description": "トークン使用量の詳細レベルを表示または変更します。"
+          },
+          "mail": {
+            "title": "Gmail を管理",
+            "description": "スレッドの一覧表示、メール確認、返信下書き、送信承認を行います。"
+          },
+          "calendar": {
+            "title": "カレンダーを管理",
+            "description": "予定を確認し、下書きを作成し、保留中の承認を処理します。"
+          },
           "history": {
             "title": "会話履歴を表示",
             "description": "保存済みの直近 N 件の会話メッセージを表示します。"

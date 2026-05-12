@@ -3,9 +3,11 @@ from __future__ import annotations
 from datetime import datetime
 
 from nanobot.heartbeat.proactive import (
+    PROACTIVE_DEDUPE_BASELINE_METADATA_KEY,
     HeartbeatProactivePolicy,
     build_proactive_context,
     decide_heartbeat_target,
+    proactive_dedupe_baseline_from_metadata,
     should_suppress_repeated_proactive_delivery,
 )
 
@@ -169,6 +171,25 @@ def test_should_continue_suppressing_after_duplicate_suppression() -> None:
         "category": "briefing",
         "summary": "가장 시급한 작업은 없습니다.",
     }
+
+    assert should_suppress_repeated_proactive_delivery(
+        previous,
+        response="가장 시급한 작업은 없습니다.",
+        category="briefing",
+    )
+
+
+def test_proactive_dedupe_baseline_falls_back_to_stored_metadata() -> None:
+    metadata = {
+        PROACTIVE_DEDUPE_BASELINE_METADATA_KEY: {
+            "status": "suppressed",
+            "suppressed_reason": "duplicate",
+            "category": "briefing",
+            "summary": "가장 시급한 작업은 없습니다.",
+        },
+    }
+
+    previous = proactive_dedupe_baseline_from_metadata(metadata)
 
     assert should_suppress_repeated_proactive_delivery(
         previous,

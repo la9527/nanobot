@@ -77,3 +77,29 @@ async def test_slash_command_turn_is_persisted_for_webui_history(tmp_path: Path)
     assert [message["role"] for message in restored["messages"][-2:]] == ["user", "assistant"]
     assert restored["messages"][-2]["content"] == "/calendar"
     assert "## Calendar" in restored["messages"][-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_priority_slash_command_inline_is_persisted_for_linked_telegram_history(tmp_path: Path) -> None:
+    loop = _make_loop(tmp_path)
+    msg = InboundMessage(
+        channel="telegram",
+        sender_id="u1",
+        chat_id="8688817632",
+        content="/status",
+        metadata={"_webui_bridge": True},
+        session_key_override="telegram:8688817632",
+    )
+
+    await loop._dispatch_command_inline(
+        msg,
+        msg.session_key,
+        msg.content.strip(),
+        loop.commands.dispatch_priority,
+    )
+
+    restored = loop.sessions.read_session_file("telegram:8688817632")
+    assert restored is not None
+    assert [message["role"] for message in restored["messages"][-2:]] == ["user", "assistant"]
+    assert restored["messages"][-2]["content"] == "/status"
+    assert "Target:" in restored["messages"][-1]["content"]

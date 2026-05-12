@@ -193,6 +193,22 @@
             "title": "查看状态",
             "description": "显示运行时、provider 和 channel 状态。"
           },
+          "model": {
+            "title": "选择模型目标",
+            "description": "切换模型目标、查看可用目标，或清除覆盖设置。"
+          },
+          "usage": {
+            "title": "设置用量详情",
+            "description": "显示或更改 token 用量详情级别。"
+          },
+          "mail": {
+            "title": "管理 Gmail",
+            "description": "列出线程、查看邮件、起草回复，并处理发送审批。"
+          },
+          "calendar": {
+            "title": "管理日历",
+            "description": "查看事件、创建草稿，并处理待处理的审批。"
+          },
           "history": {
             "title": "查看对话历史",
             "description": "打印最近 N 条已持久化的对话消息。"

@@ -298,6 +298,42 @@ describe("useSessions", () => {
     ]);
   });
 
+  it("collapses consecutive duplicate assistant history rows for telegram sessions", async () => {
+    vi.mocked(api.fetchSessionMessages).mockResolvedValue({
+      key: "telegram:12345",
+      created_at: "2026-04-20T10:00:00Z",
+      updated_at: "2026-04-20T10:05:00Z",
+      messages: [
+        {
+          role: "assistant",
+          content: "오늘 최우선 일정: 확인된 일정 없음.\n\n- 승인 대기: 없음",
+          timestamp: "2026-04-20T10:00:00Z",
+        },
+        {
+          role: "assistant",
+          content: "오늘 최우선 일정: 확인된 일정 없음. - 승인 대기: 없음\n",
+          timestamp: "2026-04-20T10:00:01Z",
+        },
+        {
+          role: "assistant",
+          content: "다음 요약은 다릅니다.",
+          timestamp: "2026-04-20T10:00:02Z",
+        },
+      ],
+    });
+
+    const { result } = renderHook(() => useSessionHistory("telegram:12345"), {
+      wrapper: wrap(fakeClient()),
+    });
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.messages.map((msg) => msg.content)).toEqual([
+      "오늘 최우선 일정: 확인된 일정 없음.\n\n- 승인 대기: 없음",
+      "다음 요약은 다릅니다.",
+    ]);
+  });
+
   it("hydrates historical assistant video media_urls into media attachments", async () => {
     vi.mocked(api.fetchSessionMessages).mockResolvedValue({
       key: "websocket:chat-video",

@@ -184,6 +184,22 @@
             "title": "Hiển thị trạng thái",
             "description": "Hiển thị trạng thái runtime, provider và channel."
           },
+          "model": {
+            "title": "Chọn đích mô hình",
+            "description": "Chuyển đích mô hình, xem các đích có sẵn hoặc xóa ghi đè."
+          },
+          "usage": {
+            "title": "Đặt mức chi tiết sử dụng",
+            "description": "Hiển thị hoặc thay đổi mức chi tiết của lượng token sử dụng."
+          },
+          "mail": {
+            "title": "Quản lý Gmail",
+            "description": "Liệt kê chuỗi thư, xem email, soạn thư trả lời và phê duyệt gửi."
+          },
+          "calendar": {
+            "title": "Quản lý lịch",
+            "description": "Xem lại sự kiện, tạo bản nháp và xử lý các phê duyệt đang chờ."
+          },
           "history": {
             "title": "Hiển thị lịch sử",
             "description": "In N tin nhắn hội thoại đã lưu gần nhất."

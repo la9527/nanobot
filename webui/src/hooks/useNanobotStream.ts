@@ -19,6 +19,8 @@ interface StreamBuffer {
   parts: string[];
 }
 
+const LIVE_DUPLICATE_WINDOW_MS = 10_000;
+
 function hydrateInitialMessages(
   initialMessages: UIMessage[],
   hasPendingToolCalls: boolean,
@@ -316,6 +318,7 @@ export function useNanobotStream(
           ? ev.media_urls.map((m) => toMediaAttachment(m))
           : ev.media?.map((url) => toMediaAttachment({ url }));
         const hasMedia = !!media && media.length > 0;
+        const content = ev.buttons?.length ? (ev.button_prompt ?? ev.text) : ev.text;
 
         // A complete (non-streamed) assistant message. If a stream was in
         // flight, drop the placeholder so we don't render the text twice.
@@ -325,7 +328,13 @@ export function useNanobotStream(
         // the full turn (all tool calls + final text) is complete.
         setMessages((prev) => {
           const filtered = activeId ? prev.filter((m) => m.id !== activeId) : prev;
-          const content = ev.buttons?.length ? (ev.button_prompt ?? ev.text) : ev.text;
+          if (matchesRecentAssistantMessage(filtered, {
+            content,
+            buttons: ev.buttons,
+            media,
+          })) {
+            return filtered;
+          }
           return [
             ...filtered,
             {
@@ -416,4 +425,31 @@ function findLastIndex<T>(items: T[], predicate: (item: T) => boolean): number {
     if (predicate(items[index])) return index;
   }
   return -1;
+}
+
+function matchesRecentAssistantMessage(
+  messages: UIMessage[],
+  incoming: {
+    content: string;
+    buttons?: UIMessage["buttons"];
+    media?: UIMessage["media"];
+  },
+): boolean {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.kind === "trace") continue;
+    if (message.role !== "assistant") return false;
+    if (message.isStreaming) return false;
+    if (Date.now() - message.createdAt > LIVE_DUPLICATE_WINDOW_MS) return false;
+    return (
+      normalizeDuplicateText(message.content) === normalizeDuplicateText(incoming.content)
+      && JSON.stringify(message.buttons ?? []) === JSON.stringify(incoming.buttons ?? [])
+      && JSON.stringify(message.media ?? []) === JSON.stringify(incoming.media ?? [])
+    );
+  }
+  return false;
+}
+
+function normalizeDuplicateText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
 }

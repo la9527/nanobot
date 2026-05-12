@@ -888,13 +888,40 @@ class AgentLoop:
         ctx = CommandContext(msg=msg, session=None, key=key, raw=raw, loop=self)
         result = await dispatch_fn(ctx)
         if result:
-            metadata = dict(result.metadata or {})
-            metadata.pop("_session_log_mode", None)
-            if metadata != (result.metadata or {}):
-                result = dataclasses.replace(result, metadata=metadata)
+            result = self._persist_command_result(msg=msg, key=key, result=result)
             await self.bus.publish_outbound(result)
         else:
             logger.warning("Command '{}' matched but dispatch returned None", raw)
+
+    def _persist_command_result(
+        self,
+        *,
+        msg: InboundMessage,
+        key: str,
+        result: OutboundMessage,
+    ) -> OutboundMessage:
+        """Persist an inline slash-command turn into session history when allowed."""
+        metadata = dict(result.metadata or {})
+        session_log_mode = metadata.pop("_session_log_mode", None)
+        if metadata != (result.metadata or {}):
+            result = dataclasses.replace(result, metadata=metadata)
+        if session_log_mode == "skip":
+            return result
+
+        session = self.sessions.get_or_create(key)
+        mark_webui_session(session, msg.metadata)
+        media_paths = [p for p in (msg.media or []) if isinstance(p, str) and p]
+        user_extra: dict[str, Any] = {"media": list(media_paths)} if media_paths else {}
+        session.add_message("user", msg.content if isinstance(msg.content, str) else "", **user_extra)
+        assistant_extra: dict[str, Any] = {}
+        if result.buttons:
+            assistant_extra["buttons"] = result.buttons
+        if result.metadata:
+            assistant_extra["metadata"] = dict(result.metadata)
+        session.add_message("assistant", result.content, **assistant_extra)
+        self._clear_pending_user_turn(session)
+        self.sessions.save(session)
+        return result
 
     async def _cancel_active_tasks(self, key: str) -> int:
         """Cancel and await all active tasks and subagents for *key*.
@@ -1501,24 +1528,7 @@ class AgentLoop:
         raw = msg.content.strip()
         ctx = CommandContext(msg=msg, session=session, key=key, raw=raw, loop=self)
         if result := await self.commands.dispatch(ctx):
-            metadata = dict(result.metadata or {})
-            session_log_mode = metadata.pop("_session_log_mode", None)
-            if metadata != (result.metadata or {}):
-                result = dataclasses.replace(result, metadata=metadata)
-            if session_log_mode == "skip":
-                return result
-            media_paths = [p for p in (msg.media or []) if isinstance(p, str) and p]
-            user_extra: dict[str, Any] = {"media": list(media_paths)} if media_paths else {}
-            session.add_message("user", msg.content if isinstance(msg.content, str) else "", **user_extra)
-            assistant_extra: dict[str, Any] = {}
-            if result.buttons:
-                assistant_extra["buttons"] = result.buttons
-            if result.metadata:
-                assistant_extra["metadata"] = dict(result.metadata)
-            session.add_message("assistant", result.content, **assistant_extra)
-            self._clear_pending_user_turn(session)
-            self.sessions.save(session)
-            return result
+            return self._persist_command_result(msg=msg, key=key, result=result)
 
         await self.consolidator.maybe_consolidate_by_tokens(
             session,

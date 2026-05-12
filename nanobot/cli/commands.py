@@ -750,6 +750,7 @@ def _run_gateway(
         build_proactive_context,
         classify_proactive_task,
         decide_heartbeat_target,
+        proactive_dedupe_baseline_from_metadata,
         proactive_title_for_task,
         should_suppress_repeated_proactive_delivery,
     )
@@ -999,7 +1000,7 @@ def _run_gateway(
         session = session_manager.get_or_create(_channel_session_key(channel, chat_id))
         category = classify_proactive_task(heartbeat_state.get("tasks", ""))
         if should_suppress_repeated_proactive_delivery(
-            session.metadata.get("proactive_summary") if isinstance(session.metadata, dict) else None,
+            proactive_dedupe_baseline_from_metadata(session.metadata if isinstance(session.metadata, dict) else None),
             response=response,
             category=category,
         ):

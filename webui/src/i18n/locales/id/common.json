@@ -184,6 +184,22 @@
             "title": "Tampilkan status",
             "description": "Tampilkan status runtime, provider, dan channel."
           },
+          "model": {
+            "title": "Pilih target model",
+            "description": "Ganti target model, lihat target yang tersedia, atau hapus override."
+          },
+          "usage": {
+            "title": "Atur detail penggunaan",
+            "description": "Tampilkan atau ubah tingkat detail penggunaan token."
+          },
+          "mail": {
+            "title": "Kelola Gmail",
+            "description": "Daftarkan thread, periksa email, buat draf balasan, dan setujui pengiriman."
+          },
+          "calendar": {
+            "title": "Kelola kalender",
+            "description": "Tinjau acara, buat draf, dan selesaikan persetujuan yang tertunda."
+          },
           "history": {
             "title": "Tampilkan riwayat",
             "description": "Cetak N pesan percakapan tersimpan terbaru."

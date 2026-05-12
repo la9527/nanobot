@@ -692,6 +692,10 @@ class WebSocketChannel(BaseChannel):
         if m:
             return self._handle_session_action_result_clear(request, m.group(1))
 
+        m = re.match(r"^/api/sessions/([^/]+)/proactive-summary/clear$", got)
+        if m:
+            return self._handle_session_proactive_summary_clear(request, m.group(1))
+
         m = re.match(r"^/api/sessions/([^/]+)/model-target$", got)
         if m:
             return self._handle_session_model_target(request, m.group(1))
@@ -1013,6 +1017,23 @@ class WebSocketChannel(BaseChannel):
         self._session_manager.save(session)
         return _http_json_response({"key": decoded_key, "cleared": had_action_result})
 
+    def _handle_session_proactive_summary_clear(self, request: WsRequest, key: str) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        if self._session_manager is None:
+            return _http_error(503, "session manager unavailable")
+        decoded_key = self._decode_webui_session_key(key)
+        if decoded_key is None:
+            return _http_error(404, "session not found")
+        if self._session_manager.read_session_file(decoded_key) is None:
+            return _http_error(404, "session not found")
+
+        session = self._session_manager.get_or_create(decoded_key)
+        had_proactive_summary = "proactive_summary" in session.metadata
+        self._session_manager.clear_proactive_summary(session)
+        self._session_manager.save(session)
+        return _http_json_response({"key": decoded_key, "cleared": had_proactive_summary})
+
     def _load_model_target_context(self) -> tuple[Any, dict[str, Any]] | tuple[None, None]:
         try:
             from nanobot.model_targets import build_model_targets
@@ -1280,6 +1301,16 @@ class WebSocketChannel(BaseChannel):
         if target is None:
             return "unsupported session"
         chat_id, extra_meta = target
+        if content.strip() or media_paths:
+            await self.bus.publish_outbound(
+                OutboundMessage(
+                    channel="telegram",
+                    chat_id=chat_id,
+                    content=content,
+                    media=media_paths or [],
+                    metadata={**extra_meta},
+                )
+            )
         meta = {
             **(metadata or {}),
             **extra_meta,

@@ -13,6 +13,10 @@ from loguru import logger
 
 from nanobot.automation_results import ActionResult
 from nanobot.config.paths import get_legacy_sessions_dir
+from nanobot.heartbeat.proactive import (
+    PROACTIVE_DEDUPE_BASELINE_METADATA_KEY,
+    proactive_dedupe_baseline_from_summary,
+)
 from nanobot.session.continuity import ACTION_RESULT_METADATA_KEY, normalized_session_metadata
 from nanobot.utils.helpers import (
     ensure_dir,
@@ -512,6 +516,9 @@ class SessionManager:
     def set_proactive_summary(self, session: Session, proactive_summary: dict[str, Any]) -> None:
         """Persist the latest proactive delivery or suppression summary on session metadata."""
         session.metadata["proactive_summary"] = dict(proactive_summary)
+        baseline = proactive_dedupe_baseline_from_summary(proactive_summary)
+        if baseline is not None:
+            session.metadata[PROACTIVE_DEDUPE_BASELINE_METADATA_KEY] = baseline
         session.updated_at = datetime.now()
 
     def clear_proactive_summary(self, session: Session) -> None:

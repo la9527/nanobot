@@ -1,3 +1,5 @@
+import type { ReactNode } from "react";
+import { CalendarDays, CheckCircle2, Clock3, Link2, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { relativeTime } from "@/lib/format";
 import {
@@ -38,7 +40,8 @@ function recentStamp(session: ChatSummary): number {
 
 function sectionCard(
   title: string,
-  body: React.ReactNode,
+  body: ReactNode,
+  icon: ReactNode,
   variant: "strong" | "soft" = "soft",
 ) {
   return (
@@ -46,7 +49,12 @@ function sectionCard(
       ? "rounded-[18px] border border-border/60 bg-background/85 p-3 shadow-sm"
       : "rounded-[16px] border border-border/50 bg-muted/10 p-3"
     }>
-      <h2 className="text-[12px] font-semibold text-foreground/88">{title}</h2>
+      <h2 className="flex items-center gap-2 text-[12px] font-semibold text-foreground/88">
+        <span className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-border/50 bg-background/85 text-muted-foreground">
+          {icon}
+        </span>
+        <span>{title}</span>
+      </h2>
       <div className="mt-2 text-[12px] leading-5 text-muted-foreground">{body}</div>
     </section>
   );
@@ -197,7 +205,7 @@ export function AssistantDashboard({ sessions, onOpenSession, onNewChat }: Assis
         </div>
       ) : (
         <p>{t("dashboard.priority.empty")}</p>
-      ), "strong")}
+      ), <Clock3 className="h-3.5 w-3.5" />, "strong")}
 
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
         {sectionCard(t("dashboard.sections.todayBrief"), (
@@ -213,7 +221,7 @@ export function AssistantDashboard({ sessions, onOpenSession, onNewChat }: Assis
                 : t("dashboard.todayBrief.mailEmpty")}
             </p>
           </div>
-        ))}
+        ), <CalendarDays className="h-3.5 w-3.5" />)}
 
         {sectionCard(t("dashboard.sections.quickActions"), (
           <div className="flex flex-wrap gap-1.5">
@@ -222,7 +230,7 @@ export function AssistantDashboard({ sessions, onOpenSession, onNewChat }: Assis
             <Button type="button" size="sm" className="h-8 px-3 text-[12px]" variant="outline" onClick={() => openFirst((session) => getActionResult(session)?.domain === "mail")}>{t("dashboard.quickActions.mail")}</Button>
             <Button type="button" size="sm" className="h-8 px-3 text-[12px]" onClick={() => void onNewChat()}>{t("dashboard.quickActions.newChat")}</Button>
           </div>
-        ))}
+        ), <Sparkles className="h-3.5 w-3.5" />)}
       </div>
 
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
@@ -248,7 +256,7 @@ export function AssistantDashboard({ sessions, onOpenSession, onNewChat }: Assis
           </div>
         ) : (
           <p>{t("dashboard.recentOutcomes.empty")}</p>
-        ))}
+        ), <CheckCircle2 className="h-3.5 w-3.5" />)}
 
         {sectionCard(t("dashboard.sections.linkedChannels"), linkedChannels.length ? (
           <div className="space-y-2">
@@ -273,7 +281,7 @@ export function AssistantDashboard({ sessions, onOpenSession, onNewChat }: Assis
           </div>
         ) : (
           <p>{t("dashboard.linkedChannels.empty")}</p>
-        ))}
+        ), <Link2 className="h-3.5 w-3.5" />)}
       </div>
     </div>
   );

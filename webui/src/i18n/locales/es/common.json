@@ -184,6 +184,22 @@
             "title": "Mostrar estado",
             "description": "Muestra el estado del runtime, provider y channels."
           },
+          "model": {
+            "title": "Seleccionar destino de modelo",
+            "description": "Cambia el destino del modelo, muestra los destinos disponibles o quita la anulación."
+          },
+          "usage": {
+            "title": "Configurar detalle de uso",
+            "description": "Muestra o cambia el nivel de detalle del uso de tokens."
+          },
+          "mail": {
+            "title": "Gestionar Gmail",
+            "description": "Lista hilos, revisa correos, redacta respuestas y aprueba envíos."
+          },
+          "calendar": {
+            "title": "Gestionar calendario",
+            "description": "Revisa eventos, crea borradores y resuelve aprobaciones pendientes."
+          },
           "history": {
             "title": "Mostrar historial",
             "description": "Imprime los últimos N mensajes persistidos de la conversación."

@@ -21,6 +21,19 @@ const COMMANDS: SlashCommand[] = [
   },
 ];
 
+const COMMANDS_WITH_RECENT_ADDITIONS: SlashCommand[] = [
+  { command: "/new", title: "New chat", description: "Start fresh.", icon: "square-pen" },
+  { command: "/status", title: "Show status", description: "Check runtime state.", icon: "activity" },
+  { command: "/model", title: "Select model target", description: "Choose a target.", icon: "bot", argHint: "[name|list|clear]" },
+  { command: "/usage", title: "Set usage details", description: "Adjust token details.", icon: "gauge", argHint: "[off|tokens|full]" },
+  { command: "/mail", title: "Manage Gmail", description: "Open mail actions.", icon: "mail", argHint: "[subcommand]" },
+  { command: "/calendar", title: "Manage calendar", description: "Open calendar actions.", icon: "calendar-days", argHint: "[subcommand]" },
+  { command: "/history", title: "Show conversation history", description: "Inspect persisted messages.", icon: "history", argHint: "[n]" },
+  { command: "/dream", title: "Run Dream", description: "Run memory consolidation.", icon: "sparkles" },
+  { command: "/dream-log", title: "Show Dream log", description: "Inspect Dream changes.", icon: "book-open" },
+  { command: "/help", title: "Show help", description: "List commands.", icon: "circle-help" },
+];
+
 describe("ThreadComposer", () => {
   it("renders a readonly hero model composer when provided", () => {
     render(
@@ -91,6 +104,42 @@ describe("ThreadComposer", () => {
     expect(input).toHaveValue("/history ");
     expect(onSend).not.toHaveBeenCalled();
     expect(screen.queryByRole("listbox", { name: "Slash commands" })).not.toBeInTheDocument();
+  });
+
+  it("shows newly added slash commands when opening the palette", () => {
+    render(
+      <ThreadComposer
+        onSend={vi.fn()}
+        placeholder="Type your message..."
+        slashCommands={COMMANDS_WITH_RECENT_ADDITIONS}
+      />,
+    );
+
+    const input = screen.getByLabelText("Message input");
+    fireEvent.change(input, { target: { value: "/" } });
+
+    expect(screen.getByRole("option", { name: /\/calendar/i })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /\/mail/i })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /\/model/i })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /\/usage/i })).toBeInTheDocument();
+  });
+
+  it("keeps the slash palette viewport-bounded with an internal scroll area", () => {
+    const { container } = render(
+      <ThreadComposer
+        onSend={vi.fn()}
+        placeholder="Type your message..."
+        slashCommands={COMMANDS_WITH_RECENT_ADDITIONS}
+      />,
+    );
+
+    const input = screen.getByLabelText("Message input");
+    fireEvent.change(input, { target: { value: "/" } });
+
+    const scrollContainer = container.querySelector('[style*="max-height"]');
+    expect(scrollContainer?.className).toContain("overflow-y-auto");
+    expect(scrollContainer?.className).toContain("overscroll-contain");
+    expect(scrollContainer?.getAttribute("style")).toContain("max-height: min(22rem, 45vh)");
   });
 
   it("sends image generation mode with automatic aspect ratio", () => {

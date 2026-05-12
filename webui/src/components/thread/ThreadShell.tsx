@@ -27,7 +27,7 @@ import { ThreadViewport } from "@/components/thread/ThreadViewport";
 import { deriveThreadStatus, injectSyntheticReasoningTrace } from "@/components/thread/threadStatus";
 import { useNanobotStream, type SendImage, type SendOptions } from "@/hooks/useNanobotStream";
 import { hydrateSessionMessages, useSessionHistory } from "@/hooks/useSessions";
-import { ApiError, clearSessionActionResult, fetchSessionMessages, fetchSessionModelTarget, listSlashCommands, selectSessionModelTarget } from "@/lib/api";
+import { ApiError, clearSessionActionResult, clearSessionProactiveSummary, fetchSessionMessages, fetchSessionModelTarget, listSlashCommands, selectSessionModelTarget } from "@/lib/api";
 import { relativeTime } from "@/lib/format";
 import {
   approvalPendingBadgeLabel,
@@ -56,6 +56,7 @@ import { useClient } from "@/providers/ClientProvider";
 interface ThreadShellProps {
   session: ChatSummary | null;
   sessions?: ChatSummary[];
+  emptyView?: "dashboard" | "new-chat";
   title: string;
   reasoningVisibility?: ReasoningVisibility;
   onToggleSidebar: () => void;
@@ -432,6 +433,7 @@ interface PendingFirstMessage {
 export function ThreadShell({
   session,
   sessions = [],
+  emptyView = "dashboard",
   title,
   reasoningVisibility = "summary",
   onToggleSidebar,
@@ -450,6 +452,11 @@ export function ThreadShell({
   const isWebSocketSession = session?.channel === "websocket";
   const chatId = isWebSocketSession ? (session?.chatId ?? null) : null;
   const historyKey = session?.key ?? null;
+  const streamChatId = isWebSocketSession
+    ? (session?.chatId ?? null)
+    : session?.channel === "telegram"
+      ? historyKey
+      : null;
   const { messages: historical, loading, hasPendingToolCalls } = useSessionHistory(historyKey);
   const {
     client,
@@ -471,23 +478,31 @@ export function ThreadShell({
   const [composerDraftNonce, setComposerDraftNonce] = useState(0);
   const [slashCommands, setSlashCommands] = useState<SlashCommand[]>([]);
   const [heroImageMode, setHeroImageMode] = useState(false);
+  const [websocketHistorySyncTick, setWebsocketHistorySyncTick] = useState(0);
   const pendingFirstRef = useRef<PendingFirstMessage | null>(null);
   const pendingSessionRefreshRef = useRef(false);
   const remoteReplyPollRef = useRef(0);
+  const remoteReplyPlaceholderIdRef = useRef<string | null>(null);
   const messageCacheRef = useRef<Map<string, UIMessage[]>>(new Map());
   const lastCachedChatIdRef = useRef<string | null>(null);
   const tokenRef = useRef(token);
   const reasoningLineCacheRef = useRef<Map<string, string>>(new Map());
+  const clearedProactiveSignatureRef = useRef<string | null>(null);
 
   useEffect(() => {
     tokenRef.current = token;
   }, [token]);
 
   const initial = useMemo(() => {
-    const cacheKey = chatId ?? historyKey;
+    const cacheKey = streamChatId ?? historyKey;
     if (!cacheKey) return historical;
     return messageCacheRef.current.get(cacheKey) ?? historical;
-  }, [chatId, historyKey, historical]);
+  }, [streamChatId, historyKey, historical]);
+  const handleStreamTurnEnd = useCallback(() => {
+    onTurnEnd?.();
+    if (!streamChatId || !historyKey) return;
+    setWebsocketHistorySyncTick((tick) => tick + 1);
+  }, [streamChatId, historyKey, onTurnEnd]);
   const {
     messages,
     isStreaming,
@@ -496,8 +511,9 @@ export function ThreadShell({
     setMessages,
     streamError,
     dismissStreamError,
-  } = useNanobotStream(chatId, initial, hasPendingToolCalls, onTurnEnd);
+  } = useNanobotStream(streamChatId, initial, hasPendingToolCalls, handleStreamTurnEnd);
   const showHeroComposer = messages.length === 0 && !loading;
+  const showDashboardEmptyState = !session && emptyView === "dashboard";
   const messagePendingAsk = useMemo(() => {
     for (let index = messages.length - 1; index >= 0; index -= 1) {
       const message = messages[index];
@@ -587,6 +603,7 @@ export function ThreadShell({
 
   const currentTaskSummary = useMemo(() => getTaskSummary(session), [session]);
   const currentOwnerProfile = useMemo(() => getOwnerProfile(session), [session]);
+  const currentProactiveSummary = useMemo(() => getProactiveSummary(session), [session]);
   const memoryCorrectionActions = useMemo(() => getMemoryCorrectionActions(session), [session]);
   const actionResult = useMemo(() => getActionResult(session), [session]);
   const currentActionSignature = session?.metadata?.action_result?.action_id
@@ -615,6 +632,10 @@ export function ThreadShell({
   const currentActionThreads = Array.isArray(currentActionDetails?.threads)
     ? currentActionDetails.threads.slice(0, 3)
     : [];
+  const activeProactiveSignature = historyKey
+    && currentProactiveSummary?.status === "suppressed"
+      ? `${historyKey}:${currentProactiveSummary.updatedAt ?? ""}:${currentProactiveSummary.suppressedReason ?? ""}:${currentProactiveSummary.summary ?? ""}`
+      : null;
   const hasInlineActionResult = Boolean(
     effectiveActionResult?.title
     || effectiveActionResult?.summary
@@ -624,18 +645,22 @@ export function ThreadShell({
     || currentActionThreads.length,
   );
   const isReasoningThreadStatus = threadStatus?.tone === "running" || threadStatus?.tone === "completed";
-  const reasoningCacheKey = chatId ?? historyKey;
+  const reasoningCacheKey = streamChatId ?? historyKey;
 
   useEffect(() => {
     if (!reasoningCacheKey) return;
     if (threadStatus?.tone === "running") {
+      if (remoteReplyPending) {
+        reasoningLineCacheRef.current.delete(reasoningCacheKey);
+        return;
+      }
       reasoningLineCacheRef.current.set(reasoningCacheKey, threadStatus.body);
       return;
     }
     if (!messages.some((message) => message.role === "user")) {
       reasoningLineCacheRef.current.delete(reasoningCacheKey);
     }
-  }, [messages, reasoningCacheKey, threadStatus?.body, threadStatus?.tone]);
+  }, [messages, reasoningCacheKey, remoteReplyPending, threadStatus?.body, threadStatus?.tone]);
 
   const shouldShowThreadStatus = Boolean(threadStatus) && !(
     isReasoningThreadStatus
@@ -725,8 +750,32 @@ export function ThreadShell({
   }, [currentActionSignature, dismissingActionResult, historyKey, onRefreshSessions, token]);
 
   useEffect(() => {
-    if (!chatId || loading) return;
-    const cached = messageCacheRef.current.get(chatId);
+    if (!historyKey || !activeProactiveSignature) return;
+    if (clearedProactiveSignatureRef.current === activeProactiveSignature) return;
+
+    let cancelled = false;
+    clearedProactiveSignatureRef.current = activeProactiveSignature;
+
+    (async () => {
+      try {
+        await clearSessionProactiveSummary(tokenRef.current, historyKey);
+        if (cancelled) return;
+        await onRefreshSessions?.();
+      } catch (error) {
+        if (cancelled) return;
+        clearedProactiveSignatureRef.current = null;
+        console.error("Failed to clear proactive summary after review", error);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeProactiveSignature, historyKey, onRefreshSessions]);
+
+  useEffect(() => {
+    if (!streamChatId || loading) return;
+    const cached = messageCacheRef.current.get(streamChatId);
     // When the user switches away and back, keep the local in-memory thread
     // state (including not-yet-persisted messages) instead of replacing it with
     // whatever the history endpoint currently knows about.
@@ -736,16 +785,53 @@ export function ThreadShell({
       return historical;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loading, chatId, historical]);
+  }, [loading, streamChatId, historical]);
 
   useEffect(() => {
-    if (chatId) return;
+    if (streamChatId) return;
     if (remoteReplyPending) return;
     setMessages(historical);
-  }, [chatId, historical, remoteReplyPending, setMessages]);
+  }, [streamChatId, historical, remoteReplyPending, setMessages]);
+
+  useEffect(() => {
+    if (!streamChatId || !historyKey || websocketHistorySyncTick === 0) return;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const body = await fetchSessionMessages(tokenRef.current, historyKey);
+        if (cancelled) return;
+        const nextMessages = hydrateSessionMessages(body);
+        if (nextMessages.length === 0) return;
+
+        let applied = false;
+        setMessages((current) => {
+          const currentVisibleCount = current.filter((message) => message.kind !== "trace").length;
+          const nextVisibleCount = nextMessages.filter((message) => message.kind !== "trace").length;
+          if (nextVisibleCount < currentVisibleCount) {
+            return current;
+          }
+          applied = true;
+          return nextMessages;
+        });
+        if (!applied) return;
+        messageCacheRef.current.set(streamChatId, nextMessages);
+        messageCacheRef.current.set(historyKey, nextMessages);
+      } catch (error) {
+        if (cancelled) return;
+        if (!(error instanceof ApiError && error.status === 404)) {
+          console.error("Failed to refresh websocket session history", error);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [historyKey, setMessages, streamChatId, websocketHistorySyncTick]);
 
   useLayoutEffect(() => {
-    if (!chatId) {
+    if (!streamChatId) {
       lastCachedChatIdRef.current = null;
       return;
     }
@@ -753,15 +839,15 @@ export function ThreadShell({
     // Skip the first cache write after a chat switch. During that render,
     // `messages` can still belong to the previous chat until the stream hook
     // resets its local state for the new session.
-    if (lastCachedChatIdRef.current !== chatId) {
-      lastCachedChatIdRef.current = chatId;
+    if (lastCachedChatIdRef.current !== streamChatId) {
+      lastCachedChatIdRef.current = streamChatId;
       if (messages.length > 0) {
-        messageCacheRef.current.set(chatId, messages);
+        messageCacheRef.current.set(streamChatId, messages);
       }
       return;
     }
-    messageCacheRef.current.set(chatId, messages);
-  }, [chatId, loading, messages]);
+    messageCacheRef.current.set(streamChatId, messages);
+  }, [loading, messages, streamChatId]);
 
   useEffect(() => {
     if (!historyKey || isWebSocketSession) return;
@@ -774,8 +860,14 @@ export function ThreadShell({
     if (!lastMessage) return;
     if (lastMessage.role !== "assistant") return;
     if (lastMessage.isStreaming) return;
+    remoteReplyPollRef.current += 1;
+    const placeholderId = remoteReplyPlaceholderIdRef.current;
+    remoteReplyPlaceholderIdRef.current = null;
+    if (placeholderId) {
+      setMessages((prev) => prev.filter((message) => message.id !== placeholderId));
+    }
     setRemoteReplyPending(false);
-  }, [messages, remoteReplyPending]);
+  }, [messages, remoteReplyPending, setMessages]);
 
   useEffect(() => {
     if (!pendingSessionRefreshRef.current) return;
@@ -912,6 +1004,7 @@ export function ThreadShell({
       pendingSessionRefreshRef.current = isMemoryCorrectionDraft(content, t);
 
       const optimisticAssistantId = createUuid();
+      remoteReplyPlaceholderIdRef.current = optimisticAssistantId;
       setMessages((prev) => [
         ...prev,
         {
@@ -948,6 +1041,7 @@ export function ThreadShell({
             nextMessages.length > baselineHistoryLength
             && nextMessages[nextMessages.length - 1]?.role === "assistant";
           if (hasAssistantReply) {
+            remoteReplyPlaceholderIdRef.current = null;
             setMessages(nextMessages);
             messageCacheRef.current.set(historyKey, nextMessages);
             setRemoteReplyPending(false);
@@ -958,6 +1052,9 @@ export function ThreadShell({
         }
 
         if (Date.now() - startedAt > 90_000) {
+          if (remoteReplyPlaceholderIdRef.current === optimisticAssistantId) {
+            remoteReplyPlaceholderIdRef.current = null;
+          }
           setMessages((prev) => prev.filter((message) => message.id !== optimisticAssistantId));
           pendingSessionRefreshRef.current = false;
           setRemoteReplyPending(false);
@@ -1019,7 +1116,7 @@ export function ThreadShell({
         {t("thread.empty.description")}
       </p>
     </div>
-  ) : (
+  ) : showDashboardEmptyState ? (
     <AssistantDashboard
       sessions={sessions}
       onOpenSession={onOpenSession}
@@ -1028,7 +1125,7 @@ export function ThreadShell({
         return null;
       })}
     />
-  );
+  ) : null;
   const syntheticReasoningLine = isReasoningThreadStatus
     ? threadStatus?.tone === "running"
       ? threadStatus.body
@@ -1156,7 +1253,7 @@ export function ThreadShell({
                   imageMode={heroImageMode}
                   onImageModeChange={setHeroImageMode}
                 />
-                {showHeroComposer ? quickActions : null}
+                {!showDashboardEmptyState && showHeroComposer ? quickActions : null}
               </>
             )}
           </>

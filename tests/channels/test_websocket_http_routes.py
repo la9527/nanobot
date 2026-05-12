@@ -46,6 +46,7 @@ def _ch(
 def bus() -> MagicMock:
     b = MagicMock()
     b.publish_inbound = AsyncMock()
+    b.publish_outbound = AsyncMock()
     return b
 
 
@@ -299,6 +300,57 @@ async def test_session_action_result_clear_route_removes_persisted_metadata(
 
 
 @pytest.mark.asyncio
+async def test_session_proactive_summary_clear_route_removes_persisted_metadata(
+    bus: MagicMock, tmp_path: Path
+) -> None:
+    sm = _seed_session(tmp_path, key="telegram:chat-a")
+    session = sm.get_or_create("telegram:chat-a")
+    session.metadata["proactive_summary"] = {
+        "status": "suppressed",
+        "category": "briefing",
+        "title": "Morning briefing ready",
+        "summary": "오늘 일정/승인/막힘 없음, 핵심 작업 1개 시작하라.",
+        "target_channel": "telegram",
+        "suppressed_reason": "duplicate",
+    }
+    session.metadata["proactive_dedupe_baseline"] = {
+        "status": "suppressed",
+        "category": "briefing",
+        "summary": "오늘 일정/승인/막힘 없음, 핵심 작업 1개 시작하라.",
+        "suppressed_reason": "duplicate",
+    }
+    sm.save(session)
+
+    channel = _ch(bus, session_manager=sm, port=29917)
+    server_task = asyncio.create_task(channel.start())
+    await asyncio.sleep(0.3)
+    try:
+        boot = await _http_get("http://127.0.0.1:29917/webui/bootstrap")
+        token = boot.json()["token"]
+        auth = {"Authorization": f"Bearer {token}"}
+
+        cleared = await _http_get(
+            "http://127.0.0.1:29917/api/sessions/telegram:chat-a/proactive-summary/clear",
+            headers=auth,
+        )
+        assert cleared.status_code == 200
+        assert cleared.json()["cleared"] is True
+
+        restored = sm.read_session_file("telegram:chat-a")
+        assert restored is not None
+        assert "proactive_summary" not in restored.get("metadata", {})
+        assert restored.get("metadata", {}).get("proactive_dedupe_baseline") == {
+            "status": "suppressed",
+            "category": "briefing",
+            "summary": "오늘 일정/승인/막힘 없음, 핵심 작업 1개 시작하라.",
+            "suppressed_reason": "duplicate",
+        }
+    finally:
+        await channel.stop()
+        await server_task
+
+
+@pytest.mark.asyncio
 async def test_session_model_target_routes_reject_unknown_target(
     bus: MagicMock, tmp_path: Path
 ) -> None:
@@ -460,6 +512,13 @@ async def test_session_message_envelope_publishes_telegram_inbound(
             "content": "reply from webui",
         },
     )
+
+    bus.publish_outbound.assert_awaited_once()
+    outbound = bus.publish_outbound.await_args.args[0]
+    assert outbound.channel == "telegram"
+    assert outbound.chat_id == "-1001"
+    assert outbound.content == "reply from webui"
+    assert outbound.metadata["message_thread_id"] == 42
 
     bus.publish_inbound.assert_awaited_once()
     msg = bus.publish_inbound.await_args.args[0]

@@ -184,6 +184,22 @@
             "title": "查看狀態",
             "description": "顯示執行環境、provider 和 channel 狀態。"
           },
+          "model": {
+            "title": "選擇模型目標",
+            "description": "切換模型目標、查看可用目標，或清除覆寫設定。"
+          },
+          "usage": {
+            "title": "設定用量詳情",
+            "description": "顯示或變更 token 用量詳情層級。"
+          },
+          "mail": {
+            "title": "管理 Gmail",
+            "description": "列出執行緒、查看郵件、起草回覆，並處理傳送核准。"
+          },
+          "calendar": {
+            "title": "管理行事曆",
+            "description": "檢視事件、建立草稿，並處理待處理的核准。"
+          },
           "history": {
             "title": "查看對話歷史",
             "description": "列印最近 N 則已持久化的對話訊息。"

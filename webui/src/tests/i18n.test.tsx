@@ -8,6 +8,21 @@ import { resources } from "@/i18n";
 
 const QUICK_ACTION_KEYS = ["plan", "analyze", "brainstorm", "code", "summarize", "more"];
 const IMAGE_QUICK_ACTION_KEYS = ["icon", "sticker", "poster", "product", "portrait", "edit"];
+const SLASH_COMMAND_KEYS = [
+  "new",
+  "stop",
+  "restart",
+  "status",
+  "model",
+  "usage",
+  "mail",
+  "calendar",
+  "history",
+  "dream",
+  "dream_log",
+  "dream_restore",
+  "help",
+];
 
 describe("webui i18n", () => {
   it("switches UI copy and document locale through the language switcher", async () => {
@@ -59,6 +74,17 @@ describe("webui i18n", () => {
         const action = empty.imageQuickActions[key as keyof typeof empty.imageQuickActions];
         expect(action.title).toBeTruthy();
         expect(action.prompt).toBeTruthy();
+      }
+    }
+  });
+
+  it("keeps slash command labels localized for every registered locale", () => {
+    for (const resource of Object.values(resources)) {
+      const commands = resource.common.thread.composer.slash.commands;
+      for (const key of SLASH_COMMAND_KEYS) {
+        const command = commands[key as keyof typeof commands];
+        expect(command.title).toBeTruthy();
+        expect(command.description).toBeTruthy();
       }
     }
   });
