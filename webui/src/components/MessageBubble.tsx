@@ -114,6 +114,7 @@ export function MessageBubble({
   }
 
   const empty = message.content.trim().length === 0;
+  const rendersAsText = message.renderAs === "text";
   const blocks = splitAssistantBlocks(message.content);
   const media = message.media ?? [];
   const showAssistantActions = message.role === "assistant" && !message.isStreaming && !empty;
@@ -129,7 +130,9 @@ export function MessageBubble({
         <TypingDots />
       ) : (
         <>
-          {blocks.length > 0 ? (
+          {rendersAsText ? (
+            <PlainTextAssistantReply>{message.content}</PlainTextAssistantReply>
+          ) : blocks.length > 0 ? (
             <div className="flex flex-col gap-4">
               {blocks.map((block, index) =>
                 block.kind === "status" ? (
@@ -167,6 +170,20 @@ export function MessageBubble({
           ) : null}
         </>
       )}
+    </div>
+  );
+}
+
+function PlainTextAssistantReply({ children }: { children: string }) {
+  return (
+    <div
+      className="whitespace-pre-wrap break-words leading-relaxed text-foreground/92"
+      style={{
+        fontSize: "var(--chat-font-size)",
+        lineHeight: "var(--chat-line-height, var(--cjk-line-height))",
+      }}
+    >
+      {children}
     </div>
   );
 }

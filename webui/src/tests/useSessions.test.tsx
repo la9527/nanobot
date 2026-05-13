@@ -190,6 +190,34 @@ describe("useSessions", () => {
     ]);
   });
 
+  it("preserves render_as=text for persisted assistant command output", async () => {
+    vi.mocked(api.fetchSessionMessages).mockResolvedValue({
+      key: "websocket:chat-help",
+      created_at: "2026-05-13T10:00:00Z",
+      updated_at: "2026-05-13T10:05:00Z",
+      messages: [
+        {
+          role: "assistant",
+          content: "## Help\n/status — Show status\n/help — Show help",
+          timestamp: "2026-05-13T10:00:01Z",
+          metadata: { render_as: "text" },
+        },
+      ],
+    });
+
+    const { result } = renderHook(() => useSessionHistory("websocket:chat-help"), {
+      wrapper: wrap(fakeClient()),
+    });
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.messages[0]).toMatchObject({
+      role: "assistant",
+      renderAs: "text",
+      content: "## Help\n/status — Show status\n/help — Show help",
+    });
+  });
+
   it("polls active telegram sessions so remote messages appear without a manual refresh", async () => {
     vi.useFakeTimers();
     vi.mocked(api.fetchSessionMessages)

@@ -307,6 +307,7 @@ export function useNanobotStream(
               role: "assistant",
               kind: "approval",
               content: ev.text,
+              ...(ev.render_as === "text" ? { renderAs: "text" as const } : {}),
               createdAt: Date.now(),
             },
           ]);
@@ -330,6 +331,7 @@ export function useNanobotStream(
           const filtered = activeId ? prev.filter((m) => m.id !== activeId) : prev;
           if (matchesRecentAssistantMessage(filtered, {
             content,
+            renderAs: ev.render_as === "text" ? "text" : undefined,
             buttons: ev.buttons,
             media,
           })) {
@@ -341,6 +343,7 @@ export function useNanobotStream(
               id: createUuid(),
               role: "assistant",
               content,
+              ...(ev.render_as === "text" ? { renderAs: "text" as const } : {}),
               createdAt: Date.now(),
               ...(ev.buttons && ev.buttons.length > 0 ? { buttons: ev.buttons } : {}),
               ...(hasMedia ? { media } : {}),
@@ -431,6 +434,7 @@ function matchesRecentAssistantMessage(
   messages: UIMessage[],
   incoming: {
     content: string;
+    renderAs?: UIMessage["renderAs"];
     buttons?: UIMessage["buttons"];
     media?: UIMessage["media"];
   },
@@ -442,6 +446,8 @@ function matchesRecentAssistantMessage(
     if (message.isStreaming) return false;
     if (Date.now() - message.createdAt > LIVE_DUPLICATE_WINDOW_MS) return false;
     return (
+      message.renderAs === incoming.renderAs
+      &&
       normalizeDuplicateText(message.content) === normalizeDuplicateText(incoming.content)
       && JSON.stringify(message.buttons ?? []) === JSON.stringify(incoming.buttons ?? [])
       && JSON.stringify(message.media ?? []) === JSON.stringify(incoming.media ?? [])

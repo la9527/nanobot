@@ -1899,6 +1899,9 @@ class WebSocketChannel(BaseChannel):
                 payload["media_urls"] = urls
         if msg.reply_to:
             payload["reply_to"] = msg.reply_to
+        render_as = msg.metadata.get("render_as")
+        if isinstance(render_as, str) and render_as.strip():
+            payload["render_as"] = render_as
         response_model = msg.metadata.get("response_model")
         if isinstance(response_model, str) and response_model.strip():
             payload["response_model"] = response_model

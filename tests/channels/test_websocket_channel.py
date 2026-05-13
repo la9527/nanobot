@@ -352,7 +352,11 @@ async def test_send_emits_response_model_metadata() -> None:
         channel="websocket",
         chat_id="chat-1",
         content="hello",
-        metadata={"response_model": "smart-router", "active_target": "smart-router"},
+        metadata={
+            "response_model": "smart-router",
+            "active_target": "smart-router",
+            "render_as": "text",
+        },
     )
     await channel.send(msg)
 
@@ -360,6 +364,7 @@ async def test_send_emits_response_model_metadata() -> None:
     assert payload["event"] == "message"
     assert payload["response_model"] == "smart-router"
     assert payload["active_target"] == "smart-router"
+    assert payload["render_as"] == "text"
 
 
 @pytest.mark.asyncio

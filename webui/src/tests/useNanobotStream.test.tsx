@@ -222,6 +222,28 @@ describe("useNanobotStream", () => {
     ]);
   });
 
+  it("preserves render_as=text on live assistant messages", () => {
+    const fake = fakeClient();
+    const { result } = renderHook(() => useNanobotStream("chat-help", EMPTY_MESSAGES), {
+      wrapper: wrap(fake.client),
+    });
+
+    act(() => {
+      fake.emit("chat-help", {
+        event: "message",
+        chat_id: "chat-help",
+        text: "## Help\n/status — Show status\n/help — Show help",
+        render_as: "text",
+      });
+    });
+
+    expect(result.current.messages[0]).toMatchObject({
+      role: "assistant",
+      renderAs: "text",
+      content: "## Help\n/status — Show status\n/help — Show help",
+    });
+  });
+
   it("accepts remote_user frames for session-key subscriptions", () => {
     const fake = fakeClient();
     const { result } = renderHook(

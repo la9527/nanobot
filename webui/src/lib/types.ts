@@ -36,6 +36,7 @@ export interface UIMessage {
   id: string;
   role: Role;
   content: string;
+  renderAs?: "text";
   kind?: MessageKind;
   traceVariant?: "tool" | "status";
   isStreaming?: boolean;
@@ -374,6 +375,9 @@ export interface SessionMessagesResponse {
   messages: Array<{
     role: string;
     content: string;
+    metadata?: {
+      render_as?: "text";
+    };
     timestamp?: string;
     visible_reasoning?: string;
     tool_calls?: unknown;
@@ -461,6 +465,7 @@ export type InboundEvent =
       event: "message";
       chat_id: string;
       text: string;
+      render_as?: "text";
       reply_to?: string;
       media?: string[];
       response_model?: string;

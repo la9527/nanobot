@@ -40,6 +40,7 @@ export function hydrateSessionMessages(body: SessionMessagesResponse): UIMessage
       role: m.role,
       content: m.content,
       createdAt,
+      ...(m.metadata?.render_as === "text" ? { renderAs: "text" as const } : {}),
       ...(images ? { images } : {}),
       ...(media ? { media } : {}),
       ...(Array.isArray(m.buttons) && m.buttons.some((row) => row.length > 0)
@@ -80,6 +81,7 @@ function collapseConsecutiveAssistantDuplicates(messages: UIMessage[]): UIMessag
       && message.role === "assistant"
       && !previous.isStreaming
       && !message.isStreaming
+      && previous.renderAs === message.renderAs
       && normalizeHistoryText(previous.content) === normalizeHistoryText(message.content)
       && JSON.stringify(previous.buttons ?? []) === JSON.stringify(message.buttons ?? [])
       && JSON.stringify(previous.media ?? []) === JSON.stringify(message.media ?? [])

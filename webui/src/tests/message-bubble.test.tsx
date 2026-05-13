@@ -192,6 +192,23 @@ describe("MessageBubble", () => {
     expect(screen.getByText(/tokens=🔵30377 in\/🟢656 out/)).toBeInTheDocument();
   });
 
+  it("renders render_as=text assistant replies without markdown conversion", () => {
+    const message: UIMessage = {
+      id: "plain-text-help",
+      role: "assistant",
+      content: "## Help\n/status — Show status\n/help — Show help",
+      renderAs: "text",
+      createdAt: Date.now(),
+    };
+
+    const { container } = render(<MessageBubble message={message} />);
+
+    expect(screen.getByText(/## Help/)).toBeInTheDocument();
+    expect(screen.getByText(/\/status — Show status/)).toBeInTheDocument();
+    expect(container.querySelector("h2")).not.toBeInTheDocument();
+    expect(container.querySelector(".whitespace-pre-wrap")).toBeTruthy();
+  });
+
   it("renders video media as an inline player", () => {
     const message: UIMessage = {
       id: "a1",
