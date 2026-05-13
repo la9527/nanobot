@@ -939,7 +939,6 @@ def _run_gateway(
     async def on_heartbeat_execute(tasks: str) -> str:
         """Phase 2: execute heartbeat tasks through the full agent loop."""
         heartbeat_state["tasks"] = tasks
-        channel, chat_id, _suppressed, _reason = _pick_heartbeat_target()
         proactive_context = build_proactive_context(
             session_manager.list_sessions(),
             max_digest_items=heartbeat_policy.max_digest_items,
@@ -961,8 +960,11 @@ def _run_gateway(
         resp = await agent.process_direct(
             heartbeat_prompt,
             session_key="heartbeat",
-            channel=channel,
-            chat_id=chat_id,
+            # Heartbeat execution stays on the internal CLI channel so any
+            # intermediate or malformed output cannot leak into WebUI before
+            # deliverability filtering and final channel routing run.
+            channel="cli",
+            chat_id="direct",
             on_progress=_silent,
         )
 

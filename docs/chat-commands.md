@@ -17,7 +17,7 @@ These commands work inside chat channels and interactive agent sessions:
 
 ## Periodic Tasks
 
-The gateway wakes up every 30 minutes and checks `HEARTBEAT.md` in your workspace (`~/.nanobot/workspace/HEARTBEAT.md`). If the file has tasks, the agent executes them and delivers results to your most recently active chat channel.
+The gateway wakes up every 30 minutes and checks `HEARTBEAT.md` in your workspace (`~/.nanobot/workspace/HEARTBEAT.md`). If the file has tasks, the agent executes them through an internal heartbeat session and delivers only the final user-facing result to your most recently active chat channel.
 
 **Setup:** edit `~/.nanobot/workspace/HEARTBEAT.md` (created automatically by `nanobot onboard`):
 
@@ -30,5 +30,7 @@ The gateway wakes up every 30 minutes and checks `HEARTBEAT.md` in your workspac
 ```
 
 The agent can also manage this file itself — ask it to "add a periodic task" and it will update `HEARTBEAT.md` for you.
+
+> **Delivery note:** heartbeat execution may assemble internal prompt context before it produces a final answer, but that internal text should not appear in WebUI or external chat channels. Only the final deliverable response is routed to the target channel.
 
 > **Note:** The gateway must be running (`nanobot gateway`) and you must have chatted with the bot at least once so it knows which channel to deliver to.
