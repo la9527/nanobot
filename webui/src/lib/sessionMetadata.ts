@@ -61,6 +61,19 @@ export interface DerivedPendingInteraction {
   buttons: string[][];
 }
 
+export interface DerivedContextWindowSummary {
+  maxTokens: number;
+  usedInputTokens: number;
+  reservedOutputTokens: number;
+  availableTokens: number;
+  usageRatio: number;
+  status: "healthy" | "warning" | "critical" | "stale";
+  source: string | null;
+  activeTarget: string | null;
+  resolvedModel: string | null;
+  updatedAt: string | null;
+}
+
 type ActionResultMetadata = NonNullable<NonNullable<ChatSummary["metadata"]>["action_result"]>;
 type ActionResultDetails = NonNullable<ActionResultMetadata["details"]>;
 
@@ -537,6 +550,43 @@ export function getProactiveSummary(
     targetChannel: proactive.target_channel?.trim() || null,
     suppressedReason: proactive.suppressed_reason?.trim() || null,
     updatedAt: proactive.updated_at?.trim() || null,
+  };
+}
+
+export function getContextWindowSummary(
+  session: ChatSummary | null | undefined,
+): DerivedContextWindowSummary | null {
+  const summary = session?.metadata?.context_window;
+  if (!summary) return null;
+
+  const maxTokens = Number(summary.max_tokens ?? 0);
+  const usedInputTokens = Number(summary.used_input_tokens ?? 0);
+  const reservedOutputTokens = Number(summary.reserved_output_tokens ?? 0);
+  const availableTokens = Number(summary.available_tokens ?? 0);
+  const usageRatio = Number(summary.usage_ratio ?? 0);
+  if (!Number.isFinite(maxTokens) || maxTokens <= 0) return null;
+
+  const normalizedStatus = cleanText(summary.status)?.toLowerCase();
+  const status: DerivedContextWindowSummary["status"] =
+    normalizedStatus === "critical"
+      ? "critical"
+      : normalizedStatus === "warning"
+        ? "warning"
+        : normalizedStatus === "stale"
+          ? "stale"
+          : "healthy";
+
+  return {
+    maxTokens,
+    usedInputTokens: Number.isFinite(usedInputTokens) ? Math.max(0, usedInputTokens) : 0,
+    reservedOutputTokens: Number.isFinite(reservedOutputTokens) ? Math.max(0, reservedOutputTokens) : 0,
+    availableTokens: Number.isFinite(availableTokens) ? Math.max(0, availableTokens) : 0,
+    usageRatio: Number.isFinite(usageRatio) ? Math.max(0, Math.min(1, usageRatio)) : 0,
+    status,
+    source: cleanText(summary.source),
+    activeTarget: cleanText(summary.active_target),
+    resolvedModel: cleanText(summary.resolved_model),
+    updatedAt: cleanText(summary.updated_at),
   };
 }
 

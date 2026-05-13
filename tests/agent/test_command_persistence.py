@@ -11,6 +11,7 @@ from nanobot.bus.queue import MessageBus
 def _make_loop(tmp_path: Path) -> AgentLoop:
     provider = MagicMock()
     provider.get_default_model.return_value = "test-model"
+    provider.generation.max_tokens = 4096
     return AgentLoop(
         bus=MessageBus(),
         provider=provider,
@@ -77,6 +78,10 @@ async def test_slash_command_turn_is_persisted_for_webui_history(tmp_path: Path)
     assert [message["role"] for message in restored["messages"][-2:]] == ["user", "assistant"]
     assert restored["messages"][-2]["content"] == "/calendar"
     assert "## Calendar" in restored["messages"][-1]["content"]
+    context_window = restored["metadata"].get("context_window")
+    assert isinstance(context_window, dict)
+    assert context_window.get("max_tokens") == loop.context_window_tokens
+    assert context_window.get("status") in {"healthy", "warning", "critical"}
 
 
 @pytest.mark.asyncio
@@ -103,3 +108,7 @@ async def test_priority_slash_command_inline_is_persisted_for_linked_telegram_hi
     assert [message["role"] for message in restored["messages"][-2:]] == ["user", "assistant"]
     assert restored["messages"][-2]["content"] == "/status"
     assert "Target:" in restored["messages"][-1]["content"]
+    context_window = restored["metadata"].get("context_window")
+    assert isinstance(context_window, dict)
+    assert context_window.get("max_tokens") == loop.context_window_tokens
+    assert context_window.get("status") in {"healthy", "warning", "critical"}

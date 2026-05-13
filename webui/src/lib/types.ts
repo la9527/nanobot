@@ -143,6 +143,18 @@ export interface ChatSummary {
         store?: string;
       }>;
     };
+    context_window?: {
+      max_tokens?: number;
+      used_input_tokens?: number;
+      reserved_output_tokens?: number;
+      available_tokens?: number;
+      usage_ratio?: number;
+      status?: string;
+      source?: string;
+      active_target?: string | null;
+      resolved_model?: string | null;
+      updated_at?: string | null;
+    };
     action_result?: {
       action_id?: string;
       domain?: string;
@@ -288,6 +300,18 @@ export interface SessionMessagesResponse {
         target?: string;
         store?: string;
       }>;
+    };
+    context_window?: {
+      max_tokens?: number;
+      used_input_tokens?: number;
+      reserved_output_tokens?: number;
+      available_tokens?: number;
+      usage_ratio?: number;
+      status?: string;
+      source?: string;
+      active_target?: string | null;
+      resolved_model?: string | null;
+      updated_at?: string | null;
     };
     action_result?: {
       action_id?: string;

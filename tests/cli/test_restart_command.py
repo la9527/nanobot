@@ -134,6 +134,34 @@ class TestRestartCommand:
             assert "nanobot" in out.content.lower() or "Model" in out.content
 
     @pytest.mark.asyncio
+    async def test_websocket_status_intercepted_in_run_loop_publishes_turn_end(self):
+        """Verify inline websocket commands emit a final turn_end marker for the WebUI."""
+        loop, bus = _make_loop()
+        msg = InboundMessage(channel="websocket", sender_id="u1", chat_id="chat1", content="/status")
+
+        with patch.object(loop, "_dispatch", new_callable=AsyncMock) as mock_dispatch:
+            await bus.publish_inbound(msg)
+
+            loop._running = True
+            run_task = asyncio.create_task(loop.run())
+            await asyncio.sleep(0.1)
+            loop._running = False
+            run_task.cancel()
+            try:
+                await run_task
+            except asyncio.CancelledError:
+                pass
+
+            mock_dispatch.assert_not_called()
+            out = await asyncio.wait_for(bus.consume_outbound(), timeout=1.0)
+            turn_end = await asyncio.wait_for(bus.consume_outbound(), timeout=1.0)
+
+            assert "nanobot" in out.content.lower() or "Model" in out.content
+            assert turn_end.content == ""
+            assert (turn_end.metadata or {}).get("_turn_end") is True
+            assert turn_end.chat_id == "chat1"
+
+    @pytest.mark.asyncio
     async def test_run_propagates_external_cancellation(self):
         """External task cancellation should not be swallowed by the inbound wait loop."""
         loop, _bus = _make_loop()

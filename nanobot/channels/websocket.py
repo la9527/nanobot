@@ -18,6 +18,7 @@ import shutil
 import ssl
 import time
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Self
 from urllib.parse import parse_qs, unquote, urlparse
@@ -41,6 +42,7 @@ from nanobot.session.memory_corrections import (
     parse_memory_correction_message,
 )
 from nanobot.utils.helpers import safe_filename
+from nanobot.utils.helpers import estimate_prompt_tokens
 from nanobot.utils.media_decode import (
     FileSizeExceeded,
     save_base64_data_url,
@@ -823,6 +825,9 @@ class WebSocketChannel(BaseChannel):
             key = row.get("key")
             if not isinstance(key, str) or self._session_manager is None:
                 return cleaned
+            metadata = cleaned.get("metadata")
+            if isinstance(metadata, dict):
+                cleaned["metadata"] = self._metadata_with_context_window(key, metadata)
             if config is None:
                 cleaned["active_target"] = active_default
                 return cleaned
@@ -844,6 +849,89 @@ class WebSocketChannel(BaseChannel):
             if isinstance(s.get("key"), str) and self._is_webui_session_key(s["key"])
         ]
         return _http_json_response({"sessions": cleaned})
+
+    @staticmethod
+    def _context_window_status(occupied_ratio: float) -> str:
+        if occupied_ratio >= 0.85:
+            return "critical"
+        if occupied_ratio >= 0.70:
+            return "warning"
+        return "healthy"
+
+    def _build_context_window_summary(self, session: Any) -> dict[str, Any] | None:
+        try:
+            from nanobot.model_targets import get_active_model_target_name, resolve_model_target
+
+            config = _load_webui_config()
+            max_tokens = int(getattr(config.agents.defaults, "context_window_tokens", 0) or 0)
+            if max_tokens <= 0:
+                return None
+
+            history = session.get_history(
+                max_messages=max(len(session.messages), 120),
+                max_tokens=max_tokens,
+                include_timestamps=True,
+            )
+            if not history:
+                return None
+
+            used_input_tokens = max(0, int(estimate_prompt_tokens(history)))
+            reserved_output_tokens = max(1, int(getattr(config.agents.defaults, "max_tokens", 8192) or 8192))
+            occupied_tokens = min(max_tokens, used_input_tokens + reserved_output_tokens)
+            available_tokens = max(max_tokens - occupied_tokens, 0)
+            occupied_ratio = occupied_tokens / max_tokens if max_tokens > 0 else 0.0
+
+            active_target = get_active_model_target_name(config, session)
+            resolved_model = None
+            try:
+                target = resolve_model_target(config, active_target)
+                if target.kind == "smart_router":
+                    resolved_model = target.name or "smart-router"
+                else:
+                    candidate = target.model or getattr(config.agents.defaults, "model", None)
+                    if isinstance(candidate, str) and candidate.strip():
+                        resolved_model = candidate.strip()
+            except Exception:
+                candidate = getattr(config.agents.defaults, "model", None)
+                if isinstance(candidate, str) and candidate.strip():
+                    resolved_model = candidate.strip()
+
+            return {
+                "max_tokens": max_tokens,
+                "used_input_tokens": used_input_tokens,
+                "reserved_output_tokens": reserved_output_tokens,
+                "available_tokens": available_tokens,
+                "usage_ratio": occupied_ratio,
+                "status": self._context_window_status(occupied_ratio),
+                "source": "estimated",
+                "active_target": active_target,
+                "resolved_model": resolved_model,
+                "updated_at": datetime.now().isoformat(),
+            }
+        except Exception as exc:
+            logger.debug("webui context window summary unavailable: {}", exc)
+            return None
+
+    def _metadata_with_context_window(self, key: str, metadata: dict[str, Any]) -> dict[str, Any]:
+        if self._session_manager is None:
+            return metadata
+        current = metadata.get("context_window")
+        if isinstance(current, dict) and int(current.get("max_tokens") or 0) > 0:
+            return metadata
+        try:
+            session = self._session_manager.get_or_create(key)
+            session_current = session.metadata.get("context_window")
+            if isinstance(session_current, dict) and int(session_current.get("max_tokens") or 0) > 0:
+                return session.metadata
+            summary = self._build_context_window_summary(session)
+            if summary is None:
+                return metadata
+            session.metadata["context_window"] = summary
+            self._session_manager.save(session)
+            return session.metadata
+        except Exception as exc:
+            logger.debug("webui context window metadata hydrate skipped for {}: {}", key, exc)
+            return metadata
 
     def _settings_context(self) -> dict[str, Any]:
         from nanobot.config.loader import load_config, resolve_config_env_vars
@@ -993,6 +1081,9 @@ class WebSocketChannel(BaseChannel):
         data = self._session_manager.read_session_file(decoded_key)
         if data is None:
             return _http_error(404, "session not found")
+        metadata = data.get("metadata")
+        if isinstance(metadata, dict):
+            data["metadata"] = self._metadata_with_context_window(decoded_key, metadata)
         # Decorate persisted user messages with signed media URLs so the
         # client can render previews. The raw on-disk ``media`` paths are
         # stripped on the way out — they leak server filesystem layout and

@@ -492,6 +492,50 @@ async def test_session_messages_route_reads_telegram_sessions(
 
 
 @pytest.mark.asyncio
+async def test_session_routes_lazily_populate_context_window_metadata(
+    bus: MagicMock, tmp_path: Path
+) -> None:
+    sm = SessionManager(tmp_path)
+    session = Session(key="websocket:ctx-hydrate")
+    session.add_message("user", "Summarize the last few steps and keep the important details.")
+    session.add_message("assistant", "Here is a compact summary of the previous work and the main follow-up points.")
+    sm.save(session)
+
+    channel = _ch(bus, session_manager=sm, port=29927)
+    server_task = asyncio.create_task(channel.start())
+    await asyncio.sleep(0.3)
+    try:
+      boot = await _http_get("http://127.0.0.1:29927/webui/bootstrap")
+      token = boot.json()["token"]
+      auth = {"Authorization": f"Bearer {token}"}
+
+      listing = await _http_get("http://127.0.0.1:29927/api/sessions", headers=auth)
+      assert listing.status_code == 200
+      row = next(item for item in listing.json()["sessions"] if item["key"] == "websocket:ctx-hydrate")
+      summary = row["metadata"].get("context_window")
+      assert isinstance(summary, dict)
+      assert summary["source"] == "estimated"
+      assert summary["max_tokens"] > 0
+      assert summary["used_input_tokens"] > 0
+
+      msgs = await _http_get(
+          "http://127.0.0.1:29927/api/sessions/websocket%3Actx-hydrate/messages",
+          headers=auth,
+      )
+      assert msgs.status_code == 200
+      body = msgs.json()
+      hydrated = body["metadata"].get("context_window")
+      assert isinstance(hydrated, dict)
+      assert hydrated["source"] == "estimated"
+      assert hydrated["reserved_output_tokens"] > 0
+      assert hydrated["available_tokens"] >= 0
+      assert isinstance(hydrated.get("updated_at"), str)
+    finally:
+        await channel.stop()
+        await server_task
+
+
+@pytest.mark.asyncio
 async def test_session_message_envelope_publishes_telegram_inbound(
     bus: MagicMock, tmp_path: Path
 ) -> None:

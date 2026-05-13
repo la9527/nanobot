@@ -160,6 +160,49 @@
       "toggleTheme": "Toggle theme from header",
       "settings": "Open settings"
     },
+    "contextWindow": {
+      "buttonLabel": "Open context window details",
+      "buttonTitle": "Context",
+      "title": "Context window",
+      "description": "This thread shows how much context is already occupied and how much reply reserve is being held back.",
+      "compact": "{{used}} / {{max}}",
+      "usageLabel": "Context usage",
+      "occupiedLabel": "Usage",
+      "closeOverlay": "Close context window details",
+      "unavailable": {
+        "compact": "Context unavailable",
+        "body": "No context snapshot is stored for this chat yet. Open the thread or send a turn to capture a fresh estimate.",
+        "short": "Not available"
+      },
+      "status": {
+        "healthy": "Has headroom",
+        "warning": "Needs attention",
+        "critical": "Near limit",
+        "stale": "Stale",
+        "unavailable": "Unavailable"
+      },
+      "source": {
+        "estimated": "Estimated",
+        "provider_reported": "Provider reported",
+        "snapshot": "Session snapshot"
+      },
+      "fields": {
+        "used": "Used input",
+        "reserve": "Reply reserve",
+        "available": "Available",
+        "max": "Max window",
+        "target": "Target",
+        "model": "Model",
+        "source": "Source",
+        "updated": "Updated"
+      },
+      "guidance": {
+        "healthy": "There is still enough headroom for the next response. Keep using the current thread unless the task grows sharply.",
+        "warning": "Context usage is getting high. A shorter next turn or a fresh chat branch may keep responses more stable.",
+        "critical": "Context usage is near the limit. Start a new chat or reduce the next request size before continuing.",
+        "stale": "This snapshot may be stale. Run one more turn to refresh the latest context estimate."
+      }
+    },
     "headerBadges": {
       "target": "Target {{label}}",
       "channel": "Channel {{channel}}",

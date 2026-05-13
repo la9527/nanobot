@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Menu, Moon, Settings, Sun } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -15,6 +16,7 @@ interface ThreadHeaderProps {
     label: string;
     tone?: "default" | "muted" | "warning" | "active";
   }>;
+  contextIndicator?: ReactNode;
   minimal?: boolean;
 }
 
@@ -26,6 +28,7 @@ export function ThreadHeader({
   onOpenSettings,
   hideSidebarToggleOnDesktop = false,
   statusBadges = [],
+  contextIndicator = null,
   minimal = false,
 }: ThreadHeaderProps) {
   const { t } = useTranslation();
@@ -118,7 +121,8 @@ export function ThreadHeader({
         </div>
       </div>
 
-      <div className="flex items-center gap-0.5">
+      <div className="flex items-center gap-1.5">
+        {contextIndicator}
         <Button
           variant="ghost"
           size="icon"

@@ -214,6 +214,7 @@ class AgentLoop:
     _RUNTIME_CHECKPOINT_KEY = "runtime_checkpoint"
     _PENDING_USER_TURN_KEY = "pending_user_turn"
     _APPROVAL_SUMMARY_KEY = "approval_summary"
+    _CONTEXT_WINDOW_KEY = "context_window"
     _SMART_ROUTER_TIER_KEY = "smart_router_last_tier"
     _SMART_ROUTER_MODEL_KEY = "smart_router_last_model"
     _APPROVAL_YES = frozenset({"y", "yes", "ok", "approve", "approved", "run", "continue", "예", "네", "승인", "허용"})
@@ -890,8 +891,43 @@ class AgentLoop:
         if result:
             result = self._persist_command_result(msg=msg, key=key, result=result)
             await self.bus.publish_outbound(result)
+            await self._publish_websocket_post_turn_events(msg, key)
         else:
             logger.warning("Command '{}' matched but dispatch returned None", raw)
+
+    async def _publish_websocket_post_turn_events(
+        self,
+        msg: InboundMessage,
+        session_key: str,
+    ) -> None:
+        """Publish websocket-only turn completion markers after a finished turn."""
+        if msg.channel != "websocket":
+            return
+        await self.bus.publish_outbound(OutboundMessage(
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            content="",
+            metadata={**msg.metadata, "_turn_end": True},
+        ))
+        if msg.metadata.get("webui") is True:
+            async def _generate_title_and_notify() -> None:
+                generated = await maybe_generate_webui_title_after_turn(
+                    channel=msg.channel,
+                    metadata=msg.metadata,
+                    sessions=self.sessions,
+                    session_key=session_key,
+                    provider=self.provider,
+                    model=self.model,
+                )
+                if generated:
+                    await self.bus.publish_outbound(OutboundMessage(
+                        channel=msg.channel,
+                        chat_id=msg.chat_id,
+                        content="",
+                        metadata={**msg.metadata, "_session_updated": True},
+                    ))
+
+            self._schedule_background(_generate_title_and_notify())
 
     def _persist_command_result(
         self,
@@ -920,6 +956,7 @@ class AgentLoop:
             assistant_extra["metadata"] = dict(result.metadata)
         session.add_message("assistant", result.content, **assistant_extra)
         self._clear_pending_user_turn(session)
+        self._update_context_window_summary(session)
         self.sessions.save(session)
         return result
 
@@ -948,13 +985,61 @@ class AgentLoop:
         """Derive a token budget for session history replay from the context window."""
         if self.context_window_tokens <= 0:
             return 0
+        reserved_output = self._reserved_output_tokens()
+        budget = self.context_window_tokens - max(1, reserved_output) - 1024
+        return budget if budget > 0 else max(128, self.context_window_tokens // 2)
+
+    def _reserved_output_tokens(self) -> int:
         max_output = getattr(getattr(self.provider, "generation", None), "max_tokens", 4096)
         try:
             reserved_output = int(max_output)
         except (TypeError, ValueError):
             reserved_output = 4096
-        budget = self.context_window_tokens - max(1, reserved_output) - 1024
-        return budget if budget > 0 else max(128, self.context_window_tokens // 2)
+        return max(1, reserved_output)
+
+    @staticmethod
+    def _context_window_status(occupied_ratio: float) -> str:
+        if occupied_ratio >= 0.85:
+            return "critical"
+        if occupied_ratio >= 0.70:
+            return "warning"
+        return "healthy"
+
+    def _build_context_window_summary(self, session: Session) -> dict[str, Any] | None:
+        status_snapshot = self.build_response_status(session)
+        max_tokens = int(status_snapshot.get("context_window_tokens") or 0)
+        if max_tokens <= 0:
+            return None
+
+        usage = status_snapshot.get("usage") or {}
+        estimated_prompt = int(status_snapshot.get("context_tokens_estimate") or 0)
+        used_input_tokens = max(estimated_prompt, int(usage.get("prompt_tokens", 0) or 0), 0)
+        reserved_output_tokens = self._reserved_output_tokens()
+        occupied_tokens = min(max_tokens, used_input_tokens + reserved_output_tokens)
+        available_tokens = max(max_tokens - occupied_tokens, 0)
+        occupied_ratio = occupied_tokens / max_tokens if max_tokens > 0 else 0.0
+
+        from datetime import datetime
+
+        return {
+            "max_tokens": max_tokens,
+            "used_input_tokens": used_input_tokens,
+            "reserved_output_tokens": reserved_output_tokens,
+            "available_tokens": available_tokens,
+            "usage_ratio": occupied_ratio,
+            "status": self._context_window_status(occupied_ratio),
+            "source": "estimated",
+            "active_target": status_snapshot.get("active_target"),
+            "resolved_model": status_snapshot.get("model"),
+            "updated_at": datetime.now().isoformat(),
+        }
+
+    def _update_context_window_summary(self, session: Session) -> None:
+        summary = self._build_context_window_summary(session)
+        if summary is None:
+            session.metadata.pop(self._CONTEXT_WINDOW_KEY, None)
+            return
+        session.metadata[self._CONTEXT_WINDOW_KEY] = summary
 
     async def _run_agent_loop(
         self,
@@ -1291,33 +1376,7 @@ class AgentLoop:
                             channel=msg.channel, chat_id=msg.chat_id,
                             content="", metadata=msg.metadata or {},
                         ))
-                    if msg.channel == "websocket":
-                        # Signal that the turn is fully complete (all tools executed,
-                        # final text streamed).  This lets WS clients know when to
-                        # definitively stop the loading indicator.
-                        await self.bus.publish_outbound(OutboundMessage(
-                            channel=msg.channel, chat_id=msg.chat_id,
-                            content="", metadata={**msg.metadata, "_turn_end": True},
-                        ))
-                        if msg.metadata.get("webui") is True:
-                            async def _generate_title_and_notify() -> None:
-                                generated = await maybe_generate_webui_title_after_turn(
-                                    channel=msg.channel,
-                                    metadata=msg.metadata,
-                                    sessions=self.sessions,
-                                    session_key=session_key,
-                                    provider=self.provider,
-                                    model=self.model,
-                                )
-                                if generated:
-                                    await self.bus.publish_outbound(OutboundMessage(
-                                        channel=msg.channel,
-                                        chat_id=msg.chat_id,
-                                        content="",
-                                        metadata={**msg.metadata, "_session_updated": True},
-                                    ))
-
-                            self._schedule_background(_generate_title_and_notify())
+                    await self._publish_websocket_post_turn_events(msg, session_key)
                 except asyncio.CancelledError:
                     logger.info("Task cancelled for session {}", session_key)
                     # Preserve partial context from the interrupted turn so
@@ -1737,6 +1796,8 @@ class AgentLoop:
         )
 
         status_snapshot = self.build_response_status(session)
+        self._update_context_window_summary(session)
+        self.sessions.save(session)
         if (
             msg.channel != "api"
             and final_content != EMPTY_FINAL_RESPONSE_MESSAGE

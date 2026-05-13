@@ -18,6 +18,7 @@ import { AssistantDashboard } from "@/components/home/AssistantDashboard";
 import { ThreadAssistantDetailsSheet } from "@/components/thread/ThreadAssistantDetailsSheet";
 import { AskUserPrompt } from "@/components/thread/AskUserPrompt";
 import { ThreadComposer } from "@/components/thread/ThreadComposer";
+import { ThreadContextWindowIndicator } from "@/components/thread/ThreadContextWindowIndicator";
 import { ThreadHeader } from "@/components/thread/ThreadHeader";
 import { ThreadInlineActionResult } from "@/components/thread/ThreadInlineActionResult";
 import { ThreadStatusRail } from "@/components/thread/ThreadStatusRail";
@@ -33,6 +34,7 @@ import {
   approvalPendingBadgeLabel,
   getCalendarPendingInteraction,
   getActionResult,
+  getContextWindowSummary,
   getMemoryCorrectionActions,
   getOwnerProfile,
   getProactiveSummary,
@@ -472,6 +474,7 @@ export function ThreadShell({
   const [modelTargetPending, setModelTargetPending] = useState(false);
   const [remoteReplyPending, setRemoteReplyPending] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [contextWindowOpen, setContextWindowOpen] = useState(false);
   const [dismissingActionResult, setDismissingActionResult] = useState(false);
   const [dismissedActionSignature, setDismissedActionSignature] = useState<string | null>(null);
   const [composerDraft, setComposerDraft] = useState<string | null>(null);
@@ -479,6 +482,7 @@ export function ThreadShell({
   const [slashCommands, setSlashCommands] = useState<SlashCommand[]>([]);
   const [heroImageMode, setHeroImageMode] = useState(false);
   const [websocketHistorySyncTick, setWebsocketHistorySyncTick] = useState(0);
+  const [liveMetadata, setLiveMetadata] = useState<ChatSummary["metadata"] | null>(session?.metadata ?? null);
   const pendingFirstRef = useRef<PendingFirstMessage | null>(null);
   const pendingSessionRefreshRef = useRef(false);
   const remoteReplyPollRef = useRef(0);
@@ -492,6 +496,19 @@ export function ThreadShell({
   useEffect(() => {
     tokenRef.current = token;
   }, [token]);
+
+  useEffect(() => {
+    setLiveMetadata(session?.metadata ?? null);
+    setContextWindowOpen(false);
+  }, [historyKey, session?.metadata]);
+
+  const sessionWithLiveMetadata = useMemo(() => {
+    if (!session) return null;
+    return {
+      ...session,
+      metadata: liveMetadata ?? session.metadata,
+    };
+  }, [liveMetadata, session]);
 
   const initial = useMemo(() => {
     const cacheKey = streamChatId ?? historyKey;
@@ -530,13 +547,13 @@ export function ThreadShell({
     return null;
   }, [messages]);
   const metadataPendingAsk = useMemo(() => {
-    const pending = getCalendarPendingInteraction(session);
+    const pending = getCalendarPendingInteraction(sessionWithLiveMetadata);
     if (!pending) return null;
     return {
       question: pending.question || "Choose how to continue.",
       buttons: pending.buttons,
     };
-  }, [session]);
+  }, [sessionWithLiveMetadata]);
   const pendingAsk = metadataPendingAsk ?? messagePendingAsk;
 
   const pendingApprovalMessage = useMemo(() => {
@@ -559,8 +576,8 @@ export function ThreadShell({
     if (modelLabel) {
       badges.push({ label: t("thread.headerBadges.target", { label: modelLabel }) });
     }
-    badges.push({ label: t("thread.headerBadges.channel", { channel: toChannelBadgeLabel(session?.channel) }), tone: "muted" });
-    if (session?.channel && session.channel !== "websocket") {
+    badges.push({ label: t("thread.headerBadges.channel", { channel: toChannelBadgeLabel(sessionWithLiveMetadata?.channel) }), tone: "muted" });
+    if (sessionWithLiveMetadata?.channel && sessionWithLiveMetadata.channel !== "websocket") {
       badges.push({ label: t("thread.headerBadges.linkedSession"), tone: "muted" });
     }
     if (pendingAsk || pendingApprovalMessage) {
@@ -570,11 +587,11 @@ export function ThreadShell({
       badges.push({ label: t("thread.headerBadges.assistantActive"), tone: "active" });
     }
     return badges;
-  }, [activeTarget, booting, isStreaming, modelName, modelTargetPending, pendingApprovalMessage, pendingAsk, remoteReplyPending, session?.channel, t]);
+  }, [activeTarget, booting, isStreaming, modelName, modelTargetPending, pendingApprovalMessage, pendingAsk, remoteReplyPending, sessionWithLiveMetadata?.channel, t]);
 
   const continuityPlaceholder = useMemo(() => {
-    return formatContinuitySummary(session, t);
-  }, [session, t]);
+    return formatContinuitySummary(sessionWithLiveMetadata, t);
+  }, [sessionWithLiveMetadata, t]);
 
   const threadStatus = useMemo(
     () => deriveThreadStatus({
@@ -586,31 +603,32 @@ export function ThreadShell({
       remoteReplyPending,
       booting,
       modelTargetPending,
-      actionResult: getActionResult(session),
+      actionResult: getActionResult(sessionWithLiveMetadata),
     }),
-    [booting, isStreaming, messages, modelTargetPending, pendingApprovalMessage, pendingAsk, remoteReplyPending, session, streamError],
+    [booting, isStreaming, messages, modelTargetPending, pendingApprovalMessage, pendingAsk, remoteReplyPending, sessionWithLiveMetadata, streamError],
   );
 
   const ownerAwareSummary = useMemo(() => {
     return deriveOwnerAwareSummary({
-      session,
+      session: sessionWithLiveMetadata,
       sessions,
       assistantActive: isStreaming || remoteReplyPending || booting || modelTargetPending,
       currentThreadTone: threadStatus?.tone ?? null,
       t,
     });
-  }, [booting, isStreaming, modelTargetPending, remoteReplyPending, session, sessions, t, threadStatus?.tone]);
+  }, [booting, isStreaming, modelTargetPending, remoteReplyPending, sessionWithLiveMetadata, sessions, t, threadStatus?.tone]);
 
-  const currentTaskSummary = useMemo(() => getTaskSummary(session), [session]);
-  const currentOwnerProfile = useMemo(() => getOwnerProfile(session), [session]);
-  const currentProactiveSummary = useMemo(() => getProactiveSummary(session), [session]);
-  const memoryCorrectionActions = useMemo(() => getMemoryCorrectionActions(session), [session]);
-  const actionResult = useMemo(() => getActionResult(session), [session]);
-  const currentActionSignature = session?.metadata?.action_result?.action_id
-    ? `${session.key}:${session.metadata.action_result.action_id}`
+  const currentTaskSummary = useMemo(() => getTaskSummary(sessionWithLiveMetadata), [sessionWithLiveMetadata]);
+  const currentOwnerProfile = useMemo(() => getOwnerProfile(sessionWithLiveMetadata), [sessionWithLiveMetadata]);
+  const currentProactiveSummary = useMemo(() => getProactiveSummary(sessionWithLiveMetadata), [sessionWithLiveMetadata]);
+  const memoryCorrectionActions = useMemo(() => getMemoryCorrectionActions(sessionWithLiveMetadata), [sessionWithLiveMetadata]);
+  const actionResult = useMemo(() => getActionResult(sessionWithLiveMetadata), [sessionWithLiveMetadata]);
+  const contextWindowSummary = useMemo(() => getContextWindowSummary(sessionWithLiveMetadata), [sessionWithLiveMetadata]);
+  const currentActionSignature = sessionWithLiveMetadata?.metadata?.action_result?.action_id
+    ? `${sessionWithLiveMetadata.key}:${sessionWithLiveMetadata.metadata.action_result.action_id}`
     : null;
   const isActionResultDismissed = Boolean(currentActionSignature && dismissedActionSignature === currentActionSignature);
-  const currentActionMetadata = isActionResultDismissed ? null : session?.metadata?.action_result;
+  const currentActionMetadata = isActionResultDismissed ? null : sessionWithLiveMetadata?.metadata?.action_result;
   const effectiveActionResult = isActionResultDismissed ? null : actionResult;
   const currentActionDetails = currentActionMetadata?.details;
   const currentActionStatus = currentActionMetadata?.status;
@@ -703,15 +721,15 @@ export function ThreadShell({
     if (ownerAwareSummary?.linkedSessionCount) {
       items.push(t("thread.statusRail.linkedSessions", { count: ownerAwareSummary.linkedSessionCount }));
     }
-    if (session?.channel && session.channel !== "websocket") {
-      items.push(t("thread.statusRail.linkedChannel", { channel: toChannelBadgeLabel(session.channel) }));
+    if (sessionWithLiveMetadata?.channel && sessionWithLiveMetadata.channel !== "websocket") {
+      items.push(t("thread.statusRail.linkedChannel", { channel: toChannelBadgeLabel(sessionWithLiveMetadata.channel) }));
     }
-    const updatedLabel = relativeTime(session?.updatedAt ?? session?.createdAt);
+    const updatedLabel = relativeTime(sessionWithLiveMetadata?.updatedAt ?? sessionWithLiveMetadata?.createdAt);
     if (updatedLabel) {
       items.push(t("thread.statusRail.updated", { time: updatedLabel }));
     }
     return items.slice(0, 4);
-  }, [ownerAwareSummary?.approvalPendingCount, ownerAwareSummary?.blockedCount, ownerAwareSummary?.suppressedProactiveCount, ownerAwareSummary?.linkedSessionCount, session?.channel, session?.createdAt, session?.updatedAt, t]);
+  }, [ownerAwareSummary?.approvalPendingCount, ownerAwareSummary?.blockedCount, ownerAwareSummary?.suppressedProactiveCount, ownerAwareSummary?.linkedSessionCount, sessionWithLiveMetadata?.channel, sessionWithLiveMetadata?.createdAt, sessionWithLiveMetadata?.updatedAt, t]);
 
   const statusRailCaption = useMemo(() => {
     if (currentTaskSummary?.status === "waiting-approval" || currentTaskSummary?.status === "blocked") {
@@ -801,6 +819,7 @@ export function ThreadShell({
       try {
         const body = await fetchSessionMessages(tokenRef.current, historyKey);
         if (cancelled) return;
+        setLiveMetadata(body.metadata ?? null);
         const nextMessages = hydrateSessionMessages(body);
         if (nextMessages.length === 0) return;
 
@@ -1036,6 +1055,7 @@ export function ThreadShell({
         try {
           const body = await fetchSessionMessages(tokenRef.current, historyKey);
           if (remoteReplyPollRef.current !== pollId) return;
+          setLiveMetadata(body.metadata ?? null);
           const nextMessages = hydrateSessionMessages(body);
           const hasAssistantReply =
             nextMessages.length > baselineHistoryLength
@@ -1156,7 +1176,14 @@ export function ThreadShell({
         onOpenSettings={onOpenSettings}
         hideSidebarToggleOnDesktop={hideSidebarToggleOnDesktop}
         minimal={!session && !loading}
-    statusBadges={headerStatusBadges}
+        statusBadges={headerStatusBadges}
+        contextIndicator={session ? (
+          <ThreadContextWindowIndicator
+            summary={contextWindowSummary}
+            open={contextWindowOpen}
+            onOpenChange={setContextWindowOpen}
+          />
+        ) : null}
       />
       {(session && !hasInlineActionResult && (statusRailItems.length > 0 || statusRailCaption || ownerAwareSummary || currentTaskSummary || continuityPlaceholder || memoryCorrectionActions.length > 0)) ? (
         <ThreadStatusRail
