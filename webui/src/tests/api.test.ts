@@ -115,6 +115,12 @@ describe("webui API helpers", () => {
             icon: "history",
             arg_hint: "[n]",
           },
+          {
+            command: "/dream-restore",
+            title: "Restore memory",
+            description: "Revert memory to a previous Dream snapshot.",
+            icon: "undo-2",
+          },
         ],
       }),
     } as Response);
@@ -126,6 +132,13 @@ describe("webui API helpers", () => {
         description: "Print the last N messages.",
         icon: "history",
         argHint: "[n]",
+      },
+      {
+        command: "/dream-restore",
+        title: "Restore memory",
+        description: "Revert memory to a previous Dream snapshot.",
+        icon: "undo-2",
+        argHint: "",
       },
     ]);
     expect(fetch).toHaveBeenCalledWith(

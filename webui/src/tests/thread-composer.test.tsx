@@ -31,6 +31,7 @@ const COMMANDS_WITH_RECENT_ADDITIONS: SlashCommand[] = [
   { command: "/history", title: "Show conversation history", description: "Inspect persisted messages.", icon: "history", argHint: "[n]" },
   { command: "/dream", title: "Run Dream", description: "Run memory consolidation.", icon: "sparkles" },
   { command: "/dream-log", title: "Show Dream log", description: "Inspect Dream changes.", icon: "book-open" },
+  { command: "/dream-restore", title: "Restore memory", description: "Revert memory to a previous Dream snapshot.", icon: "undo-2" },
   { command: "/help", title: "Show help", description: "List commands.", icon: "circle-help" },
 ];
 
@@ -119,6 +120,7 @@ describe("ThreadComposer", () => {
     fireEvent.change(input, { target: { value: "/" } });
 
     expect(screen.getByRole("option", { name: /\/calendar/i })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /\/dream-restore/i })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: /\/mail/i })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: /\/model/i })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: /\/usage/i })).toBeInTheDocument();

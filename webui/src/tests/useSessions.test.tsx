@@ -190,6 +190,61 @@ describe("useSessions", () => {
     ]);
   });
 
+  it("collapses duplicate persisted assistant replies even when visible_reasoning is present", async () => {
+    vi.mocked(api.fetchSessionMessages).mockResolvedValue({
+      key: "websocket:chat-reasoning-dup",
+      created_at: "2026-05-13T10:00:00Z",
+      updated_at: "2026-05-13T10:05:00Z",
+      messages: [
+        {
+          role: "user",
+          content: "중복 없이 정리해줘",
+          timestamp: "2026-05-13T10:00:00Z",
+        },
+        {
+          role: "assistant",
+          content: "정리했습니다.",
+          timestamp: "2026-05-13T10:00:01Z",
+          visible_reasoning: "먼저 중복 여부를 확인했습니다.",
+        },
+        {
+          role: "assistant",
+          content: "정리했습니다.\n",
+          timestamp: "2026-05-13T10:00:02Z",
+          visible_reasoning: "먼저 중복 여부를 확인했습니다.",
+        },
+      ],
+    });
+
+    const { result } = renderHook(() => useSessionHistory("websocket:chat-reasoning-dup"), {
+      wrapper: wrap(fakeClient()),
+    });
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.messages.map((message) => ({
+      role: message.role,
+      kind: message.kind,
+      content: message.content,
+    }))).toEqual([
+      {
+        role: "user",
+        kind: undefined,
+        content: "중복 없이 정리해줘",
+      },
+      {
+        role: "tool",
+        kind: "trace",
+        content: "먼저 중복 여부를 확인했습니다.",
+      },
+      {
+        role: "assistant",
+        kind: undefined,
+        content: "정리했습니다.",
+      },
+    ]);
+  });
+
   it("preserves render_as=text for persisted assistant command output", async () => {
     vi.mocked(api.fetchSessionMessages).mockResolvedValue({
       key: "websocket:chat-help",

@@ -14,13 +14,14 @@ import type { ChatSummary, SessionMessagesResponse, UIMessage } from "@/lib/type
 
 const EMPTY_MESSAGES: UIMessage[] = [];
 const REMOTE_SESSION_REFRESH_MS = 1000;
+type SessionHistoryMessage = SessionMessagesResponse["messages"][number];
 
 function shouldPollSessionHistory(key: string): boolean {
   return key.startsWith("telegram:");
 }
 
 export function hydrateSessionMessages(body: SessionMessagesResponse): UIMessage[] {
-  const hydrated: UIMessage[] = body.messages.flatMap((m, idx): UIMessage[] => {
+  const hydrated: UIMessage[] = collapseDuplicateAssistantHistoryRows(body.messages).flatMap((m, idx): UIMessage[] => {
     if (m.role !== "user" && m.role !== "assistant") return [];
     if (typeof m.content !== "string") return [];
     const createdAt = m.timestamp ? Date.parse(m.timestamp) : Date.now();
@@ -91,6 +92,58 @@ function collapseConsecutiveAssistantDuplicates(messages: UIMessage[]): UIMessag
     deduped.push(message);
   }
   return deduped;
+}
+
+function collapseDuplicateAssistantHistoryRows(
+  messages: SessionMessagesResponse["messages"],
+): SessionMessagesResponse["messages"] {
+  const deduped: SessionHistoryMessage[] = [];
+  for (const message of messages) {
+    if (message.role !== "user" && message.role !== "assistant") {
+      continue;
+    }
+
+    const previous = deduped[deduped.length - 1];
+    if (previous && areDuplicateAssistantHistoryRows(previous, message)) {
+      deduped[deduped.length - 1] = pickPreferredAssistantHistoryRow(previous, message);
+      continue;
+    }
+
+    deduped.push(message);
+  }
+  return deduped;
+}
+
+function areDuplicateAssistantHistoryRows(
+  previous: SessionHistoryMessage,
+  current: SessionHistoryMessage,
+): boolean {
+  return (
+    previous.role === "assistant"
+    && current.role === "assistant"
+    && normalizeHistoryText(previous.content) === normalizeHistoryText(current.content)
+    && previous.metadata?.render_as === current.metadata?.render_as
+    && JSON.stringify(previous.buttons ?? []) === JSON.stringify(current.buttons ?? [])
+    && JSON.stringify(previous.media_urls ?? []) === JSON.stringify(current.media_urls ?? [])
+  );
+}
+
+function pickPreferredAssistantHistoryRow(
+  previous: SessionHistoryMessage,
+  current: SessionHistoryMessage,
+): SessionHistoryMessage {
+  return historyMessageRichness(current) > historyMessageRichness(previous)
+    ? current
+    : previous;
+}
+
+function historyMessageRichness(message: SessionHistoryMessage): number {
+  let score = 0;
+  if (message.metadata?.render_as === "text") score += 1;
+  if (message.visible_reasoning?.trim()) score += 4;
+  if (Array.isArray(message.buttons) && message.buttons.some((row) => row.length > 0)) score += 2;
+  if (Array.isArray(message.media_urls) && message.media_urls.length > 0) score += 2;
+  return score;
 }
 
 function normalizeHistoryText(value: string): string {

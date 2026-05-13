@@ -407,6 +407,40 @@ describe("useNanobotStream", () => {
     expect(onTurnEnd).toHaveBeenCalledTimes(1);
   });
 
+  it("does not keep both the streamed placeholder and final assistant message", () => {
+    const fake = fakeClient();
+    const { result } = renderHook(() => useNanobotStream("chat-final", EMPTY_MESSAGES), {
+      wrapper: wrap(fake.client),
+    });
+
+    act(() => {
+      fake.emit("chat-final", {
+        event: "delta",
+        chat_id: "chat-final",
+        text: "Final reply",
+      });
+      fake.emit("chat-final", {
+        event: "stream_end",
+        chat_id: "chat-final",
+      });
+      fake.emit("chat-final", {
+        event: "message",
+        chat_id: "chat-final",
+        text: "Final reply",
+      });
+      fake.emit("chat-final", {
+        event: "turn_end",
+        chat_id: "chat-final",
+      });
+    });
+
+    expect(result.current.messages).toHaveLength(1);
+    expect(result.current.messages[0]).toMatchObject({
+      role: "assistant",
+      content: "Final reply",
+    });
+  });
+
   it("refreshes session metadata when the server reports a session update", () => {
     const fake = fakeClient();
     const onTurnEnd = vi.fn();

@@ -88,6 +88,7 @@ export function useNanobotStream(
   const [isStreaming, setIsStreaming] = useState(initialStreaming || hasPendingToolCalls);
   const [streamError, setStreamError] = useState<StreamError | null>(null);
   const buffer = useRef<StreamBuffer | null>(null);
+  const lastStreamMessageIdRef = useRef<string | null>(null);
   const suppressStreamUntilTurnEndRef = useRef(false);
   /** Timer that defers ``isStreaming = false`` after ``stream_end``.
    *
@@ -117,6 +118,7 @@ export function useNanobotStream(
     );
     setStreamError(null);
     buffer.current = null;
+    lastStreamMessageIdRef.current = null;
     suppressStreamUntilTurnEndRef.current = false;
     if (streamEndTimerRef.current !== null) {
       clearTimeout(streamEndTimerRef.current);
@@ -159,6 +161,7 @@ export function useNanobotStream(
   if (suppressStreamUntilTurnEndRef.current) return;
         if (!buffer.current) {
           buffer.current = { messageId: id, parts: [] };
+          lastStreamMessageIdRef.current = id;
           setMessages((prev) => [
             ...prev,
             {
@@ -183,6 +186,7 @@ export function useNanobotStream(
       if (ev.event === "stream_end") {
         applyModelHint(ev);
         if (suppressStreamUntilTurnEndRef.current) {
+          lastStreamMessageIdRef.current = buffer.current?.messageId ?? lastStreamMessageIdRef.current;
           buffer.current = null;
           return;
         }
@@ -190,6 +194,7 @@ export function useNanobotStream(
         // still be executing tools.  Do NOT reset isStreaming here; the
         // definitive "turn is complete" signal is ``turn_end``.
         if (!buffer.current) return;
+        lastStreamMessageIdRef.current = buffer.current.messageId;
         buffer.current = null;
         return;
       }
@@ -205,6 +210,7 @@ export function useNanobotStream(
         setMessages((prev) =>
           prev.map((m) => (m.isStreaming ? { ...m, isStreaming: false } : m)),
         );
+        lastStreamMessageIdRef.current = null;
         suppressStreamUntilTurnEndRef.current = false;
         onTurnEnd?.();
         return;
@@ -323,8 +329,9 @@ export function useNanobotStream(
 
         // A complete (non-streamed) assistant message. If a stream was in
         // flight, drop the placeholder so we don't render the text twice.
-        const activeId = buffer.current?.messageId;
+        const activeId = buffer.current?.messageId ?? lastStreamMessageIdRef.current;
         buffer.current = null;
+        lastStreamMessageIdRef.current = null;
         // Do NOT reset isStreaming here — only ``turn_end`` signals that
         // the full turn (all tool calls + final text) is complete.
         setMessages((prev) => {
@@ -363,6 +370,7 @@ export function useNanobotStream(
     return () => {
       unsub();
       buffer.current = null;
+      lastStreamMessageIdRef.current = null;
       if (streamEndTimerRef.current !== null) {
         clearTimeout(streamEndTimerRef.current);
         streamEndTimerRef.current = null;
