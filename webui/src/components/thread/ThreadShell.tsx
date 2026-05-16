@@ -28,7 +28,7 @@ import { ThreadViewport } from "@/components/thread/ThreadViewport";
 import { deriveThreadStatus, injectSyntheticReasoningTrace } from "@/components/thread/threadStatus";
 import { useNanobotStream, type SendImage, type SendOptions } from "@/hooks/useNanobotStream";
 import { hydrateSessionMessages, useSessionHistory } from "@/hooks/useSessions";
-import { ApiError, clearSessionActionResult, clearSessionProactiveSummary, fetchSessionMessages, fetchSessionModelTarget, listSlashCommands, selectSessionModelTarget } from "@/lib/api";
+import { ApiError, clearSessionActionResult, clearSessionProactiveSummary, fetchLocalLlmStatus, fetchSessionMessages, fetchSessionModelTarget, listSlashCommands, selectSessionModelTarget } from "@/lib/api";
 import { relativeTime } from "@/lib/format";
 import {
   approvalPendingBadgeLabel,
@@ -82,6 +82,13 @@ function toModelBadgeLabel(
   activeTarget: string | null,
   t: TFunction,
 ): string | null {
+  const resolveConcreteModelLabel = () => {
+    if (!modelName) return null;
+    const trimmedModel = modelName.trim();
+    if (!trimmedModel) return null;
+    return trimmedModel.split("/").pop() ?? trimmedModel;
+  };
+
   if (typeof activeTarget === "string") {
     const target = activeTarget.trim();
     if (target && target !== "default") {
@@ -89,6 +96,8 @@ function toModelBadgeLabel(
       if (target === "smart-router-local") return t("thread.modelTarget.local");
       if (target === "smart-router-mini") return t("thread.modelTarget.mini");
       if (target === "smart-router-full") return t("thread.modelTarget.full");
+      const resolvedModel = resolveConcreteModelLabel();
+      if (resolvedModel) return resolvedModel;
       return target;
     }
   }
@@ -389,12 +398,12 @@ function deriveOwnerAwareSummary(params: {
 
 function deriveModelNameFromTarget(target: ModelTargetOption | null | undefined): string | null {
   if (!target) return null;
-  if (target.kind === "smart_router") {
-    return target.name || "smart-router";
-  }
   if (typeof target.model === "string") {
     const trimmed = target.model.trim();
     return trimmed || null;
+  }
+  if (target.kind === "smart_router") {
+    return target.name || "smart-router";
   }
   return null;
 }
@@ -1116,6 +1125,8 @@ export function ThreadShell({
     [historyKey, modelTargetPending, onCreateChat, setActiveTarget, setModelName, token],
   );
 
+  const loadLocalLlmStatus = useCallback(() => fetchLocalLlmStatus(token), [token]);
+
   const emptyState = loading ? (
     <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
       {t("thread.loadingConversation")}
@@ -1250,6 +1261,7 @@ export function ThreadShell({
                 activeTarget={activeTarget}
                 modelTargets={modelTargets}
                 modelTargetPending={modelTargetPending}
+                loadLocalLlmStatus={loadLocalLlmStatus}
                 onSelectModelTarget={handleSelectModelTarget}
                 variant={showHeroComposer ? "hero" : "thread"}
                 slashCommands={slashCommands}
@@ -1274,6 +1286,7 @@ export function ThreadShell({
                   activeTarget={activeTarget}
                   modelTargets={modelTargets}
                   modelTargetPending={modelTargetPending}
+                  loadLocalLlmStatus={loadLocalLlmStatus}
                   onSelectModelTarget={handleSelectModelTarget}
                   variant="hero"
                   slashCommands={slashCommands}

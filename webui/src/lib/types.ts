@@ -375,6 +375,7 @@ export interface SessionMessagesResponse {
   messages: Array<{
     role: string;
     content: string;
+    turn_id?: string;
     metadata?: {
       render_as?: "text";
     };
@@ -442,6 +443,34 @@ export interface SettingsUpdate {
   provider?: string;
 }
 
+export interface LocalLlmTargetStatus {
+  name: "lfm2" | "qwen36";
+  label: string;
+  provider?: string;
+  runtime: string;
+  model: string;
+  api_base: string;
+  launchd_label: string;
+  running: boolean;
+  endpoint_ok: boolean;
+  is_default: boolean;
+}
+
+export interface LocalLlmStatusPayload {
+  default_target: string | null;
+  default_model: string | null;
+  default_api_base: string | null;
+  targets: LocalLlmTargetStatus[];
+}
+
+export interface LocalLlmActionResponse {
+  ok: boolean;
+  action: "start" | "stop" | "restart" | "smoke" | "use";
+  target: string;
+  message: string;
+  requires_restart?: boolean;
+}
+
 export interface SlashCommand {
   command: string;
   title: string;
@@ -477,16 +506,19 @@ export type InboundEvent =
       /** Present when the frame is an agent breadcrumb (e.g. tool hint,
        * generic progress line) rather than a conversational reply. */
       kind?: "tool_hint" | "progress" | "tool_approval" | "remote_user";
+      turn_id?: string;
     }
   | {
       event: "delta";
       chat_id: string;
       text: string;
+      turn_id?: string;
       stream_id?: string;
     }
   | {
       event: "stream_end";
       chat_id: string;
+      turn_id?: string;
       stream_id?: string;
       response_model?: string;
       active_target?: string;

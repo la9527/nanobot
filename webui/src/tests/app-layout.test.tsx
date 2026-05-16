@@ -414,6 +414,76 @@ describe("App layout", () => {
     );
   });
 
+  it("refreshes the REST token when settings hits an expired bearer token", async () => {
+    vi.mocked(fetchBootstrap).mockClear();
+    vi.mocked(fetchBootstrap)
+      .mockResolvedValueOnce({
+        token: "tok-1",
+        ws_path: "/",
+        expires_in: 300,
+        model_name: "openai/gpt-5.4",
+        active_target: "default",
+        model_targets: [],
+      })
+      .mockResolvedValueOnce({
+        token: "tok-2",
+        ws_path: "/",
+        expires_in: 300,
+        model_name: "openai/gpt-5.4",
+        active_target: "default",
+        model_targets: [],
+      });
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const authHeader = (init?.headers as Record<string, string> | undefined)?.Authorization;
+      if (String(input).includes("/api/settings") && authHeader === "Bearer tok-1") {
+        return {
+          ok: false,
+          status: 401,
+          json: async () => ({}),
+        };
+      }
+      if (String(input).includes("/api/settings") && authHeader === "Bearer tok-2") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            agent: {
+              model: "openai/gpt-5.4",
+              provider: "auto",
+              resolved_provider: "openai",
+              has_api_key: true,
+            },
+            providers: [
+              { name: "auto", label: "Auto" },
+              { name: "openai", label: "OpenAI" },
+            ],
+            runtime: { config_path: "/tmp/config.json" },
+            requires_restart: false,
+          }),
+        };
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    await waitFor(() => expect(connectSpy).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("button", { name: "Open settings" }));
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: "General" })).toBeInTheDocument());
+  expect(fetchBootstrap).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/api/settings"),
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Bearer tok-2",
+        }),
+      }),
+    );
+  });
+
   it("uses bootstrap model_name instead of active_target for the default model label", async () => {
     mockSessions = [
       {

@@ -590,6 +590,180 @@ describe("ThreadShell", () => {
     });
   });
 
+  it("checks local LLM status when opening the smart-router model picker", async () => {
+    const user = userEvent.setup();
+    const client = makeClient();
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/commands")) {
+          return httpJson({ commands: [] });
+        }
+        if (url.includes("/api/sessions/websocket%3Achat-local/model-target") && !url.includes("/select")) {
+          return httpJson({
+            key: "websocket:chat-local",
+            active_target: "smart-router",
+            target: { name: "smart-router", kind: "smart_router" },
+          });
+        }
+        if (url.includes("/api/local-llm/status")) {
+          return httpJson({
+            default_target: "lfm2",
+            default_model: "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0",
+            default_api_base: "http://127.0.0.1:1242/v1",
+            targets: [
+              {
+                name: "lfm2",
+                label: "LFM2",
+                provider: "llama.cpp",
+                runtime: "llama.cpp",
+                model: "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0",
+                api_base: "http://127.0.0.1:1242/v1",
+                launchd_label: "com.nanobot.local-model-lfm2",
+                running: true,
+                endpoint_ok: true,
+                is_default: true,
+              },
+            ],
+          });
+        }
+        return {
+          ok: false,
+          status: 404,
+          json: async () => ({}),
+        };
+      }),
+    );
+
+    render(
+      <ClientProvider
+        client={client as unknown as import("@/lib/nanobot-client").NanobotClient}
+        token="tok"
+        activeTarget="smart-router"
+        modelTargets={[
+          { name: "smart-router", kind: "smart_router", display_name: "Auto", group: "smart-router", smart_router_mode: "auto" },
+          { name: "smart-router-local", kind: "smart_router", provider: "vllm", model: "mlx-community/Qwen3.6-35B-A3B-4bit", display_name: "Local", group: "smart-router", smart_router_mode: "local" },
+          { name: "smart-router-mini", kind: "smart_router", provider: "openrouter", model: "openai/gpt-5.4-mini", display_name: "Mini", group: "smart-router", smart_router_mode: "mini" },
+          { name: "smart-router-full", kind: "smart_router", provider: "openrouter", model: "openai/gpt-5.4", display_name: "Full", group: "smart-router", smart_router_mode: "full" },
+        ]}
+      >
+        <ThreadShell
+          session={session("chat-local")}
+          title="Chat chat-local"
+          onToggleSidebar={() => {}}
+          onGoHome={() => {}}
+          onNewChat={vi.fn().mockResolvedValue("chat-local")}
+        />
+      </ClientProvider>,
+    );
+
+    await user.click(await screen.findByRole("button", { name: "Choose model target" }));
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith(
+        "/api/local-llm/status",
+        expect.objectContaining({ headers: { Authorization: "Bearer tok" } }),
+      );
+    });
+    expect(await screen.findByText("Automatic model selection")).toBeInTheDocument();
+    expect(screen.getByText("llama.cpp -> LiquidAI/LFM2-24B-A2B-GGUF:Q4_0")).toBeInTheDocument();
+  });
+
+  it("shows the resolved model label for smart-router-local", async () => {
+    const client = makeClient();
+    const onNewChat = vi.fn().mockResolvedValue("chat-a");
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/sessions/websocket%3Achat-a/model-target")) {
+        return httpJson({
+          key: "websocket:chat-a",
+          active_target: "smart-router-local",
+          target: {
+            name: "smart-router-local",
+            kind: "smart_router",
+            provider: "vllm",
+            model: "mlx-community/Qwen3.6-35B-A3B-4bit",
+            description: "smart-router forced local tier (mlx-community/Qwen3.6-35B-A3B-4bit)",
+            display_name: "Local",
+            group: "smart-router",
+            smart_router_mode: "local",
+          },
+        });
+      }
+      return {
+        ok: false,
+        status: 404,
+        json: async () => ({}),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <ClientProvider
+        client={client as unknown as import("@/lib/nanobot-client").NanobotClient}
+        token="tok"
+      >
+        <ThreadShell
+          session={session("chat-a")}
+          title="Chat chat-a"
+          onToggleSidebar={() => {}}
+          onGoHome={() => {}}
+          onNewChat={onNewChat}
+        />
+      </ClientProvider>,
+    );
+
+    expect(await screen.findByText("Local")).toBeInTheDocument();
+  });
+
+  it("shows the resolved model label for direct local targets", async () => {
+    const client = makeClient();
+    const onNewChat = vi.fn().mockResolvedValue("chat-b");
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/sessions/websocket%3Achat-b/model-target")) {
+        return httpJson({
+          key: "websocket:chat-b",
+          active_target: "local-llm",
+          target: {
+            name: "local-llm",
+            kind: "provider_model",
+            provider: "vllm",
+            model: "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0",
+            description: "current local runtime (LiquidAI/LFM2-24B-A2B-GGUF:Q4_0)",
+          },
+        });
+      }
+      return {
+        ok: false,
+        status: 404,
+        json: async () => ({}),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <ClientProvider
+        client={client as unknown as import("@/lib/nanobot-client").NanobotClient}
+        token="tok"
+      >
+        <ThreadShell
+          session={session("chat-b")}
+          title="Chat chat-b"
+          onToggleSidebar={() => {}}
+          onGoHome={() => {}}
+          onNewChat={onNewChat}
+        />
+      </ClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("LFM2-24B-A2B-GGUF:Q4_0")).toBeInTheDocument();
+    });
+  });
+
   it("does not cache optimistic messages under the next chat during a session switch", async () => {
     const client = makeClient();
     const onNewChat = vi.fn().mockResolvedValue("chat-b");

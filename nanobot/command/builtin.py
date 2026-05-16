@@ -142,6 +142,13 @@ BUILTIN_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
         "[name|list|clear]",
     ),
     BuiltinCommandSpec(
+        "/local-llm",
+        "Manage local LLM",
+        "Show or control local LLM runtime.",
+        "bot",
+        "[status|start|stop|restart|smoke|use|confirm] [lfm2|qwen36]",
+    ),
+    BuiltinCommandSpec(
         "/usage",
         "Set usage details",
         "Show or change the token usage detail level.",
@@ -441,6 +448,81 @@ async def cmd_model(ctx: CommandContext) -> OutboundMessage:
         channel=ctx.msg.channel,
         chat_id=ctx.msg.chat_id,
         content="\n".join(lines),
+        metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+    )
+
+
+async def cmd_local_llm(ctx: CommandContext) -> OutboundMessage:
+    """Show or control the local LLM runtime and default local route."""
+    from nanobot.local_llm_control import LocalLlmError, default_controller
+
+    args = ctx.args.strip().lower()
+    parts = args.split()
+    action = parts[0] if parts else "status"
+    target = parts[1] if len(parts) > 1 else "qwen36"
+    controller = default_controller()
+    confirm_actions = {"restart", "stop", "use"}
+
+    def _render_status(payload: dict[str, Any]) -> str:
+        lines = [
+            "## Local LLM",
+            "",
+            f"Default: `{payload.get('default_target')}` -> {payload.get('default_model')}",
+            f"Endpoint: {payload.get('default_api_base')}",
+            "",
+        ]
+        for row in payload.get("targets", []):
+            if not isinstance(row, dict):
+                continue
+            markers: list[str] = []
+            markers.append("running" if row.get("running") else "stopped")
+            markers.append("endpoint ok" if row.get("endpoint_ok") else "endpoint unavailable")
+            if row.get("is_default"):
+                markers.append("default")
+            prefix = "*" if row.get("is_default") else "-"
+            lines.append(f"{prefix} `{row.get('name')}` — {', '.join(markers)}")
+        lines.extend([
+            "",
+            "Use `/local-llm use qwen36` to change the default local LLM.",
+            "Use `/model smart-router-local` to force the local tier for this chat.",
+        ])
+        return "\n".join(lines)
+
+    try:
+        if action in ("", "status", "list"):
+            content = _render_status(controller.status())
+        else:
+            if action == "confirm":
+                action = parts[1] if len(parts) > 1 else ""
+                target = parts[2] if len(parts) > 2 else "qwen36"
+            elif action in confirm_actions:
+                content = _t("local_llm.confirm.required", action=action, target=target)
+                return OutboundMessage(
+                    channel=ctx.msg.channel,
+                    chat_id=ctx.msg.chat_id,
+                    content=content,
+                    metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+                )
+            result = controller.run_action(action, target)
+            lines = [
+                "## Local LLM",
+                "",
+                result.get("message") or f"{action} {target} completed.",
+            ]
+            if result.get("requires_restart"):
+                lines.extend([
+                    "",
+                    "Restart Nanobot to apply this to new runtime config.",
+                    "Use `/restart` when ready.",
+                ])
+            content = "\n".join(lines)
+    except LocalLlmError as exc:
+        content = "\n".join(["## Local LLM", "", str(exc)])
+
+    return OutboundMessage(
+        channel=ctx.msg.channel,
+        chat_id=ctx.msg.chat_id,
+        content=content,
         metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
     )
 
@@ -2313,6 +2395,8 @@ def register_builtin_commands(router: CommandRouter) -> None:
     router.prefix("/context ", cmd_context)
     router.exact("/model", cmd_model)
     router.prefix("/model ", cmd_model)
+    router.exact("/local-llm", cmd_local_llm)
+    router.prefix("/local-llm ", cmd_local_llm)
     router.exact("/status", cmd_status)
     router.exact("/usage", cmd_usage)
     router.prefix("/usage ", cmd_usage)

@@ -270,7 +270,9 @@
       "auto": "Auto",
       "local": "Local",
       "mini": "Mini",
-      "full": "Full"
+      "full": "Full",
+      "autoDescription": "Automatic model selection",
+      "localLoadingDescription": "Loading local LLM status..."
     },
     "inlineAction": {
       "label": {
@@ -697,7 +699,8 @@
     "sections": {
       "assistant": "Defaults",
       "themes": "Themes",
-      "interface": "Interface"
+      "interface": "Interface",
+      "localLlm": "Local LLM"
     },
     "rows": {
       "defaultProvider": "Default provider",
@@ -719,6 +722,43 @@
       "unsaved": "Unsaved changes.",
       "save": "Save",
       "saving": "Saving"
+    },
+    "localLlm": {
+      "loading": "Loading local LLM status...",
+      "modelSelector": "Local model",
+      "modelSelectAria": "Select local LLM model",
+      "defaultRoute": "Default local route: {{target}}",
+      "statusUnavailable": "Local LLM status unavailable",
+      "running": "Running",
+      "stopped": "Stopped",
+      "state": {
+        "running": "Running",
+        "starting": "Starting",
+        "stopped": "Stopped"
+      },
+      "endpointOk": "Endpoint OK",
+      "endpointUnavailable": "Endpoint unavailable",
+      "defaultBadge": "Default",
+      "currentDefault": "Current default",
+      "lastAction": "Last action",
+      "details": {
+        "runtime": "Runtime",
+        "endpoint": "Endpoint",
+        "launchd": "Launchd",
+        "activeModel": "Model"
+      },
+      "actions": {
+        "start": "Start",
+        "stop": "Stop",
+        "restart": "Restart",
+        "smoke": "Check response",
+        "use": "Use as default"
+      },
+      "confirm": {
+        "stop": "Stop {{target}} local model?",
+        "restart": "Restart {{target}} local model?",
+        "use": "Set {{target}} as the default local LLM?"
+      }
     }
   },
   "dashboard": {

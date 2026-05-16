@@ -340,6 +340,180 @@ describe("ThreadShell linked sessions", () => {
     expect(screen.getAllByText("telegram assistant answer")).toHaveLength(1);
   });
 
+  it("does not duplicate a delayed telegram local-model reply after history refresh", async () => {
+    const client = makeClient();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("telegram%3A12345/messages")) {
+          return httpJson({
+            key: "telegram:12345",
+            created_at: null,
+            updated_at: null,
+            messages: [
+              { role: "user", content: "현재 어떤 모델을 사용하고 있지?" },
+              {
+                role: "assistant",
+                content: "현재 사용 중인 모델은 mlx-community/Qwen3.6-35B-A3B-4bit 입니다.",
+                timestamp: "2026-05-17T01:00:00Z",
+                visible_reasoning: "답변 방향을 정리한 뒤 응답했습니다.",
+              },
+            ],
+          });
+        }
+        return {
+          ok: false,
+          status: 404,
+          json: async () => ({}),
+        };
+      }),
+    );
+
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={telegramSession("12345")}
+          title="Telegram 12345"
+          onToggleSidebar={() => {}}
+          onGoHome={() => {}}
+          onNewChat={vi.fn().mockResolvedValue("chat-a")}
+        />,
+      ),
+    );
+
+    await waitFor(() => {
+      expect(screen.getAllByText("현재 사용 중인 모델은 mlx-community/Qwen3.6-35B-A3B-4bit 입니다.")).toHaveLength(1);
+    });
+
+    act(() => {
+      client._emitChat("telegram:12345", {
+        event: "message",
+        chat_id: "telegram:12345",
+        text: "현재 사용 중인 모델은 mlx-community/Qwen3.6-35B-A3B-4bit 입니다.",
+      });
+    });
+
+    expect(screen.getAllByText("현재 사용 중인 모델은 mlx-community/Qwen3.6-35B-A3B-4bit 입니다.")).toHaveLength(1);
+  });
+
+  it("does not duplicate a telegram assistant reply when websocket metadata differs from persisted history", async () => {
+    const client = makeClient();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("telegram%3A12345/messages")) {
+          return httpJson({
+            key: "telegram:12345",
+            created_at: null,
+            updated_at: null,
+            messages: [
+              { role: "user", content: "현재 어떤 모델을 사용하고 있지?" },
+              {
+                role: "assistant",
+                content: "현재 사용 중인 모델은 mlx-community/Qwen3.6-35B-A3B-4bit 입니다.",
+                visible_reasoning: "답변 방향을 정리한 뒤 응답했습니다.",
+              },
+            ],
+          });
+        }
+        return {
+          ok: false,
+          status: 404,
+          json: async () => ({}),
+        };
+      }),
+    );
+
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={telegramSession("12345")}
+          title="Telegram 12345"
+          onToggleSidebar={() => {}}
+          onGoHome={() => {}}
+          onNewChat={vi.fn().mockResolvedValue("chat-a")}
+        />,
+      ),
+    );
+
+    await waitFor(() => {
+      expect(screen.getAllByText("현재 사용 중인 모델은 mlx-community/Qwen3.6-35B-A3B-4bit 입니다.")).toHaveLength(1);
+    });
+
+    act(() => {
+      client._emitChat("telegram:12345", {
+        event: "message",
+        chat_id: "telegram:12345",
+        text: "현재 사용 중인 모델은 mlx-community/Qwen3.6-35B-A3B-4bit 입니다.",
+        render_as: "text",
+      });
+    });
+
+    expect(screen.getAllByText("현재 사용 중인 모델은 mlx-community/Qwen3.6-35B-A3B-4bit 입니다.")).toHaveLength(1);
+  });
+
+  it("does not duplicate a telegram assistant reply when the websocket copy only adds a status footer", async () => {
+    const client = makeClient();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("telegram%3A12345/messages")) {
+          return httpJson({
+            key: "telegram:12345",
+            created_at: null,
+            updated_at: null,
+            messages: [
+              { role: "user", content: "현재 어떤 모델을 사용하고 있지?" },
+              {
+                role: "assistant",
+                content: "현재 사용 중인 모델은 mlx-community/Qwen3.6-35B-A3B-4bit 입니다.",
+                visible_reasoning: "답변 방향을 정리한 뒤 응답했습니다.",
+              },
+            ],
+          });
+        }
+        return {
+          ok: false,
+          status: 404,
+          json: async () => ({}),
+        };
+      }),
+    );
+
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={telegramSession("12345")}
+          title="Telegram 12345"
+          onToggleSidebar={() => {}}
+          onGoHome={() => {}}
+          onNewChat={vi.fn().mockResolvedValue("chat-a")}
+        />,
+      ),
+    );
+
+    await waitFor(() => {
+      expect(screen.getAllByText("현재 사용 중인 모델은 mlx-community/Qwen3.6-35B-A3B-4bit 입니다.")).toHaveLength(1);
+    });
+
+    act(() => {
+      client._emitChat("telegram:12345", {
+        event: "message",
+        chat_id: "telegram:12345",
+        text: "현재 사용 중인 모델은 mlx-community/Qwen3.6-35B-A3B-4bit 입니다.\n\nStatus: model=smart-router-local | tokens=🔵55431 in/🟢47 out",
+      });
+    });
+
+    expect(screen.getAllByText("현재 사용 중인 모델은 mlx-community/Qwen3.6-35B-A3B-4bit 입니다.")).toHaveLength(1);
+    expect(screen.getByText(/tokens=🔵55431 in\/🟢47 out/)).toBeInTheDocument();
+  });
+
   it("renders telegram remote user turns immediately through websocket mirror events", async () => {
     const client = makeClient();
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {

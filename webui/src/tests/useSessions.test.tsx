@@ -273,6 +273,34 @@ describe("useSessions", () => {
     });
   });
 
+  it("hydrates persisted assistant turn_id as the UI message id", async () => {
+    vi.mocked(api.fetchSessionMessages).mockResolvedValue({
+      key: "telegram:12345",
+      created_at: "2026-05-17T10:00:00Z",
+      updated_at: "2026-05-17T10:05:00Z",
+      messages: [
+        {
+          role: "assistant",
+          content: "history answer",
+          timestamp: "2026-05-17T10:00:01Z",
+          turn_id: "turn-history-123",
+        } as unknown as import("@/lib/types").SessionMessagesResponse["messages"][number],
+      ],
+    });
+
+    const { result } = renderHook(() => useSessionHistory("telegram:12345"), {
+      wrapper: wrap(fakeClient()),
+    });
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.messages[0]).toMatchObject({
+      id: "turn-history-123",
+      role: "assistant",
+      content: "history answer",
+    });
+  });
+
   it("polls active telegram sessions so remote messages appear without a manual refresh", async () => {
     vi.useFakeTimers();
     vi.mocked(api.fetchSessionMessages)

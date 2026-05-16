@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ChevronLeft, Loader2, Minus, Moon, Plus, Sun } from "lucide-react";
+import { Activity, CheckCircle2, ChevronLeft, Circle, Loader2, Minus, Moon, Play, Plus, RotateCw, Square, Star, Sun, Zap } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { fetchSettings, updateSettings } from "@/lib/api";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { fetchLocalLlmStatus, fetchSettings, runLocalLlmAction, updateSettings } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useClient } from "@/providers/ClientProvider";
-import type { ReasoningVisibility, SettingsPayload } from "@/lib/types";
+import type { LocalLlmStatusPayload, LocalLlmTargetStatus, ReasoningVisibility, SettingsPayload } from "@/lib/types";
 
 interface SettingsViewProps {
   theme: "light" | "dark";
@@ -45,6 +46,10 @@ export function SettingsView({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [localLlm, setLocalLlm] = useState<LocalLlmStatusPayload | null>(null);
+  const [localLlmError, setLocalLlmError] = useState<string | null>(null);
+  const [localLlmBusy, setLocalLlmBusy] = useState<string | null>(null);
+  const [localLlmMessage, setLocalLlmMessage] = useState<string | null>(null);
   const [form, setForm] = useState({
     model: "",
     provider: "auto",
@@ -61,10 +66,17 @@ export function SettingsView({
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    fetchSettings(token)
-      .then((payload) => {
+    Promise.all([
+      fetchSettings(token),
+      fetchLocalLlmStatus(token).catch((err) => {
+        if (!cancelled) setLocalLlmError((err as Error).message);
+        return null;
+      }),
+    ])
+      .then(([payload, localPayload]) => {
         if (!cancelled) {
           applyPayload(payload);
+          setLocalLlm(localPayload);
           setError(null);
         }
       })
@@ -78,6 +90,30 @@ export function SettingsView({
       cancelled = true;
     };
   }, [applyPayload, token]);
+
+  const refreshLocalLlm = useCallback(async () => {
+    const payload = await fetchLocalLlmStatus(token);
+    setLocalLlm(payload);
+    setLocalLlmError(null);
+  }, [token]);
+
+  const runLocalAction = useCallback(async (action: string, target: string) => {
+    const confirmActions = new Set(["stop", "restart", "use"]);
+    if (confirmActions.has(action) && !window.confirm(t(`settings.localLlm.confirm.${action}`, { target }))) {
+      return;
+    }
+    const key = `${action}:${target}`;
+    setLocalLlmBusy(key);
+    try {
+      const result = await runLocalLlmAction(token, action, target);
+      setLocalLlmMessage(result.message);
+      await refreshLocalLlm();
+    } catch (err) {
+      setLocalLlmError((err as Error).message);
+    } finally {
+      setLocalLlmBusy(null);
+    }
+  }, [refreshLocalLlm, t, token]);
 
   const dirty = useMemo(() => {
     if (!settings) return false;
@@ -159,6 +195,11 @@ export function SettingsView({
             onIncreaseChatFont={onIncreaseChatFont}
             onLogout={onLogout}
             onRestart={onRestart}
+            localLlm={localLlm}
+            localLlmError={localLlmError}
+            localLlmBusy={localLlmBusy}
+            localLlmMessage={localLlmMessage}
+            onLocalLlmAction={runLocalAction}
           />
         ) : null}
       </main>
@@ -183,6 +224,11 @@ function SettingsSection({
   onIncreaseChatFont,
   onLogout,
   onRestart,
+  localLlm,
+  localLlmError,
+  localLlmBusy,
+  localLlmMessage,
+  onLocalLlmAction,
 }: {
   form: {
     model: string;
@@ -206,6 +252,11 @@ function SettingsSection({
   onIncreaseChatFont: () => void;
   onLogout?: () => void;
   onRestart?: () => void;
+  localLlm: LocalLlmStatusPayload | null;
+  localLlmError: string | null;
+  localLlmBusy: string | null;
+  localLlmMessage: string | null;
+  onLocalLlmAction: (action: string, target: string) => void;
 }) {
   const { t } = useTranslation();
   const canDecreaseFont = chatFontSize !== "sm";
@@ -262,6 +313,14 @@ function SettingsSection({
           ) : null}
         </SettingsGroup>
       </section>
+
+      <LocalLlmSection
+        payload={localLlm}
+        error={localLlmError}
+        busy={localLlmBusy}
+        message={localLlmMessage}
+        onAction={onLocalLlmAction}
+      />
 
       <section>
         <h2 className="mb-2 px-2 text-xs font-medium text-muted-foreground">{t("settings.sections.themes")}</h2>
@@ -367,6 +426,263 @@ function SettingsSection({
         </section>
       )}
     </div>
+  );
+}
+
+function LocalLlmSection({
+  payload,
+  error,
+  busy,
+  message,
+  onAction,
+}: {
+  payload: LocalLlmStatusPayload | null;
+  error: string | null;
+  busy: string | null;
+  message: string | null;
+  onAction: (action: string, target: string) => void;
+}) {
+  const { t } = useTranslation();
+  const [selectedName, setSelectedName] = useState<string>(payload?.default_target ?? "qwen36");
+
+  useEffect(() => {
+    if (!payload?.targets.length) return;
+    const selectedExists = payload.targets.some((target) => target.name === selectedName);
+    if (!selectedExists) {
+      setSelectedName(payload.default_target || payload.targets[0].name);
+    }
+  }, [payload, selectedName]);
+
+  const selectedTarget = payload?.targets.find((target) => target.name === selectedName)
+    ?? payload?.targets.find((target) => target.name === payload.default_target)
+    ?? payload?.targets[0]
+    ?? null;
+
+  return (
+    <section>
+      <h2 className="mb-2 px-2 text-xs font-medium text-muted-foreground">{t("settings.sections.localLlm")}</h2>
+      <SettingsGroup>
+        <div className="space-y-4 px-3 py-3.5">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0">
+              <div className="text-sm font-medium leading-5">{t("settings.localLlm.modelSelector")}</div>
+              <div className="mt-1 truncate text-xs text-muted-foreground">
+                {payload ? t("settings.localLlm.defaultRoute", { target: payload.default_target }) : t("settings.localLlm.loading")}
+              </div>
+            </div>
+            <select
+              aria-label={t("settings.localLlm.modelSelectAria")}
+              value={selectedTarget?.name ?? ""}
+              onChange={(event) => setSelectedName(event.target.value)}
+              disabled={!payload?.targets.length}
+              className={cn(
+                "h-9 w-full rounded-md border border-input bg-background px-3 text-sm sm:w-[280px]",
+                "outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring",
+              )}
+            >
+              {payload?.targets.map((target) => (
+                <option key={target.name} value={target.name}>
+                  {target.label} · {target.is_default ? t("settings.localLlm.defaultBadge") : target.running ? t("settings.localLlm.running") : t("settings.localLlm.stopped")}
+                </option>
+              )) ?? (
+                <option value="">{t("settings.localLlm.loading")}</option>
+              )}
+            </select>
+          </div>
+
+          {selectedTarget ? (
+            <LocalLlmTargetPanel
+              target={selectedTarget}
+              defaultModel={payload?.default_model ?? ""}
+              busy={busy}
+              onAction={onAction}
+            />
+          ) : null}
+        </div>
+        {error ? (
+          <SettingsRow title={t("settings.localLlm.statusUnavailable")}>
+            <span className="max-w-[360px] text-sm text-muted-foreground">{error}</span>
+          </SettingsRow>
+        ) : null}
+        {message ? (
+          <SettingsRow title={t("settings.localLlm.lastAction")}>
+            <span className="max-w-[360px] text-sm text-muted-foreground">{message}</span>
+          </SettingsRow>
+        ) : null}
+      </SettingsGroup>
+    </section>
+  );
+}
+
+function LocalLlmTargetPanel({
+  target,
+  defaultModel,
+  busy,
+  onAction,
+}: {
+  target: LocalLlmTargetStatus;
+  defaultModel: string;
+  busy: string | null;
+  onAction: (action: string, target: string) => void;
+}) {
+  const { t } = useTranslation();
+  const targetBusy = (action: string) => busy === `${action}:${target.name}`;
+  const state = getLocalLlmState(target, busy);
+  const stateLabel = t(`settings.localLlm.state.${state}`);
+  const toggleAction = target.running ? "stop" : "start";
+  const toggleBusy = targetBusy("start") || targetBusy("stop");
+  const toggleTone = state === "starting" ? "starting" : target.running ? "stopped" : "running";
+  const toggleLabel = t(`settings.localLlm.actions.${toggleAction}`);
+
+  return (
+    <TooltipProvider delayDuration={0}>
+      <div className="rounded-lg border border-border/50 bg-background/45 p-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <div className="truncate text-base font-semibold leading-6">{target.label}</div>
+              {target.is_default ? (
+                <StatusIcon label={t("settings.localLlm.defaultBadge")} tone="default" icon={<Star className="size-3.5 fill-current" />} />
+              ) : null}
+            </div>
+            <div className="mt-1 truncate text-xs text-muted-foreground" title={target.model}>
+              {target.model}
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <StatusIcon
+              label={stateLabel}
+              tone={state}
+              icon={state === "starting" ? <Loader2 className="size-3.5 animate-spin" /> : state === "running" ? <CheckCircle2 className="size-3.5" /> : <Circle className="size-3.5 fill-current" />}
+            />
+            <StatusIcon
+              label={target.endpoint_ok ? t("settings.localLlm.endpointOk") : t("settings.localLlm.endpointUnavailable")}
+              tone={target.endpoint_ok ? "running" : "stopped"}
+              icon={<Zap className="size-3.5" />}
+            />
+          </div>
+        </div>
+
+        <div className="mt-3 grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
+          <LocalLlmDetail label={t("settings.localLlm.details.runtime")} value={target.runtime} />
+          <LocalLlmDetail label={t("settings.localLlm.details.endpoint")} value={target.api_base} />
+          <LocalLlmDetail label={t("settings.localLlm.details.launchd")} value={target.launchd_label} />
+          <LocalLlmDetail label={t("settings.localLlm.details.activeModel")} value={target.is_default ? defaultModel : target.model} />
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+          <Button
+            type="button"
+            size="sm"
+            variant={target.is_default ? "secondary" : "outline"}
+            onClick={() => onAction("use", target.name)}
+            disabled={target.is_default || targetBusy("use")}
+            className="gap-2"
+          >
+            {targetBusy("use") ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Star className={cn("size-4", target.is_default ? "fill-current" : undefined)} aria-hidden />}
+            {target.is_default ? t("settings.localLlm.currentDefault") : t("settings.localLlm.actions.use")}
+          </Button>
+          <div className="flex items-center gap-2">
+            <LocalLlmIconButton label={toggleLabel} onClick={() => onAction(toggleAction, target.name)} disabled={toggleBusy} busy={toggleBusy} tone={toggleTone}>
+              {target.running ? <Square className="size-4" aria-hidden /> : <Play className="size-4" aria-hidden />}
+            </LocalLlmIconButton>
+            <LocalLlmIconButton label={t("settings.localLlm.actions.restart")} onClick={() => onAction("restart", target.name)} disabled={targetBusy("restart")} busy={targetBusy("restart")} tone="starting">
+              <RotateCw className="size-4" aria-hidden />
+            </LocalLlmIconButton>
+            <LocalLlmIconButton label={t("settings.localLlm.actions.smoke")} onClick={() => onAction("smoke", target.name)} disabled={targetBusy("smoke")} busy={targetBusy("smoke")} tone="checking">
+              <Activity className="size-4" aria-hidden />
+            </LocalLlmIconButton>
+          </div>
+        </div>
+      </div>
+    </TooltipProvider>
+  );
+}
+
+function getLocalLlmState(target: LocalLlmTargetStatus, busy: string | null): "running" | "starting" | "stopped" {
+  const isMutating = ["start", "restart", "use"].some((action) => busy === `${action}:${target.name}`);
+  if (isMutating) return "starting";
+  return target.running ? "running" : "stopped";
+}
+
+function StatusIcon({
+  label,
+  tone,
+  icon,
+}: {
+  label: string;
+  tone: "running" | "starting" | "stopped" | "checking" | "default";
+  icon: React.ReactNode;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          aria-label={label}
+          className={cn(
+            "inline-flex size-8 items-center justify-center rounded-full border",
+            tone === "running" ? "border-emerald-500/35 bg-emerald-500/10 text-emerald-400" : undefined,
+            tone === "starting" ? "border-amber-500/35 bg-amber-500/10 text-amber-300" : undefined,
+            tone === "stopped" ? "border-red-500/35 bg-red-500/10 text-red-400" : undefined,
+            tone === "checking" ? "border-sky-500/35 bg-sky-500/10 text-sky-300" : undefined,
+            tone === "default" ? "border-yellow-500/35 bg-yellow-500/10 text-yellow-300" : undefined,
+          )}
+        >
+          {icon}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="bottom">{label}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+function LocalLlmDetail({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0 rounded-md border border-border/40 bg-card/40 px-2.5 py-2">
+      <div className="text-[11px] font-medium uppercase text-muted-foreground/75">{label}</div>
+      <div className="mt-1 truncate font-mono text-[12px] text-foreground/80" title={value}>{value}</div>
+    </div>
+  );
+}
+
+function LocalLlmIconButton({
+  label,
+  onClick,
+  disabled,
+  busy,
+  tone,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  disabled: boolean;
+  busy: boolean;
+  tone: "running" | "starting" | "stopped" | "checking";
+  children: React.ReactNode;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          type="button"
+          size="icon"
+          variant="outline"
+          aria-label={label}
+          onClick={onClick}
+          disabled={disabled}
+          className={cn(
+            "h-9 w-9 rounded-full",
+            tone === "running" ? "text-emerald-400 hover:text-emerald-300" : undefined,
+            tone === "starting" ? "text-amber-300 hover:text-amber-200" : undefined,
+            tone === "stopped" ? "text-red-400 hover:text-red-300" : undefined,
+            tone === "checking" ? "text-sky-300 hover:text-sky-200" : undefined,
+          )}
+        >
+          {busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : children}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom">{label}</TooltipContent>
+    </Tooltip>
   );
 }
 

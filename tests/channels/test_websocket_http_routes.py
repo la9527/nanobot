@@ -12,6 +12,7 @@ import pytest
 
 from nanobot.bus.events import OutboundMessage
 from nanobot.channels.websocket import WebSocketChannel
+from nanobot.i18n import translate
 from nanobot.session.manager import Session, SessionManager
 
 _PORT = 29900
@@ -151,6 +152,8 @@ async def test_bootstrap_resolves_env_backed_model_target_strings(
         rows = {row["name"]: row for row in body["model_targets"]}
         assert rows["local-llm"]["model"] == "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0"
         assert rows["local-llm"]["description"] == "current local runtime (LiquidAI/LFM2-24B-A2B-GGUF:Q4_0)"
+        assert rows["smart-router-local"]["provider"] == "vllm"
+        assert rows["smart-router-local"]["model"] == "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0"
         assert rows["smart-router-local"]["description"] == (
             "smart-router forced local tier (LiquidAI/LFM2-24B-A2B-GGUF:Q4_0)"
         )
@@ -217,6 +220,74 @@ async def test_settings_route_resolves_env_backed_local_model_and_preserves_conf
         saved = json.loads(config_path.read_text(encoding="utf-8"))
         assert saved["agents"]["defaults"]["model"] == "${LOCAL_LLM_MODEL}"
         assert saved["agents"]["defaults"]["provider"] == "vllm"
+    finally:
+        await channel.stop()
+        await server_task
+
+
+@pytest.mark.asyncio
+async def test_local_llm_routes_share_status_and_action_contract(
+    bus: MagicMock,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sm = _seed_session(tmp_path)
+
+    class _FakeLocalLlmController:
+        def status(self) -> dict[str, Any]:
+            return {
+                "default_target": "qwen36",
+                "default_model": "mlx-community/Qwen3.6-35B-A3B-4bit",
+                "default_api_base": "http://127.0.0.1:1246/v1",
+                "targets": [
+                    {
+                        "name": "qwen36",
+                        "label": "Qwen3.6",
+                        "runtime": "mlx_lm.server",
+                        "model": "mlx-community/Qwen3.6-35B-A3B-4bit",
+                        "api_base": "http://127.0.0.1:1246/v1",
+                        "launchd_label": "com.nanobot.local-model-qwen36",
+                        "running": True,
+                        "endpoint_ok": True,
+                        "is_default": True,
+                    }
+                ],
+            }
+
+        def run_action(self, action: str, target: str) -> dict[str, Any]:
+            return {
+                "ok": True,
+                "action": action,
+                "target": target,
+                "message": f"{action} {target} completed",
+                "requires_restart": action == "use",
+            }
+
+    monkeypatch.setattr(
+        "nanobot.local_llm_control.default_controller",
+        lambda: _FakeLocalLlmController(),
+    )
+    channel = _ch(bus, session_manager=sm, port=29916)
+    server_task = asyncio.create_task(channel.start())
+    await asyncio.sleep(0.3)
+    try:
+        boot = await _http_get("http://127.0.0.1:29916/webui/bootstrap")
+        token = boot.json()["token"]
+        auth = {"Authorization": f"Bearer {token}"}
+
+        status = await _http_get("http://127.0.0.1:29916/api/local-llm/status", headers=auth)
+        assert status.status_code == 200
+        assert status.json()["default_target"] == "qwen36"
+
+        action = await _http_get("http://127.0.0.1:29916/api/local-llm/use/qwen36", headers=auth)
+        assert action.status_code == 200
+        assert action.json() == {
+            "ok": True,
+            "action": "use",
+            "target": "qwen36",
+            "message": "use qwen36 completed",
+            "requires_restart": True,
+        }
     finally:
         await channel.stop()
         await server_task
@@ -664,7 +735,7 @@ async def test_send_marks_remote_user_echo_kind_for_webui_mirrors(
             channel="websocket",
             chat_id="telegram:12345",
             content="fresh telegram push",
-            metadata={"_remote_user_echo": True},
+            metadata={"_remote_user_echo": True, "turn_id": "turn-wire-123"},
         )
     )
 
@@ -674,6 +745,7 @@ async def test_send_marks_remote_user_echo_kind_for_webui_mirrors(
     assert payload["chat_id"] == "telegram:12345"
     assert payload["kind"] == "remote_user"
     assert payload["text"] == "fresh telegram push"
+    assert payload["turn_id"] == "turn-wire-123"
 
 
 @pytest.mark.asyncio
@@ -910,7 +982,10 @@ async def test_sessions_list_exposes_minimal_task_summary_backbone(
         assert approval_task["title"] == "Approve sending the summary email."
         assert approval_task["origin_channel"] == "telegram"
         assert approval_task["origin_session_key"] == "telegram:12345"
-        assert approval_task["next_step_hint"] == "Review the pending approval request."
+        assert approval_task["next_step_hint"] == translate(
+            "task_summary.next_step.review_pending_approval",
+            locale="ko",
+        )
 
         proactive_summary = rows["telegram:12345"]["metadata"]["proactive_summary"]
         assert proactive_summary["status"] == "suppressed"
@@ -922,7 +997,10 @@ async def test_sessions_list_exposes_minimal_task_summary_backbone(
         assert blocked_task["task_id"] == "session:websocket:beta"
         assert blocked_task["status"] == "blocked"
         assert blocked_task["origin_channel"] == "websocket"
-        assert blocked_task["next_step_hint"] == "Reopen the interrupted session and continue the task."
+        assert blocked_task["next_step_hint"] == translate(
+            "task_summary.next_step.reopen_blocked",
+            locale="ko",
+        )
 
         completed_task = rows["websocket:alpha"]["metadata"]["task_summary"]
         assert completed_task["task_id"] == "session:websocket:alpha"

@@ -49,7 +49,7 @@ import {
 } from "@/hooks/useAttachedImages";
 import { useClipboardAndDrop } from "@/hooks/useClipboardAndDrop";
 import type { SendImage, SendOptions } from "@/hooks/useNanobotStream";
-import type { ModelTargetOption, SlashCommand } from "@/lib/types";
+import type { LocalLlmStatusPayload, ModelTargetOption, SlashCommand } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 /** ``<input accept>``: aligned with the server's MIME whitelist. SVG is
@@ -68,11 +68,38 @@ function resizeTextareaElement(el: HTMLTextAreaElement | null) {
   el.style.height = `${Math.min(el.scrollHeight, 260)}px`;
 }
 
-function describeModelTarget(target: ModelTargetOption): string | null {
-  if (target.kind === "smart_router") {
-    return target.smart_router_mode === "auto"
-      ? "smart-router"
-      : `smart-router -> ${target.smart_router_mode ?? "auto"}`;
+function formatProviderModel(provider: string | null | undefined, model: string | null | undefined): string | null {
+  const normalizedProvider = typeof provider === "string" ? provider.trim() : "";
+  const normalizedModel = typeof model === "string" ? model.trim() : "";
+  if (normalizedProvider && normalizedModel) return `${normalizedProvider} -> ${normalizedModel}`;
+  if (normalizedModel) return normalizedModel;
+  if (normalizedProvider) return normalizedProvider;
+  return null;
+}
+
+function resolveLiveLocalTarget(status: LocalLlmStatusPayload | null): LocalLlmStatusPayload["targets"][number] | null {
+  if (!status) return null;
+  return status.targets.find((target) => target.is_default || target.name === status.default_target) ?? null;
+}
+
+function describeModelTarget(
+  target: ModelTargetOption,
+  localLlmStatus: LocalLlmStatusPayload | null,
+  autoDescription: string,
+  localLoadingDescription: string,
+): string | null {
+  if (target.group === "smart-router" || target.kind === "smart_router") {
+    if (target.smart_router_mode === "auto") {
+      return autoDescription;
+    }
+    if (target.smart_router_mode === "local") {
+      const liveLocalTarget = resolveLiveLocalTarget(localLlmStatus);
+      if (liveLocalTarget) {
+        return formatProviderModel(liveLocalTarget.provider ?? liveLocalTarget.runtime, liveLocalTarget.model);
+      }
+      return localLoadingDescription;
+    }
+    return formatProviderModel(target.provider, target.model);
   }
   const model = typeof target.model === "string" ? target.model.trim() : "";
   const provider = typeof target.provider === "string" ? target.provider.trim() : "";
@@ -116,6 +143,7 @@ interface ThreadComposerProps {
   activeTarget?: string | null;
   modelTargets?: ModelTargetOption[];
   modelTargetPending?: boolean;
+  loadLocalLlmStatus?: () => Promise<LocalLlmStatusPayload>;
   onSelectModelTarget?: (targetName: string) => void | Promise<void>;
   variant?: "thread" | "hero";
   slashCommands?: SlashCommand[];
@@ -173,6 +201,7 @@ export function ThreadComposer({
   activeTarget = null,
   modelTargets = [],
   modelTargetPending = false,
+  loadLocalLlmStatus,
   onSelectModelTarget,
   variant = "thread",
   slashCommands = [],
@@ -190,6 +219,8 @@ export function ThreadComposer({
   const [uncontrolledImageMode, setUncontrolledImageMode] = useState(false);
   const [imageAspectRatio, setImageAspectRatio] = useState<ImageAspectRatio>("auto");
   const [aspectMenuOpen, setAspectMenuOpen] = useState(false);
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  const [localLlmStatus, setLocalLlmStatus] = useState<LocalLlmStatusPayload | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const aspectControlRef = useRef<HTMLDivElement>(null);
@@ -281,8 +312,14 @@ export function ThreadComposer({
     && !encoding
     && !hasErrors
     && (value.trim().length > 0 || readyImages.length > 0);
-  const canSelectModelTarget = !disabled && !modelTargetPending && modelTargets.length > 0 && !!onSelectModelTarget;
   const orderedTargets = useMemo(() => orderModelTargets(modelTargets), [modelTargets]);
+  const visibleTargets = useMemo(() => {
+    const smartRouterTargets = orderedTargets.filter((target) => target.group === "smart-router");
+    return smartRouterTargets.length > 0 ? smartRouterTargets : orderedTargets;
+  }, [orderedTargets]);
+  const canSelectModelTarget = !disabled && !modelTargetPending && visibleTargets.length > 0 && !!onSelectModelTarget;
+  const autoTargetDescription = t("thread.modelTarget.autoDescription");
+  const localTargetLoadingDescription = t("thread.modelTarget.localLoadingDescription");
 
   const slashQuery = useMemo(() => {
     if (disabled || slashMenuDismissed || !value.startsWith("/")) return null;
@@ -354,6 +391,23 @@ export function ThreadComposer({
       document.removeEventListener("wheel", closeOnWheel, true);
     };
   }, [aspectMenuOpen]);
+
+  useEffect(() => {
+    if (!modelMenuOpen || !loadLocalLlmStatus) return;
+    const needsLiveLocalStatus = visibleTargets.some((target) => target.smart_router_mode === "local");
+    if (!needsLiveLocalStatus) return;
+    let cancelled = false;
+    void loadLocalLlmStatus()
+      .then((status) => {
+        if (!cancelled) setLocalLlmStatus(status);
+      })
+      .catch(() => {
+        if (!cancelled) setLocalLlmStatus(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [loadLocalLlmStatus, modelMenuOpen, visibleTargets]);
 
   const resizeTextarea = useCallback(() => {
     requestAnimationFrame(() => {
@@ -744,7 +798,7 @@ export function ThreadComposer({
             </div>
             {modelLabel ? (
               canSelectModelTarget ? (
-                <DropdownMenu modal={false}>
+                <DropdownMenu modal={false} open={modelMenuOpen} onOpenChange={setModelMenuOpen}>
                   <DropdownMenuTrigger asChild>
                     <button
                       type="button"
@@ -780,16 +834,16 @@ export function ThreadComposer({
                         void onSelectModelTarget(value);
                       }}
                     >
-                      {orderedTargets.map((target) => (
+                      {visibleTargets.map((target) => (
                         <DropdownMenuRadioItem key={target.name} value={target.name}>
                           <span className="flex min-w-0 flex-col gap-0.5">
                             <span className="truncate font-medium">{displayModelTargetName(target)}</span>
-                            {describeModelTarget(target) ? (
+                            {describeModelTarget(target, localLlmStatus, autoTargetDescription, localTargetLoadingDescription) ? (
                               <span className="max-w-[15rem] whitespace-normal text-[11px] text-muted-foreground">
-                                {describeModelTarget(target)}
+                                {describeModelTarget(target, localLlmStatus, autoTargetDescription, localTargetLoadingDescription)}
                               </span>
                             ) : null}
-                            {target.description ? (
+                            {target.description && target.group !== "smart-router" ? (
                               <span className="max-w-[15rem] whitespace-normal text-xs text-muted-foreground">
                                 {target.description}
                               </span>

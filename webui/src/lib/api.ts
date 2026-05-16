@@ -1,5 +1,7 @@
 import type {
   ChatSummary,
+  LocalLlmActionResponse,
+  LocalLlmStatusPayload,
   SessionMessagesResponse,
   SessionModelTargetResponse,
   SettingsPayload,
@@ -16,19 +18,37 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(
-  url: string,
-  token: string,
-  init?: RequestInit,
-): Promise<T> {
-  const res = await fetch(url, {
+let apiTokenRefreshHandler: (() => Promise<string | null>) | null = null;
+
+export function setApiTokenRefreshHandler(
+  handler: (() => Promise<string | null>) | null,
+): void {
+  apiTokenRefreshHandler = handler;
+}
+
+function buildRequestInit(token: string, init?: RequestInit): RequestInit {
+  return {
     ...(init ?? {}),
     headers: {
       ...(init?.headers ?? {}),
       Authorization: `Bearer ${token}`,
     },
     credentials: "same-origin",
-  });
+  };
+}
+
+async function request<T>(
+  url: string,
+  token: string,
+  init?: RequestInit,
+): Promise<T> {
+  let res = await fetch(url, buildRequestInit(token, init));
+  if (res.status === 401 && apiTokenRefreshHandler) {
+    const refreshedToken = await apiTokenRefreshHandler();
+    if (refreshedToken) {
+      res = await fetch(url, buildRequestInit(refreshedToken, init));
+    }
+  }
   if (!res.ok) {
     throw new ApiError(res.status, `HTTP ${res.status}`);
   }
@@ -189,4 +209,23 @@ export async function updateSettings(
   if (update.model !== undefined) query.set("model", update.model);
   if (update.provider !== undefined) query.set("provider", update.provider);
   return request<SettingsPayload>(`${base}/api/settings/update?${query}`, token);
+}
+
+export async function fetchLocalLlmStatus(
+  token: string,
+  base: string = "",
+): Promise<LocalLlmStatusPayload> {
+  return request<LocalLlmStatusPayload>(`${base}/api/local-llm/status`, token);
+}
+
+export async function runLocalLlmAction(
+  token: string,
+  action: string,
+  target: string,
+  base: string = "",
+): Promise<LocalLlmActionResponse> {
+  return request<LocalLlmActionResponse>(
+    `${base}/api/local-llm/${encodeURIComponent(action)}/${encodeURIComponent(target)}`,
+    token,
+  );
 }

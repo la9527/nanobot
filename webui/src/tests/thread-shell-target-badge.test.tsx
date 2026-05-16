@@ -75,4 +75,27 @@ describe("ThreadShell target badge i18n", () => {
 
     expect(await screen.findByText("타깃 미니")).toBeInTheDocument();
   });
+
+  it("prefers the smart-router alias over the resolved model leaf when available", async () => {
+    render(
+      <ClientProvider
+        client={makeClient() as unknown as import("@/lib/nanobot-client").NanobotClient}
+        token="tok"
+        activeTarget="smart-router-mini"
+        modelName="openai/gpt-5.4-mini-2026-03-17"
+      >
+        <ThreadShell
+          session={session("chat-target-model")}
+          sessions={[]}
+          title="Chat chat-target-model"
+          onToggleSidebar={() => {}}
+          onGoHome={() => {}}
+          onNewChat={vi.fn().mockResolvedValue("chat-target-model")}
+        />
+      </ClientProvider>,
+    );
+
+    expect(await screen.findByText("타깃 미니")).toBeInTheDocument();
+    expect(screen.queryByText("타깃 gpt-5.4-mini-2026-03-17")).not.toBeInTheDocument();
+  });
 });

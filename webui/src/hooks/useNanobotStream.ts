@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useClient } from "@/providers/ClientProvider";
 import { createUuid } from "@/lib/uuid";
 import { toMediaAttachment } from "@/lib/media";
+import { areEquivalentAssistantMessages, pickPreferredAssistantMessage } from "@/lib/assistantMessageDedup";
 import type { StreamError } from "@/lib/nanobot-client";
 import type {
   InboundEvent,
@@ -18,8 +19,6 @@ interface StreamBuffer {
   /** Sequence of deltas accumulated in order. */
   parts: string[];
 }
-
-const LIVE_DUPLICATE_WINDOW_MS = 10_000;
 
 function hydrateInitialMessages(
   initialMessages: UIMessage[],
@@ -157,7 +156,7 @@ export function useNanobotStream(
       }
 
       if (ev.event === "delta") {
-        const id = buffer.current?.messageId ?? createUuid();
+        const id = buffer.current?.messageId ?? eventTurnId(ev) ?? createUuid();
   if (suppressStreamUntilTurnEndRef.current) return;
         if (!buffer.current) {
           buffer.current = { messageId: id, parts: [] };
@@ -336,25 +335,53 @@ export function useNanobotStream(
         // the full turn (all tool calls + final text) is complete.
         setMessages((prev) => {
           const filtered = activeId ? prev.filter((m) => m.id !== activeId) : prev;
-          if (matchesRecentAssistantMessage(filtered, {
+          const turnId = eventTurnId(ev);
+          const turnIdIndex = turnId ? findAssistantTurnIdIndex(filtered, turnId) : -1;
+          const duplicateIndex = findRecentAssistantMessageIndex(filtered, {
             content,
             renderAs: ev.render_as === "text" ? "text" : undefined,
             buttons: ev.buttons,
             media,
-          })) {
-            return filtered;
+          });
+          const incomingMessage: UIMessage = {
+            id: turnId ?? createUuid(),
+            role: "assistant",
+            content,
+            ...(ev.render_as === "text" ? { renderAs: "text" as const } : {}),
+            createdAt: Date.now(),
+            ...(ev.buttons && ev.buttons.length > 0 ? { buttons: ev.buttons } : {}),
+            ...(hasMedia ? { media } : {}),
+          };
+          if (turnIdIndex >= 0) {
+            return filtered.map((message, index) => {
+              if (index !== turnIdIndex) return message;
+              return {
+                ...message,
+                ...incomingMessage,
+                id: message.id,
+                createdAt: message.createdAt,
+              };
+            });
+          }
+          if (duplicateIndex >= 0) {
+            const previous = filtered[duplicateIndex];
+            const preferred = pickPreferredAssistantMessage(previous, incomingMessage);
+            if (preferred === previous) {
+              return filtered;
+            }
+            return filtered.map((message, index) => {
+              if (index !== duplicateIndex) return message;
+              return {
+                ...message,
+                ...preferred,
+                id: message.id,
+                createdAt: message.createdAt,
+              };
+            });
           }
           return [
             ...filtered,
-            {
-              id: createUuid(),
-              role: "assistant",
-              content,
-              ...(ev.render_as === "text" ? { renderAs: "text" as const } : {}),
-              createdAt: Date.now(),
-              ...(ev.buttons && ev.buttons.length > 0 ? { buttons: ev.buttons } : {}),
-              ...(hasMedia ? { media } : {}),
-            },
+            incomingMessage,
           ];
         });
         if (hasMedia) {
@@ -438,7 +465,18 @@ function findLastIndex<T>(items: T[], predicate: (item: T) => boolean): number {
   return -1;
 }
 
-function matchesRecentAssistantMessage(
+function eventTurnId(ev: { turn_id?: string }): string | null {
+  return typeof ev.turn_id === "string" && ev.turn_id.trim() ? ev.turn_id.trim() : null;
+}
+
+function findAssistantTurnIdIndex(messages: UIMessage[], turnId: string): number {
+  return findLastIndex(
+    messages,
+    (message) => message.role === "assistant" && message.kind === undefined && message.id === turnId,
+  );
+}
+
+function findRecentAssistantMessageIndex(
   messages: UIMessage[],
   incoming: {
     content: string;
@@ -446,24 +484,21 @@ function matchesRecentAssistantMessage(
     buttons?: UIMessage["buttons"];
     media?: UIMessage["media"];
   },
-): boolean {
+): number {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (message.kind === "trace") continue;
-    if (message.role !== "assistant") return false;
-    if (message.isStreaming) return false;
-    if (Date.now() - message.createdAt > LIVE_DUPLICATE_WINDOW_MS) return false;
-    return (
-      message.renderAs === incoming.renderAs
-      &&
-      normalizeDuplicateText(message.content) === normalizeDuplicateText(incoming.content)
-      && JSON.stringify(message.buttons ?? []) === JSON.stringify(incoming.buttons ?? [])
-      && JSON.stringify(message.media ?? []) === JSON.stringify(incoming.media ?? [])
-    );
+    if (message.role !== "assistant") return -1;
+    if (message.isStreaming) return -1;
+    if (areEquivalentAssistantMessages(message, {
+      role: "assistant",
+      content: incoming.content,
+      buttons: incoming.buttons,
+      media: incoming.media,
+    })) {
+      return index;
+    }
+    return -1;
   }
-  return false;
-}
-
-function normalizeDuplicateText(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
+  return -1;
 }

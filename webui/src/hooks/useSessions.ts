@@ -10,6 +10,7 @@ import {
 } from "@/lib/api";
 import { deriveTitle } from "@/lib/format";
 import { toMediaAttachment } from "@/lib/media";
+import { areEquivalentAssistantMessages, normalizeAssistantDuplicateText, pickPreferredAssistantMessage } from "@/lib/assistantMessageDedup";
 import type { ChatSummary, SessionMessagesResponse, UIMessage } from "@/lib/types";
 
 const EMPTY_MESSAGES: UIMessage[] = [];
@@ -35,7 +36,8 @@ export function hydrateSessionMessages(body: SessionMessagesResponse): UIMessage
             .filter((item) => item.kind === "image")
             .map((item) => ({ url: item.url, name: item.name }))
         : undefined;
-    const messageId = `hist-${idx}`;
+    const turnId = typeof m.turn_id === "string" && m.turn_id.trim() ? m.turn_id.trim() : null;
+    const messageId = turnId ?? `hist-${idx}`;
     const hydratedMessage: UIMessage = {
       id: messageId,
       role: m.role,
@@ -82,11 +84,9 @@ function collapseConsecutiveAssistantDuplicates(messages: UIMessage[]): UIMessag
       && message.role === "assistant"
       && !previous.isStreaming
       && !message.isStreaming
-      && previous.renderAs === message.renderAs
-      && normalizeHistoryText(previous.content) === normalizeHistoryText(message.content)
-      && JSON.stringify(previous.buttons ?? []) === JSON.stringify(message.buttons ?? [])
-      && JSON.stringify(previous.media ?? []) === JSON.stringify(message.media ?? [])
+      && areEquivalentAssistantMessages(previous, message)
     ) {
+      deduped[deduped.length - 1] = pickPreferredAssistantMessage(previous, message);
       continue;
     }
     deduped.push(message);
@@ -121,10 +121,23 @@ function areDuplicateAssistantHistoryRows(
   return (
     previous.role === "assistant"
     && current.role === "assistant"
-    && normalizeHistoryText(previous.content) === normalizeHistoryText(current.content)
-    && previous.metadata?.render_as === current.metadata?.render_as
+    && (
+      haveSameTurnId(previous, current)
+      || normalizeAssistantDuplicateText(previous.content) === normalizeAssistantDuplicateText(current.content)
+    )
     && JSON.stringify(previous.buttons ?? []) === JSON.stringify(current.buttons ?? [])
     && JSON.stringify(previous.media_urls ?? []) === JSON.stringify(current.media_urls ?? [])
+  );
+}
+
+function haveSameTurnId(
+  previous: SessionHistoryMessage,
+  current: SessionHistoryMessage,
+): boolean {
+  return (
+    typeof previous.turn_id === "string"
+    && previous.turn_id.trim().length > 0
+    && previous.turn_id.trim() === current.turn_id?.trim()
   );
 }
 
@@ -144,10 +157,6 @@ function historyMessageRichness(message: SessionHistoryMessage): number {
   if (Array.isArray(message.buttons) && message.buttons.some((row) => row.length > 0)) score += 2;
   if (Array.isArray(message.media_urls) && message.media_urls.length > 0) score += 2;
   return score;
-}
-
-function normalizeHistoryText(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
 }
 
 /** Sidebar state: fetches the full session list and exposes create / delete actions. */

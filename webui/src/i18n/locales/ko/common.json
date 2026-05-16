@@ -258,7 +258,9 @@
       "auto": "자동",
       "local": "로컬",
       "mini": "미니",
-      "full": "풀"
+      "full": "풀",
+      "autoDescription": "자동 모델 선택",
+      "localLoadingDescription": "Local LLM 상태를 불러오는 중..."
     },
     "inlineAction": {
       "label": {
@@ -679,7 +681,8 @@
     "sections": {
       "assistant": "기본값",
       "themes": "테마",
-      "interface": "인터페이스"
+      "interface": "인터페이스",
+      "localLlm": "Local LLM"
     },
     "rows": {
       "defaultProvider": "기본 공급자",
@@ -701,6 +704,43 @@
       "unsaved": "저장되지 않은 변경 사항이 있습니다.",
       "save": "저장",
       "saving": "저장 중"
+    },
+    "localLlm": {
+      "loading": "Local LLM 상태를 불러오는 중...",
+      "modelSelector": "Local model",
+      "modelSelectAria": "Local LLM 모델 선택",
+      "defaultRoute": "기본 local route: {{target}}",
+      "statusUnavailable": "Local LLM 상태를 불러올 수 없습니다",
+      "running": "실행 중",
+      "stopped": "중지됨",
+      "state": {
+        "running": "실행 중",
+        "starting": "시작 중",
+        "stopped": "멈춤"
+      },
+      "endpointOk": "Endpoint OK",
+      "endpointUnavailable": "Endpoint 응답 없음",
+      "defaultBadge": "기본값",
+      "currentDefault": "현재 기본값",
+      "lastAction": "최근 작업",
+      "details": {
+        "runtime": "Runtime",
+        "endpoint": "Endpoint",
+        "launchd": "Launchd",
+        "activeModel": "Model"
+      },
+      "actions": {
+        "start": "시작",
+        "stop": "중지",
+        "restart": "재시작",
+        "smoke": "응답 확인",
+        "use": "기본값으로 사용"
+      },
+      "confirm": {
+        "stop": "{{target}} local model을 중지할까요?",
+        "restart": "{{target}} local model을 재시작할까요?",
+        "use": "{{target}}을 기본 local LLM으로 설정할까요?"
+      }
     }
   },
   "dashboard": {

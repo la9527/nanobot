@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from nanobot.bus.events import InboundMessage
+from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.providers.base import LLMResponse
 from nanobot.response_status import SESSION_RESPONSE_FOOTER_MODE_KEY
 
@@ -31,6 +31,17 @@ def _make_loop():
          patch("nanobot.agent.loop.SubagentManager"):
         loop = AgentLoop(bus=bus, provider=provider, workspace=workspace)
     return loop, bus
+
+
+def _assert_text_metadata_with_turn_id(metadata: dict) -> None:
+    assert metadata["render_as"] == "text"
+    assert isinstance(metadata["turn_id"], str)
+    assert metadata["turn_id"].startswith("turn-")
+
+
+def _close_background_coro(coro) -> None:
+    if asyncio.iscoroutine(coro):
+        coro.close()
 
 
 async def _wait_until(predicate, *, timeout: float = 0.2, interval: float = 0.01) -> None:
@@ -184,7 +195,7 @@ class TestRestartCommand:
         assert "/restart" in response.content
         assert "/status" in response.content
         assert "/usage" in response.content
-        assert response.metadata == {"render_as": "text"}
+        _assert_text_metadata_with_turn_id(response.metadata)
 
     @pytest.mark.asyncio
     async def test_status_reports_runtime_info(self):
@@ -210,7 +221,7 @@ class TestRestartCommand:
         assert "Session: 3 messages" in response.content
         assert "Uptime: 2m 5s" in response.content
         assert "Tasks: 0 active" in response.content
-        assert response.metadata == {"render_as": "text"}
+        _assert_text_metadata_with_turn_id(response.metadata)
 
     @pytest.mark.asyncio
     async def test_status_counts_running_dispatch_and_subagent_tasks(self):
@@ -293,7 +304,7 @@ class TestRestartCommand:
         assert "👤 You: Hello" in response.content
         assert "🤖 Bot: Hi there!" in response.content
         assert "tool result" not in response.content  # tool messages filtered
-        assert response.metadata == {"render_as": "text"}
+        _assert_text_metadata_with_turn_id(response.metadata)
 
     @pytest.mark.asyncio
     async def test_history_respects_count_argument(self):
@@ -372,7 +383,7 @@ class TestRestartCommand:
         response = await loop.process_direct("/status", session_key="cli:test")
 
         assert response is not None
-        assert response.metadata == {"render_as": "text"}
+        _assert_text_metadata_with_turn_id(response.metadata)
 
     @pytest.mark.asyncio
     async def test_usage_command_updates_session_footer_mode(self):
@@ -400,13 +411,13 @@ class TestRestartCommand:
         loop.sessions.get_or_create.return_value = session
         loop.context.build_messages = MagicMock(return_value=[])
         loop._run_agent_loop = AsyncMock(
-            return_value=("Hello from nanobot", None, [{"role": "assistant", "content": "Hello from nanobot"}], "done", False)
+            return_value=("Hello from nanobot", None, [{"role": "assistant", "content": "Hello from nanobot"}], "done", False, {})
         )
         loop._save_turn = MagicMock()
         loop._clear_pending_user_turn = MagicMock()
         loop._clear_runtime_checkpoint = MagicMock()
         loop.sessions.save = MagicMock()
-        loop._schedule_background = MagicMock()
+        loop._schedule_background = _close_background_coro
         loop.consolidator.maybe_consolidate_by_tokens = AsyncMock()
         loop.consolidator.estimate_session_prompt_tokens = MagicMock(return_value=(1500, "tiktoken"))
         loop._last_usage = {"prompt_tokens": 120, "completion_tokens": 24, "total_tokens": 144}
@@ -430,13 +441,13 @@ class TestRestartCommand:
         loop.sessions.get_or_create.return_value = session
         loop.context.build_messages = MagicMock(return_value=[])
         loop._run_agent_loop = AsyncMock(
-            return_value=("API reply", None, [{"role": "assistant", "content": "API reply"}], "done", False)
+            return_value=("API reply", None, [{"role": "assistant", "content": "API reply"}], "done", False, {})
         )
         loop._save_turn = MagicMock()
         loop._clear_pending_user_turn = MagicMock()
         loop._clear_runtime_checkpoint = MagicMock()
         loop.sessions.save = MagicMock()
-        loop._schedule_background = MagicMock()
+        loop._schedule_background = _close_background_coro
         loop.consolidator.maybe_consolidate_by_tokens = AsyncMock()
         loop.consolidator.estimate_session_prompt_tokens = MagicMock(return_value=(2048, "tiktoken"))
         loop._last_usage = {"prompt_tokens": 200, "completion_tokens": 50, "total_tokens": 250}
@@ -462,7 +473,7 @@ class TestRestartCommand:
         loop._clear_pending_user_turn = MagicMock()
         loop._clear_runtime_checkpoint = MagicMock()
         loop.sessions.save = MagicMock()
-        loop._schedule_background = MagicMock()
+        loop._schedule_background = _close_background_coro
         loop.consolidator.maybe_consolidate_by_tokens = AsyncMock()
         loop.consolidator.estimate_session_prompt_tokens = MagicMock(return_value=(1500, "tiktoken"))
         loop._last_usage = {"prompt_tokens": 120, "completion_tokens": 24, "total_tokens": 144}
@@ -484,6 +495,7 @@ class TestRestartCommand:
                 [{"role": "assistant", "content": "Hello from nanobot"}],
                 "done",
                 False,
+                {},
             )
 
         loop._run_agent_loop = fake_run_agent_loop
@@ -494,7 +506,7 @@ class TestRestartCommand:
         async def on_stream(delta: str) -> None:
             streamed_chunks.append(delta)
 
-        async def on_stream_end(*, resuming: bool = False) -> None:
+        async def on_stream_end(*, resuming: bool = False, **_kwargs) -> None:
             stream_end_events.append(resuming)
 
         response = await loop.process_direct(
@@ -510,3 +522,76 @@ class TestRestartCommand:
         assert response.metadata.get("_streamed") is True
         assert streamed_chunks[-1] == "\n\nStatus: model=test-model | tokens=🔵120 in/🟢24 out"
         assert stream_end_events == [False]
+
+    @pytest.mark.asyncio
+    async def test_save_turn_tags_visible_assistant_with_turn_id(self):
+        loop, _bus = _make_loop()
+        session = MagicMock()
+        session.messages = []
+        session.metadata = {}
+
+        loop._save_turn(
+            session,
+            [
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": "Hello from nanobot"},
+            ],
+            0,
+            assistant_turn_id="turn-test-123",
+        )
+
+        assistant_rows = [m for m in session.messages if m["role"] == "assistant"]
+        assert assistant_rows == [
+            {
+                "role": "assistant",
+                "content": "Hello from nanobot",
+                "turn_id": "turn-test-123",
+                "visible_reasoning": "Organized the reply before answering.",
+                "timestamp": assistant_rows[0]["timestamp"],
+            }
+        ]
+
+    @pytest.mark.asyncio
+    async def test_dispatch_reuses_turn_id_for_stream_and_websocket_mirror(self):
+        loop, bus = _make_loop()
+
+        async def fake_process_message(
+            msg: InboundMessage,
+            *,
+            on_stream=None,
+            on_stream_end=None,
+            **_kwargs,
+        ) -> OutboundMessage:
+            assert msg.metadata.get("turn_id")
+            assert on_stream is not None
+            assert on_stream_end is not None
+            await on_stream("Hello from nanobot")
+            await on_stream_end(resuming=False)
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content="Hello from nanobot",
+                metadata={**msg.metadata, "_streamed": True},
+            )
+
+        loop._process_message = fake_process_message
+
+        await loop._dispatch(InboundMessage(
+            channel="telegram",
+            sender_id="telegram-user",
+            chat_id="12345",
+            content="hello",
+            metadata={"_wants_stream": True},
+        ))
+
+        outbound: list[OutboundMessage] = []
+        while not bus.outbound.empty():
+            outbound.append(await bus.consume_outbound())
+
+        websocket_frames = [event for event in outbound if event.channel == "websocket"]
+        assert [event.content for event in websocket_frames] == ["Hello from nanobot", "", "Hello from nanobot"]
+        turn_ids = {event.metadata.get("turn_id") for event in websocket_frames}
+        assert len(turn_ids) == 1
+        turn_id = next(iter(turn_ids))
+        assert isinstance(turn_id, str)
+        assert turn_id.startswith("turn-")

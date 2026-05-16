@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -259,6 +259,25 @@ describe("ThreadComposer", () => {
   it("opens the model target selector and reports changes", async () => {
     const user = userEvent.setup();
     const onSelectModelTarget = vi.fn();
+    const loadLocalLlmStatus = vi.fn().mockResolvedValue({
+      default_target: "lfm2",
+      default_model: "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0",
+      default_api_base: "http://127.0.0.1:1242/v1",
+      targets: [
+        {
+          name: "lfm2",
+          label: "LFM2",
+          provider: "llama.cpp",
+          runtime: "llama.cpp",
+          model: "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0",
+          api_base: "http://127.0.0.1:1242/v1",
+          launchd_label: "com.nanobot.local-model-lfm2",
+          running: true,
+          endpoint_ok: true,
+          is_default: true,
+        },
+      ],
+    });
 
     render(
       <ThreadComposer
@@ -269,22 +288,27 @@ describe("ThreadComposer", () => {
           { name: "default", kind: "provider_model", model: "openai/gpt-5.4", description: "Startup default provider/model." },
           { name: "local-llm", kind: "provider_model", provider: "vllm", model: "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0", description: "현재 기본 local runtime (LiquidAI/LFM2-24B-A2B-GGUF:Q4_0)" },
           { name: "smart-router", kind: "smart_router", display_name: "Auto", group: "smart-router", smart_router_mode: "auto", description: "smart-router runtime plugin target." },
-          { name: "smart-router-local", kind: "smart_router", display_name: "Local", group: "smart-router", smart_router_mode: "local", description: "smart-router forced local tier." },
-          { name: "smart-router-mini", kind: "smart_router", display_name: "Mini", group: "smart-router", smart_router_mode: "mini", description: "smart-router forced mini tier." },
-          { name: "smart-router-full", kind: "smart_router", display_name: "Full", group: "smart-router", smart_router_mode: "full", description: "smart-router forced full tier." },
+          { name: "smart-router-local", kind: "smart_router", provider: "vllm", model: "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0", display_name: "Local", group: "smart-router", smart_router_mode: "local", description: "smart-router forced local tier (LiquidAI/LFM2-24B-A2B-GGUF:Q4_0)" },
+          { name: "smart-router-mini", kind: "smart_router", provider: "openrouter", model: "openai/gpt-5.4-mini", display_name: "Mini", group: "smart-router", smart_router_mode: "mini", description: "smart-router forced mini tier." },
+          { name: "smart-router-full", kind: "smart_router", provider: "openrouter", model: "openai/gpt-5.4", display_name: "Full", group: "smart-router", smart_router_mode: "full", description: "smart-router forced full tier." },
         ]}
+        loadLocalLlmStatus={loadLocalLlmStatus}
         onSelectModelTarget={onSelectModelTarget}
       />,
     );
 
     await user.click(screen.getByRole("button", { name: "Choose model target" }));
+    await waitFor(() => expect(loadLocalLlmStatus).toHaveBeenCalledTimes(1));
     expect(screen.getByText(/^Auto$/i)).toBeInTheDocument();
     expect(screen.getByText(/^Local$/i)).toBeInTheDocument();
     expect(screen.getByText(/^Mini$/i)).toBeInTheDocument();
     expect(screen.getByText(/^Full$/i)).toBeInTheDocument();
-    expect(screen.getByText("vllm -> LiquidAI/LFM2-24B-A2B-GGUF:Q4_0")).toBeInTheDocument();
-    expect(screen.getByText("현재 기본 local runtime (LiquidAI/LFM2-24B-A2B-GGUF:Q4_0)")).toBeInTheDocument();
-    expect(screen.getByText("openai/gpt-5.4")).toBeInTheDocument();
+    expect(screen.getByText("Automatic model selection")).toBeInTheDocument();
+    expect(screen.getByText("llama.cpp -> LiquidAI/LFM2-24B-A2B-GGUF:Q4_0")).toBeInTheDocument();
+    expect(screen.getByText("openrouter -> openai/gpt-5.4-mini")).toBeInTheDocument();
+    expect(screen.getByText("openrouter -> openai/gpt-5.4")).toBeInTheDocument();
+    expect(screen.queryByText("Local LLM")).not.toBeInTheDocument();
+    expect(screen.queryByText("Startup default provider/model.")).not.toBeInTheDocument();
     await user.click(screen.getByRole("menuitemradio", { name: /Mini/i }));
 
     expect(onSelectModelTarget).toHaveBeenCalledWith("smart-router-mini");

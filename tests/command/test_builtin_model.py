@@ -84,6 +84,7 @@ async def test_cmd_model_shows_smart_router_target(tmp_path: Path) -> None:
             "plugins": {
                 "smartrouter": {
                     "enabled": True,
+                    "local": {"provider": "vllm", "model": "mlx-community/Qwen3.6-35B-A3B-4bit"},
                     "mini": {"provider": "openrouter", "model": "openai/gpt-5.4-mini"},
                     "full": {"provider": "openrouter", "model": "openai/gpt-5.4"},
                 }
@@ -96,8 +97,10 @@ async def test_cmd_model_shows_smart_router_target(tmp_path: Path) -> None:
     assert "`smart-router-local`" in out.content
     assert "`smart-router-mini`" in out.content
     assert "`smart-router-full`" in out.content
+    assert "vllm -> mlx-community/Qwen3.6-35B-A3B-4bit | smart-router forced local tier" in out.content
+    assert "openrouter -> openai/gpt-5.4-mini | smart-router forced mini tier" in out.content
 
 
 def test_build_help_text_mentions_model_command() -> None:
-    assert "/model — Show or change the active model target" in build_help_text()
-    assert "/usage — Show or change the reply footer mode" in build_help_text()
+    assert "/model [name|list|clear] — Switch model target, list available targets, or clear the override." in build_help_text()
+    assert "/usage [off|tokens|full] — Show or change the token usage detail level." in build_help_text()

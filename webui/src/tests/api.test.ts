@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   deleteSession,
+  fetchLocalLlmStatus,
   fetchSessionMessages,
+  runLocalLlmAction,
   selectSessionModelTarget,
   listSessions,
   listSlashCommands,
@@ -61,6 +63,28 @@ describe("webui API helpers", () => {
 
     expect(fetch).toHaveBeenCalledWith(
       "/api/settings/update?model=openrouter%2Ftest&provider=openrouter",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer tok" },
+      }),
+    );
+  });
+
+  it("fetches local LLM status", async () => {
+    await fetchLocalLlmStatus("tok");
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/local-llm/status",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer tok" },
+      }),
+    );
+  });
+
+  it("percent-encodes local LLM actions and targets", async () => {
+    await runLocalLlmAction("tok", "use", "qwen36");
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/local-llm/use/qwen36",
       expect.objectContaining({
         headers: { Authorization: "Bearer tok" },
       }),

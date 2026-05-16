@@ -262,6 +262,7 @@ class TelegramChannel(BaseChannel):
         BotCommand("stop", "Stop the current task"),
         BotCommand("restart", "Restart the bot"),
         BotCommand("model", "Show or change the active model target"),
+        BotCommand("local_llm", "Manage local LLM runtime"),
         BotCommand("status", "Show bot status"),
         BotCommand("usage", "Show or change the reply footer mode"),
         BotCommand("history", "Show recent conversation messages"),
@@ -318,6 +319,8 @@ class TelegramChannel(BaseChannel):
             return content.replace("/dream_log", "/dream-log", 1)
         if content == "/dream_restore" or content.startswith("/dream_restore "):
             return content.replace("/dream_restore", "/dream-restore", 1)
+        if content == "/local_llm" or content.startswith("/local_llm "):
+            return content.replace("/local_llm", "/local-llm", 1)
         return content
 
     @staticmethod
@@ -370,7 +373,7 @@ class TelegramChannel(BaseChannel):
         self._app.add_handler(MessageHandler(filters.Regex(r"^/start(?:@\w+)?$"), self._on_start))
         self._app.add_handler(
             MessageHandler(
-                filters.Regex(r"^/(new|stop|restart|model|status|usage|dream)(?:@\w+)?(?:\s+.*)?$"),
+                filters.Regex(r"^/(new|stop|restart|model|local-llm|local_llm|status|usage|dream)(?:@\w+)?(?:\s+.*)?$"),
                 self._forward_command,
             )
         )

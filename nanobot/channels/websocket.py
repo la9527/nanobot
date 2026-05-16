@@ -686,6 +686,13 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/settings/update":
             return self._handle_settings_update(request)
 
+        if got == "/api/local-llm/status":
+            return self._handle_local_llm_status(request)
+
+        m = re.match(r"^/api/local-llm/([^/]+)/([^/]+)$", got)
+        if m:
+            return self._handle_local_llm_action(request, m.group(1), m.group(2))
+
         m = re.match(r"^/api/sessions/([^/]+)/messages$", got)
         if m:
             return self._handle_session_messages(request, m.group(1))
@@ -1046,6 +1053,30 @@ class WebSocketChannel(BaseChannel):
         if changed:
             save_config(config)
         return _http_json_response(self._settings_payload(requires_restart=changed))
+
+    def _handle_local_llm_status(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        try:
+            from nanobot.local_llm_control import default_controller
+
+            return _http_json_response(default_controller().status())
+        except Exception as exc:
+            logger.warning("local LLM status unavailable: {}", exc)
+            return _http_error(500, "local LLM status unavailable")
+
+    def _handle_local_llm_action(self, request: WsRequest, action: str, target: str) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        try:
+            from nanobot.local_llm_control import LocalLlmError, default_controller
+
+            return _http_json_response(default_controller().run_action(action, target))
+        except LocalLlmError as exc:
+            return _http_error(exc.status, str(exc))
+        except Exception as exc:
+            logger.warning("local LLM action failed: {}", exc)
+            return _http_error(500, "local LLM action failed")
 
     @staticmethod
     def _is_webui_session_key(key: str) -> bool:
@@ -1908,6 +1939,9 @@ class WebSocketChannel(BaseChannel):
         active_target = msg.metadata.get("active_target")
         if isinstance(active_target, str) and active_target.strip():
             payload["active_target"] = active_target
+        turn_id = msg.metadata.get("turn_id")
+        if isinstance(turn_id, str) and turn_id.strip():
+            payload["turn_id"] = turn_id
         # Mark intermediate agent breadcrumbs (tool-call hints, generic
         # progress strings) so WS clients can render them as subordinate
         # trace rows rather than conversational replies.
@@ -1947,6 +1981,9 @@ class WebSocketChannel(BaseChannel):
         active_target = meta.get("active_target")
         if isinstance(active_target, str) and active_target.strip():
             body["active_target"] = active_target
+        turn_id = meta.get("turn_id")
+        if isinstance(turn_id, str) and turn_id.strip():
+            body["turn_id"] = turn_id
         if meta.get("_stream_id") is not None:
             body["stream_id"] = meta["_stream_id"]
         raw = json.dumps(body, ensure_ascii=False)

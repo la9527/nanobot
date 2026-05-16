@@ -374,6 +374,94 @@ describe("useNanobotStream", () => {
     });
   });
 
+  it("does not append a duplicate complete assistant message when the same text already exists in history", () => {
+    const fake = fakeClient();
+    const initialMessages = [{
+      id: "hist-assistant",
+      role: "assistant" as const,
+      content: "현재 사용 중인 모델은 `mlx-community/Qwen3.6-35B-A3B-4bit` 입니다.",
+      createdAt: Date.now() - 60_000,
+    }];
+    const { result } = renderHook(
+      () => useNanobotStream("telegram:12345", initialMessages, false),
+      {
+        wrapper: wrap(fake.client),
+      },
+    );
+
+    act(() => {
+      fake.emit("telegram:12345", {
+        event: "message",
+        chat_id: "telegram:12345",
+        text: "현재 사용 중인 모델은 `mlx-community/Qwen3.6-35B-A3B-4bit` 입니다.",
+      });
+    });
+
+    expect(
+      result.current.messages.filter((message) => message.content === "현재 사용 중인 모델은 `mlx-community/Qwen3.6-35B-A3B-4bit` 입니다.").length,
+    ).toBe(1);
+  });
+
+  it("does not append a second assistant reply when only a streamed status footer differs", () => {
+    const fake = fakeClient();
+    const initialMessages = [{
+      id: "hist-assistant",
+      role: "assistant" as const,
+      content: "현재 사용 중인 모델은 `mlx-community/Qwen3.6-35B-A3B-4bit` 입니다.",
+      createdAt: Date.now() - 60_000,
+    }];
+    const { result } = renderHook(
+      () => useNanobotStream("telegram:12345", initialMessages, false),
+      {
+        wrapper: wrap(fake.client),
+      },
+    );
+
+    act(() => {
+      fake.emit("telegram:12345", {
+        event: "message",
+        chat_id: "telegram:12345",
+        text: "현재 사용 중인 모델은 `mlx-community/Qwen3.6-35B-A3B-4bit` 입니다.\n\nStatus: model=smart-router-local | tokens=🔵55431 in/🟢47 out",
+      });
+    });
+
+    expect(result.current.messages).toHaveLength(1);
+    expect(result.current.messages[0]?.content).toContain("현재 사용 중인 모델은 `mlx-community/Qwen3.6-35B-A3B-4bit` 입니다.");
+    expect(result.current.messages[0]?.content).toContain("Status: model=smart-router-local | tokens=🔵55431 in/🟢47 out");
+  });
+
+  it("replaces a historical assistant row when a websocket frame has the same turn_id", () => {
+    const fake = fakeClient();
+    const initialMessages = [{
+      id: "turn-shared-123",
+      role: "assistant" as const,
+      content: "older persisted answer",
+      createdAt: Date.now() - 60_000,
+    }];
+    const { result } = renderHook(
+      () => useNanobotStream("telegram:12345", initialMessages, false),
+      {
+        wrapper: wrap(fake.client),
+      },
+    );
+
+    act(() => {
+      fake.emit("telegram:12345", {
+        event: "message",
+        chat_id: "telegram:12345",
+        turn_id: "turn-shared-123",
+        text: "final live answer\n\nStatus: model=smart-router-local | tokens=🔵12 in/🟢4 out",
+      } as InboundEvent);
+    });
+
+    expect(result.current.messages).toHaveLength(1);
+    expect(result.current.messages[0]).toMatchObject({
+      id: "turn-shared-123",
+      role: "assistant",
+      content: "final live answer\n\nStatus: model=smart-router-local | tokens=🔵12 in/🟢4 out",
+    });
+  });
+
   it("keeps streaming state until turn_end", () => {
     const fake = fakeClient();
     const onTurnEnd = vi.fn();

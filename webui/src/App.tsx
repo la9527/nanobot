@@ -28,6 +28,7 @@ import { ClientProvider, useClient } from "@/providers/ClientProvider";
 import type { ChatSummary, ReasoningVisibility } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { setApiTokenRefreshHandler } from "@/lib/api";
 
 type BootState =
   | { status: "loading" }
@@ -188,24 +189,36 @@ export default function App() {
           const boot = await fetchBootstrap("", secret);
           if (cancelled) return;
           if (secret) saveSecret(secret);
+          const refreshBootstrapState = async () => {
+            const refreshed = await fetchBootstrap("", secret);
+            if (mountedRef.current) {
+              setState((prev) => {
+                if (prev.status !== "ready") return prev;
+                return {
+                  ...prev,
+                  token: refreshed.token,
+                  modelName: refreshed.model_name ?? prev.modelName,
+                  activeTarget: refreshed.active_target ?? prev.activeTarget,
+                  modelTargets: refreshed.model_targets ?? prev.modelTargets,
+                };
+              });
+            }
+            return refreshed;
+          };
+          setApiTokenRefreshHandler(async () => {
+            try {
+              const refreshed = await refreshBootstrapState();
+              return refreshed.token;
+            } catch {
+              return null;
+            }
+          });
           const url = deriveWsUrl(boot.ws_path, boot.token);
           const client = new NanobotClient({
             url,
             onReauth: async () => {
               try {
-                const refreshed = await fetchBootstrap("", secret);
-                if (mountedRef.current) {
-                  setState((prev) => {
-                    if (prev.status !== "ready") return prev;
-                    return {
-                      ...prev,
-                      token: refreshed.token,
-                      modelName: refreshed.model_name ?? prev.modelName,
-                      activeTarget: refreshed.active_target ?? prev.activeTarget,
-                      modelTargets: refreshed.model_targets ?? prev.modelTargets,
-                    };
-                  });
-                }
+                const refreshed = await refreshBootstrapState();
                 return deriveWsUrl(refreshed.ws_path, refreshed.token);
               } catch {
                 return null;
@@ -223,6 +236,7 @@ export default function App() {
           });
         } catch (e) {
           if (cancelled) return;
+          setApiTokenRefreshHandler(null);
           const msg = (e as Error).message;
           if (msg.includes("HTTP 401") || msg.includes("HTTP 403")) {
             setState({ status: "auth", failed: true });
@@ -233,6 +247,7 @@ export default function App() {
       })();
       return () => {
         cancelled = true;
+        setApiTokenRefreshHandler(null);
       };
     },
     [],
@@ -307,6 +322,7 @@ export default function App() {
     if (state.status === "ready") {
       state.client.close();
     }
+    setApiTokenRefreshHandler(null);
     clearSavedSecret();
     setState({ status: "auth" });
   };

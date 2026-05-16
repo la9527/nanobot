@@ -8,6 +8,7 @@ import json
 import os
 import re
 import time
+import uuid
 from contextlib import AsyncExitStack, nullcontext, suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
@@ -217,6 +218,7 @@ class AgentLoop:
     _CONTEXT_WINDOW_KEY = "context_window"
     _SMART_ROUTER_TIER_KEY = "smart_router_last_tier"
     _SMART_ROUTER_MODEL_KEY = "smart_router_last_model"
+    _TURN_ID_KEY = "turn_id"
     _APPROVAL_YES = frozenset({"y", "yes", "ok", "approve", "approved", "run", "continue", "예", "네", "승인", "허용"})
     _APPROVAL_NO = frozenset({"n", "no", "deny", "denied", "block", "cancel", "stop", "아니오", "아니", "거부", "취소"})
 
@@ -367,6 +369,20 @@ class AgentLoop:
         self._current_iteration: int = 0
         self.commands = CommandRouter()
         register_builtin_commands(self.commands)
+
+    @classmethod
+    def _new_turn_id(cls) -> str:
+        return f"turn-{uuid.uuid4().hex[:16]}"
+
+    @classmethod
+    def _with_turn_id(cls, msg: InboundMessage) -> InboundMessage:
+        metadata = dict(msg.metadata or {})
+        value = metadata.get(cls._TURN_ID_KEY)
+        if isinstance(value, str) and value.strip():
+            metadata[cls._TURN_ID_KEY] = value.strip()
+        else:
+            metadata[cls._TURN_ID_KEY] = cls._new_turn_id()
+        return dataclasses.replace(msg, metadata=metadata)
 
     def get_available_model_targets(self) -> dict[str, Any]:
         """Return configured model targets, including built-in defaults."""
@@ -1287,6 +1303,7 @@ class AgentLoop:
 
     async def _dispatch(self, msg: InboundMessage) -> None:
         """Process a message: per-session serial, cross-session concurrent."""
+        msg = self._with_turn_id(msg)
         session_key = self._effective_session_key(msg)
         if session_key != msg.session_key:
             msg = dataclasses.replace(msg, session_key_override=session_key)
@@ -1462,6 +1479,7 @@ class AgentLoop:
         pending_queue: asyncio.Queue | None = None,
     ) -> OutboundMessage | None:
         """Process a single inbound message and return the response."""
+        msg = self._with_turn_id(msg)
         self._refresh_provider_snapshot()
         # System messages: parse origin from chat_id ("channel:chat_id")
         if msg.channel == "system":
@@ -1530,7 +1548,12 @@ class AgentLoop:
                 provider=exec_provider,
                 model=exec_model,
             )
-            self._save_turn(session, all_msgs, 1 + len(history))
+            self._save_turn(
+                session,
+                all_msgs,
+                1 + len(history),
+                assistant_turn_id=msg.metadata.get(self._TURN_ID_KEY),
+            )
             session.enforce_file_cap(on_archive=self.context.memory.raw_archive)
             self._clear_runtime_checkpoint(session)
             self.sessions.save(session)
@@ -1783,7 +1806,12 @@ class AgentLoop:
             existing_media = all_msgs[-1].get("media")
             media = existing_media if isinstance(existing_media, list) else []
             all_msgs[-1]["media"] = list(dict.fromkeys([*media, *generated_media]))
-        self._save_turn(session, all_msgs, save_skip)
+        self._save_turn(
+            session,
+            all_msgs,
+            save_skip,
+            assistant_turn_id=msg.metadata.get(self._TURN_ID_KEY),
+        )
         session.enforce_file_cap(on_archive=self.context.memory.raw_archive)
         self._clear_pending_user_turn(session)
         self._clear_runtime_checkpoint(session)
@@ -1910,11 +1938,31 @@ class AgentLoop:
 
         return filtered
 
-    def _save_turn(self, session: Session, messages: list[dict], skip: int) -> None:
+    def _save_turn(
+        self,
+        session: Session,
+        messages: list[dict],
+        skip: int,
+        *,
+        assistant_turn_id: str | None = None,
+    ) -> None:
         """Save new-turn messages into session, truncating large tool results."""
         from datetime import datetime
 
-        for m in messages[skip:]:
+        visible_assistant_turn_index: int | None = None
+        if isinstance(assistant_turn_id, str) and assistant_turn_id.strip():
+            for index in range(len(messages) - 1, skip - 1, -1):
+                candidate = messages[index]
+                if not isinstance(candidate, dict):
+                    continue
+                if candidate.get("role") != "assistant" or candidate.get("tool_calls"):
+                    continue
+                content = candidate.get("content")
+                if isinstance(content, str) and content.strip():
+                    visible_assistant_turn_index = index
+                    break
+
+        for index, m in enumerate(messages[skip:], start=skip):
             entry = dict(m)
             role, content = entry.get("role"), entry.get("content")
             if role == "assistant" and not content and not entry.get("tool_calls"):
@@ -1954,6 +2002,8 @@ class AgentLoop:
             visible_reasoning = self._assistant_visible_reasoning(session, entry)
             if visible_reasoning:
                 entry.setdefault("visible_reasoning", visible_reasoning)
+            if index == visible_assistant_turn_index and isinstance(assistant_turn_id, str):
+                entry.setdefault(self._TURN_ID_KEY, assistant_turn_id)
             entry.setdefault("timestamp", datetime.now().isoformat())
             session.messages.append(entry)
         session.updated_at = datetime.now()
