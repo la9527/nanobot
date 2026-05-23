@@ -177,6 +177,9 @@ def register_plugin() -> RuntimePlugin:
 - user-configured `modelSelection.targets` 는 plugin target 과 같은 이름을 쓰면 그 이름을 override 한다.
 - `smart-router` target 이 보인다고 해서 remote fallback 검증이 끝났다는 뜻은 아니다. 실제 fallback 체인은 별도 운영 검증이 필요하다.
 - `/status` 는 현재 세션의 effective target 기준으로 model 정보를 보여준다.
+- local runtime source of truth 는 `~/.nanobot/local-llm.env` 와 `local-models.sh use <target>` 흐름이다. phase-1 운영 기준으로는 한 번에 하나의 local target 만 active 상태로 유지하는 편을 기본값으로 둔다.
+- `smart-router-local` 과 `local-llm` 이 가리키는 concrete local model 은 현재 active local target 을 따르며, capability 확인은 별도 local status payload 에서 본다.
+- vision/image input 이 필요한 MCP 는 `LOCAL_LLM_*` 를 바로 신뢰하지 않고, 현재 active local endpoint 가 실제 vision-capable 인지 preflight 한 뒤에만 local endpoint 로 붙어야 한다. local endpoint 가 text-only 면 external vision endpoint 를 명시적으로 설정하거나 실패를 반환하는 편이 안전하다.
 
 ## 운영 예시: local direct target + smart-router
 

@@ -112,6 +112,38 @@ class TestEnforceRoleAlternation:
         assert result[1]["content"] is None
         assert result[2]["role"] == "tool"
 
+    def test_consecutive_assistant_tool_call_messages_are_both_preserved(self):
+        msgs = [
+            {"role": "user", "content": "Hi"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"id": "ask", "type": "function", "function": {"name": "ask_user", "arguments": "{}"}}],
+            },
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"id": "run", "type": "function", "function": {"name": "exec", "arguments": "{}"}}],
+            },
+            {"role": "tool", "content": "interrupted", "tool_call_id": "run"},
+            {"role": "tool", "content": "yes", "tool_call_id": "ask"},
+            {"role": "user", "content": "Next"},
+        ]
+
+        result = LLMProvider._enforce_role_alternation(msgs)
+
+        assistant_tool_ids = [
+            tool_call["id"]
+            for message in result
+            if message.get("role") == "assistant"
+            for tool_call in (message.get("tool_calls") or [])
+        ]
+        assert assistant_tool_ids == ["ask", "run"]
+        assert result[3]["role"] == "tool"
+        assert result[3]["tool_call_id"] == "run"
+        assert result[4]["role"] == "tool"
+        assert result[4]["tool_call_id"] == "ask"
+
     def test_non_string_content_uses_latest(self):
         msgs = [
             {"role": "user", "content": [{"type": "text", "text": "A"}]},

@@ -36,6 +36,21 @@ class SmartRouterProvider(LLMProvider):
         self._health = TierHealthTracker(router_config.health)
         self._logger = SmartRouterLogger(router_config.logging)
 
+    @staticmethod
+    def _should_use_provider_retry(tier: TierName, use_retry: bool) -> bool:
+        # Local is an opportunistic first hop. Avoid stacking provider retries
+        # there so timeout failures can fall through to mini/full quickly.
+        return use_retry and tier != "local"
+
+    @staticmethod
+    def _should_immediately_cool_down(tier: TierName, response: LLMResponse) -> bool:
+        if tier != "local":
+            return False
+        if response.error_kind in {"timeout", "connection"}:
+            return True
+        content = (response.content or "").lower()
+        return "timed out" in content or "connection" in content or "refused" in content
+
     async def chat(
         self,
         messages: list[dict[str, Any]],
@@ -207,8 +222,10 @@ class SmartRouterProvider(LLMProvider):
             if tier == "local" and not self._config.allow_local_tools:
                 tier_tools = None
 
+            should_retry_tier = self._should_use_provider_retry(tier, use_retry)
+
             try:
-                if use_retry:
+                if should_retry_tier:
                     if on_content_delta is not None:
                         response = await provider.chat_stream_with_retry(
                             messages=messages,
@@ -256,7 +273,7 @@ class SmartRouterProvider(LLMProvider):
                         tool_choice=tool_choice,
                     )
             except Exception as exc:
-                self._health.record_failure(tier)
+                self._health.record_failure(tier, immediate=(tier == "local"))
                 attempts.append(
                     AttemptRecord(
                         tier=tier,
@@ -269,7 +286,10 @@ class SmartRouterProvider(LLMProvider):
                 continue
 
             if response.finish_reason == "error":
-                self._health.record_failure(tier)
+                self._health.record_failure(
+                    tier,
+                    immediate=self._should_immediately_cool_down(tier, response),
+                )
                 attempts.append(
                     AttemptRecord(
                         tier=tier,

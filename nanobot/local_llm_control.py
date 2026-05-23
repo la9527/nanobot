@@ -3,19 +3,34 @@
 from __future__ import annotations
 
 import subprocess
+import json
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
-from urllib.error import URLError
-from urllib.request import urlopen
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 DEFAULT_LOCAL_LLM_TARGET = "qwen36"
 LOCAL_LLM_ENV_FILENAME = "local-llm.env"
 DEFAULT_SCRIPT_PATH = "/Volumes/ExtData/Nanobot/infra/scripts/local-models/local-models.sh"
 
 ALLOWED_ACTIONS = {"status", "start", "stop", "restart", "smoke", "use"}
-ALLOWED_TARGETS = {"lfm2", "qwen36", "all"}
+ALLOWED_TARGETS = {"lfm2", "qwen35-base-mlx-4bit", "qwen36", "all"}
 ALL_REJECTED_ACTIONS = {"start", "restart", "smoke", "use"}
+
+_VISION_CHECK_TTL_SECONDS = 30.0
+_VISION_CHECK_CACHE: dict[tuple[str, str], tuple[float, tuple[bool, bool, str]]] = {}
+_VISION_PROBE_IMAGE_B64 = (
+    "/9j/4AAQSkZJRgABAQAAAQABAAD/2wCEAAkGBxAQDxAQEA8PEA8PDw8PEA8PDw8PDw8PFREWFhUR"
+    "FRUYHSggGBolGxUVITEhJSkrLi4uFx8zODMsNygtLisBCgoKDg0OGhAQGi0lHyUtLS0tLS0tLS0t"
+    "LS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLf/AABEIAAEAAQMBIgACEQEDEQH/"
+    "xAAXAAEBAQEAAAAAAAAAAAAAAAAAAQID/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAwDAQACEAMQ"
+    "AAAB6A//xAAXEAADAQAAAAAAAAAAAAAAAAAAAREC/9oACAEBAAEFAmP/xAAVEQEBAAAAAAAAAAAAAA"
+    "AAAAABAP/aAAgBAwEBPwEf/8QAFBEBAAAAAAAAAAAAAAAAAAAAEP/aAAgBAgEBPwEf/8QAFBABAAAA"
+    "AAAAAAAAAAAAAAAAAP/aAAgBAQAGPwJf/8QAFBABAAAAAAAAAAAAAAAAAAAAEP/aAAgBAQABPyFf"
+    "/9k="
+)
 
 LOCAL_LLM_TARGETS: dict[str, dict[str, str]] = {
     "lfm2": {
@@ -33,6 +48,14 @@ LOCAL_LLM_TARGETS: dict[str, dict[str, str]] = {
         "model": "mlx-community/Qwen3.6-35B-A3B-4bit",
         "api_base": "http://127.0.0.1:1246/v1",
         "launchd_label": "com.nanobot.local-model-qwen36",
+    },
+    "qwen35-base-mlx-4bit": {
+        "label": "Qwen3.5 Base",
+        "provider": "vllm",
+        "runtime": "mlx_lm.server",
+        "model": "mlx-community/Qwen3.5-27B-4bit",
+        "api_base": "http://127.0.0.1:1248/v1",
+        "launchd_label": "com.nanobot.local-model-qwen35-base-mlx-4bit",
     },
 }
 
@@ -85,6 +108,64 @@ def _endpoint_ok(api_base: str) -> bool:
         return False
 
 
+def _normalize_vision_probe_message(body_text: str) -> str:
+    lowered = body_text.lower()
+    if "only 'text' content type is supported" in lowered:
+        return "Only 'text' content type is supported."
+    if "image input is not supported" in lowered:
+        if "mmproj" in lowered:
+            return "image input is not supported - hint: mmproj-backed multimodal model is required"
+        return "image input is not supported"
+    return body_text.strip() or "vision probe failed"
+
+
+def _probe_vision_capability(api_base: str, model: str) -> tuple[bool, bool, str]:
+    cache_key = (api_base, model)
+    now = time.monotonic()
+    cached = _VISION_CHECK_CACHE.get(cache_key)
+    if cached is not None and cached[0] > now:
+        return cached[1]
+
+    payload = json.dumps(
+        {
+            "model": model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Return exactly one JSON object."},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{_VISION_PROBE_IMAGE_B64}",
+                            },
+                        },
+                    ],
+                }
+            ],
+            "max_tokens": 32,
+        }
+    ).encode("utf-8")
+    request = Request(
+        f"{api_base.rstrip('/')}/chat/completions",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        with urlopen(request, timeout=5) as response:
+            result = (200 <= int(response.status) < 300, True, "vision probe passed")
+    except HTTPError as exc:
+        body_text = exc.read().decode("utf-8", errors="ignore")
+        result = (False, True, _normalize_vision_probe_message(body_text))
+    except (OSError, URLError, ValueError):
+        result = (False, False, "endpoint unavailable")
+
+    _VISION_CHECK_CACHE[cache_key] = (now + _VISION_CHECK_TTL_SECONDS, result)
+    return result
+
+
 class LocalLlmController:
     """Small allowlisted wrapper around the local-models control script."""
 
@@ -122,6 +203,14 @@ class LocalLlmController:
         targets: list[dict[str, Any]] = []
         for name, meta in LOCAL_LLM_TARGETS.items():
             endpoint_ok = _endpoint_ok(meta["api_base"])
+            supports_vision = False
+            vision_check_ok = False
+            vision_check_message = "endpoint unavailable"
+            if endpoint_ok:
+                supports_vision, vision_check_ok, vision_check_message = _probe_vision_capability(
+                    meta["api_base"],
+                    meta["model"],
+                )
             targets.append({
                 "name": name,
                 "label": meta["label"],
@@ -132,6 +221,9 @@ class LocalLlmController:
                 "launchd_label": meta["launchd_label"],
                 "running": endpoint_ok,
                 "endpoint_ok": endpoint_ok,
+                "supports_vision": supports_vision,
+                "vision_check_ok": vision_check_ok,
+                "vision_check_message": vision_check_message,
                 "is_default": False,
             })
 

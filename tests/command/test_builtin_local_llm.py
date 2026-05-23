@@ -32,8 +32,26 @@ class _FakeLocalLlmController:
             "default_model": "mlx-community/Qwen3.6-35B-A3B-4bit",
             "default_api_base": "http://127.0.0.1:1246/v1",
             "targets": [
-                {"name": "qwen36", "model": "mlx-community/Qwen3.6-35B-A3B-4bit", "running": True, "endpoint_ok": True, "is_default": True},
-                {"name": "lfm2", "model": "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0", "running": False, "endpoint_ok": False, "is_default": False},
+                {
+                    "name": "qwen36",
+                    "model": "mlx-community/Qwen3.6-35B-A3B-4bit",
+                    "running": True,
+                    "endpoint_ok": True,
+                    "supports_vision": False,
+                    "vision_check_ok": True,
+                    "vision_check_message": "Only 'text' content type is supported.",
+                    "is_default": True,
+                },
+                {
+                    "name": "lfm2",
+                    "model": "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0",
+                    "running": False,
+                    "endpoint_ok": False,
+                    "supports_vision": False,
+                    "vision_check_ok": False,
+                    "vision_check_message": "endpoint unavailable",
+                    "is_default": False,
+                },
             ],
         }
 
@@ -60,6 +78,8 @@ async def test_cmd_local_llm_status_uses_shared_controller(
     assert "Default: `qwen36`" in out.content
     assert "qwen36" in out.content
     assert "endpoint ok" in out.content
+    assert "vision unsupported" in out.content
+    assert "Only 'text' content type is supported." in out.content
     assert "Use `/model smart-router-local`" in out.content
 
 
@@ -89,7 +109,7 @@ async def test_cmd_local_llm_confirm_use_reports_restart_requirement(
 
 
 def test_help_text_mentions_local_llm_command() -> None:
-    assert "/local-llm [status|start|stop|restart|smoke|use|confirm] [lfm2|qwen36] — Show or control local LLM runtime." in build_help_text()
+    assert "/local-llm [status|start|stop|restart|smoke|use|confirm] [lfm2|qwen35-base-mlx-4bit|qwen36] — Show or control local LLM runtime." in build_help_text()
 
 
 def test_command_router_dispatches_local_llm_prefix() -> None:

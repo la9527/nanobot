@@ -5,6 +5,15 @@ import { describe, expect, it, vi } from "vitest";
 import { ThreadComposer } from "@/components/thread/ThreadComposer";
 import type { SlashCommand } from "@/lib/types";
 
+vi.mock("@/lib/imageEncode", () => ({
+  encodeImage: vi.fn(async () => ({
+    ok: true,
+    dataUrl: "data:image/png;base64,abc123",
+    bytes: 6,
+    normalized: false,
+  })),
+}));
+
 const COMMANDS: SlashCommand[] = [
   {
     command: "/stop",
@@ -274,6 +283,9 @@ describe("ThreadComposer", () => {
           launchd_label: "com.nanobot.local-model-lfm2",
           running: true,
           endpoint_ok: true,
+          supports_vision: false,
+          vision_check_ok: false,
+          vision_check_message: "endpoint unavailable",
           is_default: true,
         },
       ],
@@ -312,6 +324,113 @@ describe("ThreadComposer", () => {
     await user.click(screen.getByRole("menuitemradio", { name: /Mini/i }));
 
     expect(onSelectModelTarget).toHaveBeenCalledWith("smart-router-mini");
+  });
+
+  it("disables the local smart-router target when an image is attached and the active local runtime lacks vision", async () => {
+    const user = userEvent.setup();
+    const onSelectModelTarget = vi.fn();
+    const loadLocalLlmStatus = vi.fn().mockResolvedValue({
+      default_target: "qwen36",
+      default_model: "mlx-community/Qwen3.6-35B-A3B-4bit",
+      default_api_base: "http://127.0.0.1:1246/v1",
+      targets: [
+        {
+          name: "qwen36",
+          label: "Qwen3.6",
+          provider: "vllm",
+          runtime: "mlx_lm.server",
+          model: "mlx-community/Qwen3.6-35B-A3B-4bit",
+          api_base: "http://127.0.0.1:1246/v1",
+          launchd_label: "com.nanobot.local-model-qwen36",
+          running: true,
+          endpoint_ok: true,
+          supports_vision: false,
+          vision_check_ok: true,
+          vision_check_message: "Only 'text' content type is supported.",
+          is_default: true,
+        },
+      ],
+    });
+
+    const { container } = render(
+      <ThreadComposer
+        onSend={vi.fn()}
+        modelLabel="smart-router"
+        activeTarget="smart-router"
+        modelTargets={[
+          { name: "smart-router", kind: "smart_router", display_name: "Auto", group: "smart-router", smart_router_mode: "auto", description: "smart-router runtime plugin target." },
+          { name: "smart-router-local", kind: "smart_router", provider: "vllm", model: "mlx-community/Qwen3.6-35B-A3B-4bit", display_name: "Local", group: "smart-router", smart_router_mode: "local", description: "smart-router forced local tier (mlx-community/Qwen3.6-35B-A3B-4bit)" },
+          { name: "smart-router-mini", kind: "smart_router", provider: "openrouter", model: "openai/gpt-5.4-mini", display_name: "Mini", group: "smart-router", smart_router_mode: "mini", description: "smart-router forced mini tier." },
+        ]}
+        loadLocalLlmStatus={loadLocalLlmStatus}
+        onSelectModelTarget={onSelectModelTarget}
+      />,
+    );
+
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const file = new File([new Uint8Array([137, 80, 78, 71])], "vision.png", { type: "image/png" });
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    await user.click(screen.getByRole("button", { name: "Choose model target" }));
+    await waitFor(() => expect(loadLocalLlmStatus).toHaveBeenCalledTimes(1));
+
+    const localItem = screen.getByRole("menuitemradio", { name: /Local/i });
+    expect(localItem).toHaveAttribute("data-disabled");
+    expect(screen.getByText("Current local LLM does not support image input.")).toBeInTheDocument();
+
+    await user.click(localItem);
+    expect(onSelectModelTarget).not.toHaveBeenCalledWith("smart-router-local");
+  });
+
+  it("blocks sending image input when the active local target lacks vision support", async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn();
+    const loadLocalLlmStatus = vi.fn().mockResolvedValue({
+      default_target: "qwen36",
+      default_model: "mlx-community/Qwen3.6-35B-A3B-4bit",
+      default_api_base: "http://127.0.0.1:1246/v1",
+      targets: [
+        {
+          name: "qwen36",
+          label: "Qwen3.6",
+          provider: "vllm",
+          runtime: "mlx_lm.server",
+          model: "mlx-community/Qwen3.6-35B-A3B-4bit",
+          api_base: "http://127.0.0.1:1246/v1",
+          launchd_label: "com.nanobot.local-model-qwen36",
+          running: true,
+          endpoint_ok: true,
+          supports_vision: false,
+          vision_check_ok: true,
+          vision_check_message: "Only 'text' content type is supported.",
+          is_default: true,
+        },
+      ],
+    });
+
+    const { container } = render(
+      <ThreadComposer
+        onSend={onSend}
+        activeTarget="smart-router-local"
+        modelLabel="Local"
+        modelTargets={[
+          { name: "smart-router-local", kind: "smart_router", provider: "vllm", model: "mlx-community/Qwen3.6-35B-A3B-4bit", display_name: "Local", group: "smart-router", smart_router_mode: "local", description: "smart-router forced local tier (mlx-community/Qwen3.6-35B-A3B-4bit)" },
+        ]}
+        loadLocalLlmStatus={loadLocalLlmStatus}
+      />,
+    );
+
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const file = new File([new Uint8Array([137, 80, 78, 71])], "vision.png", { type: "image/png" });
+    fireEvent.change(fileInput, { target: { files: [file] } });
+    await user.type(screen.getByLabelText("Message input"), "What is in this image?");
+
+    await waitFor(() => expect(loadLocalLlmStatus).toHaveBeenCalledTimes(1));
+    expect(screen.getByText("Current local LLM does not support image input.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    expect(onSend).not.toHaveBeenCalled();
   });
 
   it("recalls prior sent text with up/down history navigation", async () => {

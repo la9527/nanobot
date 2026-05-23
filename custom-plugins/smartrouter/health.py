@@ -28,8 +28,8 @@ class TierHealthTracker:
     def record_success(self, tier: TierName) -> None:
         self._state[tier] = TierHealthState()
 
-    def record_failure(self, tier: TierName) -> None:
+    def record_failure(self, tier: TierName, *, immediate: bool = False) -> None:
         state = self._state[tier]
         state.consecutive_failures += 1
-        if state.consecutive_failures >= self._settings.failure_threshold:
+        if immediate or state.consecutive_failures >= self._settings.failure_threshold:
             state.cooldown_until = time.monotonic() + self._settings.cooldown_seconds

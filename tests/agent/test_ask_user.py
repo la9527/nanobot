@@ -242,6 +242,102 @@ async def test_ask_user_keeps_buttons_for_websocket(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_websocket_ask_user_reply_resumes_without_visible_echo(tmp_path):
+    seen_messages: list[list[dict]] = []
+
+    @tool_parameters(tool_parameters_schema(required=[]))
+    class LaterTool(Tool):
+        called = False
+
+        @property
+        def name(self) -> str:
+            return "later"
+
+        @property
+        def description(self) -> str:
+            return "Continue after ask_user reply."
+
+        async def execute(self, **kwargs):
+            self.called = True
+            return "later result"
+
+    async def chat_with_retry(**kwargs):
+        seen_messages.append(kwargs["messages"])
+        if len(seen_messages) == 1:
+            return LLMResponse(
+                content="",
+                finish_reason="tool_calls",
+                tool_calls=[
+                    ToolCallRequest(
+                        id="call_ask",
+                        name="ask_user",
+                        arguments={
+                            "question": "Install the optional package?",
+                            "options": ["Install", "Skip"],
+                        },
+                    )
+                ],
+            )
+        if len(seen_messages) == 2:
+            messages = kwargs["messages"]
+            ask_index = next(
+                index
+                for index, message in enumerate(messages)
+                if message.get("role") == "assistant"
+                and any(
+                    tool_call.get("function", {}).get("name") == "ask_user"
+                    for tool_call in message.get("tool_calls") or []
+                    if isinstance(tool_call, dict)
+                )
+            )
+            assert messages[ask_index + 1] == {
+                "role": "tool",
+                "tool_call_id": "call_ask",
+                "name": "ask_user",
+                "content": "Install",
+            }
+            return LLMResponse(
+                content="",
+                finish_reason="tool_calls",
+                tool_calls=[ToolCallRequest(id="call_later", name="later", arguments={})],
+            )
+        return LLMResponse(content="Continuing after retry.", usage={})
+
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=_make_provider(chat_with_retry),
+        workspace=tmp_path,
+        model="test-model",
+    )
+    later = LaterTool()
+    loop.tools.register(later)
+
+    first = await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="user", chat_id="123", content="set it up")
+    )
+
+    assert first is not None
+    assert first.content == "Install the optional package?"
+    assert first.buttons == [["Install", "Skip"]]
+
+    second = await loop._process_message(
+        InboundMessage(channel="websocket", sender_id="user", chat_id="123", content="Install")
+    )
+
+    assert second is not None
+    assert second.content == "Continuing after retry."
+    assert later.called is True
+
+    session = loop.sessions.get_or_create("websocket:123")
+    assert any(
+        message.get("role") == "assistant"
+        and message.get("content") == "Install the optional package?"
+        and message.get("buttons") == [["Install", "Skip"]]
+        for message in session.messages
+    )
+
+
+@pytest.mark.asyncio
 async def test_dispatch_mirrors_buttons_to_websocket_for_telegram_sessions(tmp_path):
     loop = AgentLoop(
         bus=MessageBus(),

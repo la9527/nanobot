@@ -98,6 +98,7 @@ def ask_user_tool_result_messages(
     tool_call_id: str,
     content: str,
 ) -> list[dict[str, Any]]:
+    history = _history_without_visible_ask_user_echo(history, tool_call_id)
     return [
         {"role": "system", "content": system_prompt},
         *history,
@@ -108,6 +109,72 @@ def ask_user_tool_result_messages(
             "content": content,
         },
     ]
+
+
+def _history_without_visible_ask_user_echo(
+    history: list[dict[str, Any]],
+    tool_call_id: str,
+) -> list[dict[str, Any]]:
+    ask_index: int | None = None
+    question = ""
+    options: list[str] = []
+
+    for index, message in enumerate(history):
+        if message.get("role") != "assistant":
+            continue
+        for tool_call in message.get("tool_calls") or []:
+            if not isinstance(tool_call, dict):
+                continue
+            if tool_call.get("id") != tool_call_id or _tool_call_name(tool_call) != "ask_user":
+                continue
+            ask_index = index
+            arguments = _tool_call_arguments(tool_call)
+            raw_question = arguments.get("question")
+            question = str(raw_question).strip() if isinstance(raw_question, str) else ""
+            raw_options = arguments.get("options")
+            if isinstance(raw_options, list):
+                options = [str(option) for option in raw_options if isinstance(option, str)]
+            break
+        if ask_index is not None:
+            break
+
+    if ask_index is None or ask_index + 1 >= len(history):
+        return history
+
+    candidate = history[ask_index + 1]
+    if _is_visible_ask_user_echo(candidate, question, options):
+        return [*history[: ask_index + 1], *history[ask_index + 2 :]]
+    return history
+
+
+def _is_visible_ask_user_echo(
+    message: dict[str, Any],
+    question: str,
+    options: list[str],
+) -> bool:
+    if message.get("role") != "assistant" or message.get("tool_calls"):
+        return False
+
+    content = message.get("content")
+    if not isinstance(content, str):
+        return False
+
+    normalized = content.strip()
+    if not normalized:
+        return False
+
+    normalized_question = question.strip()
+    if normalized_question and normalized == normalized_question:
+        return True
+
+    if not options:
+        return False
+
+    numbered = "\n".join(
+        f"{index}. {option}" for index, option in enumerate(options, 1)
+    )
+    fallback = f"{normalized_question}\n\n{numbered}" if normalized_question else numbered
+    return normalized == fallback
 
 
 def ask_user_options_from_messages(messages: list[dict[str, Any]]) -> list[str]:

@@ -352,6 +352,42 @@ def test_restore_runtime_checkpoint_dedupes_overlapping_tail() -> None:
     assert session.messages[2]["tool_call_id"] == "call_pending"
 
 
+def test_restore_runtime_checkpoint_skips_tool_rows_without_declared_tool_calls() -> None:
+    loop = _mk_loop()
+    session = Session(
+        key="test:checkpoint-invalid-tools",
+        metadata={
+            AgentLoop._RUNTIME_CHECKPOINT_KEY: {
+                "assistant_message": {
+                    "role": "assistant",
+                    "content": "working",
+                },
+                "completed_tool_results": [
+                    {
+                        "role": "tool",
+                        "tool_call_id": "call_done",
+                        "name": "read_file",
+                        "content": "ok",
+                    }
+                ],
+                "pending_tool_calls": [
+                    {
+                        "id": "call_pending",
+                        "type": "function",
+                        "function": {"name": "exec", "arguments": "{}"},
+                    }
+                ],
+            }
+        },
+    )
+
+    restored = loop._restore_runtime_checkpoint(session)
+
+    assert restored is True
+    assert session.metadata.get(AgentLoop._RUNTIME_CHECKPOINT_KEY) is None
+    assert session.messages == [{"role": "assistant", "content": "working", "timestamp": session.messages[0]["timestamp"]}]
+
+
 @pytest.mark.asyncio
 async def test_process_message_persists_user_message_before_turn_completes(tmp_path: Path) -> None:
     loop = _make_full_loop(tmp_path)

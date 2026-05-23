@@ -444,7 +444,7 @@ export interface SettingsUpdate {
 }
 
 export interface LocalLlmTargetStatus {
-  name: "lfm2" | "qwen36";
+  name: "lfm2" | "qwen35-base-mlx-4bit" | "qwen36";
   label: string;
   provider?: string;
   runtime: string;
@@ -453,6 +453,9 @@ export interface LocalLlmTargetStatus {
   launchd_label: string;
   running: boolean;
   endpoint_ok: boolean;
+  supports_vision: boolean;
+  vision_check_ok: boolean;
+  vision_check_message: string;
   is_default: boolean;
 }
 

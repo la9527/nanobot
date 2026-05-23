@@ -272,7 +272,8 @@
       "mini": "Mini",
       "full": "Full",
       "autoDescription": "Automatic model selection",
-      "localLoadingDescription": "Loading local LLM status..."
+      "localLoadingDescription": "Loading local LLM status...",
+      "localVisionUnsupported": "Current local LLM does not support image input."
     },
     "inlineAction": {
       "label": {
@@ -738,6 +739,11 @@
       },
       "endpointOk": "Endpoint OK",
       "endpointUnavailable": "Endpoint unavailable",
+      "vision": {
+        "supported": "Vision supported",
+        "unsupported": "Vision unsupported",
+        "unknown": "Vision check unavailable"
+      },
       "defaultBadge": "Default",
       "currentDefault": "Current default",
       "lastAction": "Last action",

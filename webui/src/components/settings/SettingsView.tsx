@@ -529,6 +529,8 @@ function LocalLlmTargetPanel({
   const targetBusy = (action: string) => busy === `${action}:${target.name}`;
   const state = getLocalLlmState(target, busy);
   const stateLabel = t(`settings.localLlm.state.${state}`);
+  const visionState = getLocalLlmVisionState(target);
+  const visionLabel = t(`settings.localLlm.vision.${visionState}`);
   const toggleAction = target.running ? "stop" : "start";
   const toggleBusy = targetBusy("start") || targetBusy("stop");
   const toggleTone = state === "starting" ? "starting" : target.running ? "stopped" : "running";
@@ -560,6 +562,11 @@ function LocalLlmTargetPanel({
               tone={target.endpoint_ok ? "running" : "stopped"}
               icon={<Zap className="size-3.5" />}
             />
+            <StatusIcon
+              label={visionLabel}
+              tone={visionState === "supported" ? "running" : visionState === "unknown" ? "checking" : "stopped"}
+              icon={<Activity className="size-3.5" />}
+            />
           </div>
         </div>
 
@@ -569,6 +576,10 @@ function LocalLlmTargetPanel({
           <LocalLlmDetail label={t("settings.localLlm.details.launchd")} value={target.launchd_label} />
           <LocalLlmDetail label={t("settings.localLlm.details.activeModel")} value={target.is_default ? defaultModel : target.model} />
         </div>
+
+        {target.vision_check_message ? (
+          <p className="mt-3 text-xs text-muted-foreground">{target.vision_check_message}</p>
+        ) : null}
 
         <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
           <Button
@@ -603,6 +614,12 @@ function getLocalLlmState(target: LocalLlmTargetStatus, busy: string | null): "r
   const isMutating = ["start", "restart", "use"].some((action) => busy === `${action}:${target.name}`);
   if (isMutating) return "starting";
   return target.running ? "running" : "stopped";
+}
+
+function getLocalLlmVisionState(target: LocalLlmTargetStatus): "supported" | "unsupported" | "unknown" {
+  if (target.supports_vision) return "supported";
+  if (target.vision_check_ok) return "unsupported";
+  return "unknown";
 }
 
 function StatusIcon({

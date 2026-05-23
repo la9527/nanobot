@@ -395,6 +395,9 @@ class LLMProvider(ABC):
                 if role == "assistant":
                     prev_has_tools = bool(prev.get("tool_calls"))
                     curr_has_tools = bool(msg.get("tool_calls"))
+                    if prev_has_tools and curr_has_tools:
+                        merged.append(dict(msg))
+                        continue
                     if curr_has_tools:
                         merged[-1] = dict(msg)
                         continue

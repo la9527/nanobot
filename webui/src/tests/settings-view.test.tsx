@@ -40,23 +40,31 @@ describe("SettingsView local LLM settings", () => {
         {
           name: "qwen36",
           label: "Qwen3.6",
+          provider: "vllm",
           runtime: "mlx_lm.server",
           model: "mlx-community/Qwen3.6-35B-A3B-4bit",
           api_base: "http://127.0.0.1:1246/v1",
           launchd_label: "com.nanobot.local-model-qwen36",
           running: true,
           endpoint_ok: true,
+          supports_vision: false,
+          vision_check_ok: true,
+          vision_check_message: "Only 'text' content type is supported.",
           is_default: true,
         },
         {
           name: "lfm2",
           label: "LFM2",
+          provider: "llama.cpp",
           runtime: "llama.cpp",
           model: "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0",
           api_base: "http://127.0.0.1:1242/v1",
           launchd_label: "com.nanobot.local-model-lfm2",
           running: false,
           endpoint_ok: false,
+          supports_vision: false,
+          vision_check_ok: false,
+          vision_check_message: "endpoint unavailable",
           is_default: false,
         },
       ],
@@ -93,6 +101,8 @@ describe("SettingsView local LLM settings", () => {
     expect(screen.getByText("Qwen3.6")).toBeInTheDocument();
     expect(screen.getByLabelText("Running")).toBeInTheDocument();
     expect(screen.getByLabelText("Endpoint OK")).toBeInTheDocument();
+    expect(screen.getByLabelText("Vision unsupported")).toBeInTheDocument();
+    expect(screen.getByText("Only 'text' content type is supported.")).toBeInTheDocument();
     expect(screen.getByText("Current default")).toBeDisabled();
     expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Check response" })).toBeInTheDocument();

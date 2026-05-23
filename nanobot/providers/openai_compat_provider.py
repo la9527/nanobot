@@ -60,6 +60,7 @@ _KIMI_THINKING_MODELS: frozenset[str] = frozenset({
     "k2.6-code-preview",
 })
 _OPENAI_COMPAT_REQUEST_TIMEOUT_S = 120.0
+_OPENAI_COMPAT_LOCAL_REQUEST_TIMEOUT_S = 90.0
 
 # Maps ProviderSpec.thinking_style → extra_body builder.
 # Each builder takes a bool (thinking_enabled) and returns the dict to
@@ -93,6 +94,14 @@ def _is_kimi_thinking_model(model_name: str) -> bool:
 def _openai_compat_timeout_s() -> float:
     """Return the bounded request timeout used for OpenAI-compatible providers."""
     return _float_env("NANOBOT_OPENAI_COMPAT_TIMEOUT_S", _OPENAI_COMPAT_REQUEST_TIMEOUT_S)
+
+
+def _openai_compat_local_timeout_s() -> float:
+    """Return the shorter default timeout used for local OpenAI-compatible endpoints."""
+    default = _OPENAI_COMPAT_LOCAL_REQUEST_TIMEOUT_S
+    if os.environ.get("NANOBOT_OPENAI_COMPAT_TIMEOUT_S"):
+        default = _openai_compat_timeout_s()
+    return _float_env("NANOBOT_OPENAI_COMPAT_LOCAL_TIMEOUT_S", default)
 
 
 def _float_env(name: str, default: float) -> float:
@@ -292,9 +301,14 @@ class OpenAICompatProvider(LLMProvider):
         # opening a fresh connection for each request, which is cheap on a
         # LAN.  Cloud providers benefit from keepalive, so we leave the
         # default pool settings for them.
-        timeout_s = _openai_compat_timeout_s()
+        is_local_endpoint = _is_local_endpoint(spec, effective_base)
+        timeout_s = (
+            _openai_compat_local_timeout_s()
+            if is_local_endpoint
+            else _openai_compat_timeout_s()
+        )
         http_client: httpx.AsyncClient | None = None
-        if _is_local_endpoint(spec, effective_base):
+        if is_local_endpoint:
             http_client = httpx.AsyncClient(
                 limits=httpx.Limits(keepalive_expiry=0),
                 timeout=timeout_s,

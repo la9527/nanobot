@@ -260,7 +260,8 @@
       "mini": "미니",
       "full": "풀",
       "autoDescription": "자동 모델 선택",
-      "localLoadingDescription": "Local LLM 상태를 불러오는 중..."
+      "localLoadingDescription": "Local LLM 상태를 불러오는 중...",
+      "localVisionUnsupported": "현재 local LLM은 이미지 입력을 지원하지 않습니다."
     },
     "inlineAction": {
       "label": {
@@ -720,6 +721,11 @@
       },
       "endpointOk": "Endpoint OK",
       "endpointUnavailable": "Endpoint 응답 없음",
+      "vision": {
+        "supported": "Vision 지원",
+        "unsupported": "Vision 미지원",
+        "unknown": "Vision 확인 불가"
+      },
       "defaultBadge": "기본값",
       "currentDefault": "현재 기본값",
       "lastAction": "최근 작업",

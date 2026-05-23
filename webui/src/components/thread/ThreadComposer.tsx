@@ -114,6 +114,22 @@ function displayModelTargetName(target: ModelTargetOption): string {
   return label || target.name;
 }
 
+function isLocalVisionTarget(target: ModelTargetOption): boolean {
+  return target.smart_router_mode === "local" || target.name === "local-llm";
+}
+
+function getModelTargetDisableReason(
+  target: ModelTargetOption,
+  localLlmStatus: LocalLlmStatusPayload | null,
+  hasAttachedImages: boolean,
+  localVisionUnsupportedLabel: string,
+): string | null {
+  if (!hasAttachedImages || !isLocalVisionTarget(target)) return null;
+  const liveLocalTarget = resolveLiveLocalTarget(localLlmStatus);
+  if (!liveLocalTarget || liveLocalTarget.supports_vision) return null;
+  return localVisionUnsupportedLabel;
+}
+
 function orderModelTargets(targets: ModelTargetOption[]): ModelTargetOption[] {
   const rank: Record<string, number> = {
     auto: 0,
@@ -306,12 +322,6 @@ export function ThreadComposer({
     [images],
   );
   const hasErrors = images.some((img) => img.status === "error");
-
-  const canSend =
-    !disabled
-    && !encoding
-    && !hasErrors
-    && (value.trim().length > 0 || readyImages.length > 0);
   const orderedTargets = useMemo(() => orderModelTargets(modelTargets), [modelTargets]);
   const visibleTargets = useMemo(() => {
     const smartRouterTargets = orderedTargets.filter((target) => target.group === "smart-router");
@@ -320,6 +330,26 @@ export function ThreadComposer({
   const canSelectModelTarget = !disabled && !modelTargetPending && visibleTargets.length > 0 && !!onSelectModelTarget;
   const autoTargetDescription = t("thread.modelTarget.autoDescription");
   const localTargetLoadingDescription = t("thread.modelTarget.localLoadingDescription");
+  const localVisionUnsupportedDescription = t("thread.modelTarget.localVisionUnsupported");
+  const activeModelTarget = useMemo(
+    () => orderedTargets.find((target) => target.name === activeTarget) ?? null,
+    [activeTarget, orderedTargets],
+  );
+  const activeLocalVisionBlockReason = activeModelTarget
+    ? getModelTargetDisableReason(
+      activeModelTarget,
+      localLlmStatus,
+      images.length > 0,
+      localVisionUnsupportedDescription,
+    )
+    : null;
+
+  const canSend =
+    !disabled
+    && !encoding
+    && !hasErrors
+    && !activeLocalVisionBlockReason
+    && (value.trim().length > 0 || readyImages.length > 0);
 
   const slashQuery = useMemo(() => {
     if (disabled || slashMenuDismissed || !value.startsWith("/")) return null;
@@ -393,9 +423,10 @@ export function ThreadComposer({
   }, [aspectMenuOpen]);
 
   useEffect(() => {
-    if (!modelMenuOpen || !loadLocalLlmStatus) return;
-    const needsLiveLocalStatus = visibleTargets.some((target) => target.smart_router_mode === "local");
-    if (!needsLiveLocalStatus) return;
+    if (!loadLocalLlmStatus) return;
+    const needsMenuLocalStatus = modelMenuOpen && visibleTargets.some((target) => isLocalVisionTarget(target));
+    const needsActiveLocalStatus = images.length > 0 && !!activeModelTarget && isLocalVisionTarget(activeModelTarget);
+    if (!needsMenuLocalStatus && !needsActiveLocalStatus) return;
     let cancelled = false;
     void loadLocalLlmStatus()
       .then((status) => {
@@ -407,7 +438,7 @@ export function ThreadComposer({
     return () => {
       cancelled = true;
     };
-  }, [loadLocalLlmStatus, modelMenuOpen, visibleTargets]);
+  }, [activeModelTarget, images.length, loadLocalLlmStatus, modelMenuOpen, visibleTargets]);
 
   const resizeTextarea = useCallback(() => {
     requestAnimationFrame(() => {
@@ -701,7 +732,7 @@ export function ThreadComposer({
             lineHeight: "var(--chat-line-height)",
           }}
         />
-        {inlineError ? (
+        {inlineError || activeLocalVisionBlockReason ? (
           <div
             role="alert"
             className={cn(
@@ -709,7 +740,7 @@ export function ThreadComposer({
               "text-[11.5px] font-medium text-destructive",
             )}
           >
-            {inlineError}
+            {inlineError ?? activeLocalVisionBlockReason}
           </div>
         ) : null}
         <div
@@ -835,12 +866,21 @@ export function ThreadComposer({
                       }}
                     >
                       {visibleTargets.map((target) => (
-                        <DropdownMenuRadioItem key={target.name} value={target.name}>
+                        <DropdownMenuRadioItem
+                          key={target.name}
+                          value={target.name}
+                          disabled={!!getModelTargetDisableReason(target, localLlmStatus, images.length > 0, localVisionUnsupportedDescription)}
+                        >
                           <span className="flex min-w-0 flex-col gap-0.5">
                             <span className="truncate font-medium">{displayModelTargetName(target)}</span>
                             {describeModelTarget(target, localLlmStatus, autoTargetDescription, localTargetLoadingDescription) ? (
                               <span className="max-w-[15rem] whitespace-normal text-[11px] text-muted-foreground">
                                 {describeModelTarget(target, localLlmStatus, autoTargetDescription, localTargetLoadingDescription)}
+                              </span>
+                            ) : null}
+                            {getModelTargetDisableReason(target, localLlmStatus, images.length > 0, localVisionUnsupportedDescription) ? (
+                              <span className="max-w-[15rem] whitespace-normal text-[11px] text-muted-foreground">
+                                {getModelTargetDisableReason(target, localLlmStatus, images.length > 0, localVisionUnsupportedDescription)}
                               </span>
                             ) : null}
                             {target.description && target.group !== "smart-router" ? (

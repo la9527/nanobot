@@ -171,6 +171,53 @@ async def test_smart_router_falls_back_after_local_error(tmp_path: Path) -> None
 
 
 @pytest.mark.asyncio
+async def test_smart_router_cools_down_local_immediately_after_timeout(tmp_path: Path) -> None:
+    config = RouterConfig(
+        enabled=True,
+        allow_local_tools=False,
+        local=TierTarget(tier="local", provider="vllm", model="local-model"),
+        mini=TierTarget(tier="mini", provider="openrouter", model="mini-model"),
+        full=TierTarget(tier="full", provider="openrouter", model="full-model"),
+        policy=PolicySettings(
+            local_score_max=2,
+            full_score_min=6,
+            short_prompt_chars=120,
+            medium_prompt_chars=800,
+            long_prompt_chars=2000,
+            tool_bonus=2,
+            code_bonus=3,
+            reasoning_bonus=3,
+            history_bonus=2,
+            attachment_bonus=2,
+            full_keywords=["architecture"],
+            code_keywords=["python"],
+            tool_keywords=["docker"],
+        ),
+        health=HealthSettings(failure_threshold=3, cooldown_seconds=999),
+        logging=LoggingSettings(enabled=False, path=str(tmp_path / "smart-router.jsonl")),
+    )
+    local = _StubProvider(
+        "local",
+        [LLMResponse(content="timed out", finish_reason="error", error_kind="timeout")],
+    )
+    mini = _StubProvider("mini", [LLMResponse(content="mini first"), LLMResponse(content="mini second")])
+    full = _StubProvider("full", [LLMResponse(content="full unused")])
+    router = SmartRouterProvider(
+        router_config=config,
+        tier_providers={"local": local, "mini": mini, "full": full},
+        default_model="router",
+    )
+
+    first = await router.chat_with_retry(messages=[{"role": "user", "content": "hello"}])
+    second = await router.chat_with_retry(messages=[{"role": "user", "content": "hello again"}])
+
+    assert first.content == "mini first"
+    assert second.content == "mini second"
+    assert len(local.calls) == 1
+    assert len(mini.calls) == 2
+
+
+@pytest.mark.asyncio
 async def test_smart_router_promotes_required_tool_choice_off_local(tmp_path: Path) -> None:
     router = _router(tmp_path)
 

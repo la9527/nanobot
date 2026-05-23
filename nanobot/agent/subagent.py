@@ -82,6 +82,7 @@ class SubagentManager:
         restrict_to_workspace: bool = False,
         disabled_skills: list[str] | None = None,
         max_iterations: int | None = None,
+        parent_tools: ToolRegistry | None = None,
     ):
         defaults = AgentDefaults()
         self.provider = provider
@@ -93,6 +94,7 @@ class SubagentManager:
         self.exec_config = exec_config or ExecToolConfig()
         self.restrict_to_workspace = restrict_to_workspace
         self.disabled_skills = set(disabled_skills or [])
+        self.parent_tools = parent_tools
         self.max_iterations = (
             max_iterations
             if max_iterations is not None
@@ -170,6 +172,13 @@ class SubagentManager:
         try:
             # Build subagent tools (no message tool, no spawn tool)
             tools = ToolRegistry()
+            if self.parent_tools is not None:
+                for name in getattr(self.parent_tools, "tool_names", []):
+                    if not name.startswith("mcp_"):
+                        continue
+                    tool = self.parent_tools.get(name)
+                    if tool is not None:
+                        tools.register(tool)
             allowed_dir = self.workspace if (self.restrict_to_workspace or self.exec_config.sandbox) else None
             extra_read = [BUILTIN_SKILLS_DIR] if allowed_dir else None
             # Subagent gets its own FileStates so its read-dedup cache is

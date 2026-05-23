@@ -321,6 +321,7 @@ class AgentLoop:
             restrict_to_workspace=restrict_to_workspace,
             disabled_skills=disabled_skills,
             max_iterations=self.max_iterations,
+            parent_tools=self.tools,
         )
         self._unified_session = unified_session
         self._max_messages = max_messages if max_messages > 0 else 120
@@ -1799,8 +1800,16 @@ class AgentLoop:
         if final_content is None or not final_content.strip():
             final_content = EMPTY_FINAL_RESPONSE_MESSAGE
 
-        # Skip the already-persisted user message when saving the turn
-        save_skip = 1 + len(history) + (1 if user_persisted_early else 0)
+        if stop_reason == "ask_user" and final_content != EMPTY_FINAL_RESPONSE_MESSAGE:
+            ask_buttons = ask_user_options_from_messages(all_msgs)
+            all_msgs.append({
+                "role": "assistant",
+                "content": final_content,
+                **({"buttons": [ask_buttons]} if ask_buttons else {}),
+            })
+
+        # Skip the replayed prompt prefix, but still persist ask_user tool replies.
+        save_skip = (len(initial_messages) - 1) + (1 if user_persisted_early else 0)
         generated_media = generated_image_paths_from_messages(all_msgs[save_skip:])
         if generated_media and all_msgs and all_msgs[-1].get("role") == "assistant":
             existing_media = all_msgs[-1].get("media")
@@ -2132,14 +2141,23 @@ class AgentLoop:
         assistant_message = checkpoint.get("assistant_message")
         completed_tool_results = checkpoint.get("completed_tool_results") or []
         pending_tool_calls = checkpoint.get("pending_tool_calls") or []
+        declared_tool_ids: set[str] = set()
 
         restored_messages: list[dict[str, Any]] = []
         if isinstance(assistant_message, dict):
             restored = dict(assistant_message)
             restored.setdefault("timestamp", datetime.now().isoformat())
             restored_messages.append(restored)
+            for tool_call in restored.get("tool_calls") or []:
+                if isinstance(tool_call, dict) and tool_call.get("id"):
+                    declared_tool_ids.add(str(tool_call["id"]))
         for message in completed_tool_results:
             if isinstance(message, dict):
+                tool_call_id = message.get("tool_call_id")
+                if declared_tool_ids and tool_call_id and str(tool_call_id) not in declared_tool_ids:
+                    continue
+                if not declared_tool_ids:
+                    continue
                 restored = dict(message)
                 restored.setdefault("timestamp", datetime.now().isoformat())
                 restored_messages.append(restored)
@@ -2147,6 +2165,8 @@ class AgentLoop:
             if not isinstance(tool_call, dict):
                 continue
             tool_id = tool_call.get("id")
+            if not declared_tool_ids or not tool_id or str(tool_id) not in declared_tool_ids:
+                continue
             name = ((tool_call.get("function") or {}).get("name")) or "tool"
             restored_messages.append(
                 {

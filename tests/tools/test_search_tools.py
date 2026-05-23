@@ -12,8 +12,30 @@ import pytest
 
 from nanobot.agent.loop import AgentLoop
 from nanobot.agent.subagent import SubagentManager, SubagentStatus
+from nanobot.agent.tools.base import Tool
+from nanobot.agent.tools.registry import ToolRegistry
 from nanobot.agent.tools.search import GlobTool, GrepTool
 from nanobot.bus.queue import MessageBus
+
+
+class _DummyTool(Tool):
+    def __init__(self, name: str):
+        self._name = name
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def description(self) -> str:
+        return f"dummy {self._name}"
+
+    @property
+    def parameters(self) -> dict:
+        return {"type": "object", "properties": {}}
+
+    async def execute(self, **kwargs):
+        return "ok"
 
 
 @pytest.mark.asyncio
@@ -329,6 +351,43 @@ async def test_subagent_registers_grep_and_glob(tmp_path: Path) -> None:
 
     assert "grep" in captured["tool_names"]
     assert "glob" in captured["tool_names"]
+
+
+@pytest.mark.asyncio
+async def test_subagent_inherits_parent_mcp_tools_only(tmp_path: Path) -> None:
+    bus = MessageBus()
+    provider = MagicMock()
+    provider.get_default_model.return_value = "test-model"
+    parent_tools = ToolRegistry()
+    parent_tools.register(_DummyTool("mcp_photos_select_best"))
+    parent_tools.register(_DummyTool("message"))
+
+    mgr = SubagentManager(
+        provider=provider,
+        workspace=tmp_path,
+        bus=bus,
+        max_tool_result_chars=4096,
+        parent_tools=parent_tools,
+    )
+    captured: dict[str, list[str]] = {}
+
+    async def fake_run(spec):
+        captured["tool_names"] = spec.tools.tool_names
+        return SimpleNamespace(
+            stop_reason="ok",
+            final_content="done",
+            tool_events=[],
+            error=None,
+        )
+
+    mgr.runner.run = fake_run
+    mgr._announce_result = AsyncMock()
+
+    status = SubagentStatus(task_id="sub-2", label="label", task_description="mcp task", started_at=time.monotonic())
+    await mgr._run_subagent("sub-2", "mcp task", "label", {"channel": "cli", "chat_id": "direct"}, status)
+
+    assert "mcp_photos_select_best" in captured["tool_names"]
+    assert "message" not in captured["tool_names"]
 
 
 def test_subagent_prompt_respects_disabled_skills(tmp_path: Path) -> None:

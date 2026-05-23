@@ -146,7 +146,7 @@ BUILTIN_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
         "Manage local LLM",
         "Show or control local LLM runtime.",
         "bot",
-        "[status|start|stop|restart|smoke|use|confirm] [lfm2|qwen36]",
+        "[status|start|stop|restart|smoke|use|confirm] [lfm2|qwen35-base-mlx-4bit|qwen36]",
     ),
     BuiltinCommandSpec(
         "/usage",
@@ -477,10 +477,19 @@ async def cmd_local_llm(ctx: CommandContext) -> OutboundMessage:
             markers: list[str] = []
             markers.append("running" if row.get("running") else "stopped")
             markers.append("endpoint ok" if row.get("endpoint_ok") else "endpoint unavailable")
+            if row.get("supports_vision"):
+                markers.append(_t("local_llm.status.vision_supported"))
+            elif row.get("vision_check_ok"):
+                markers.append(_t("local_llm.status.vision_unsupported"))
+            else:
+                markers.append(_t("local_llm.status.vision_unavailable"))
             if row.get("is_default"):
                 markers.append("default")
             prefix = "*" if row.get("is_default") else "-"
             lines.append(f"{prefix} `{row.get('name')}` — {', '.join(markers)}")
+            vision_message = str(row.get("vision_check_message") or "").strip()
+            if vision_message:
+                lines.append(f"  vision: {vision_message}")
         lines.extend([
             "",
             "Use `/local-llm use qwen36` to change the default local LLM.",
