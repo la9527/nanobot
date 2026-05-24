@@ -113,8 +113,10 @@ def test_photo_ranker_wrapper_sets_dedicated_vlm_runtime_paths():
 
     assert 'PHOTOS_MCP_RUNTIME_ROOT="${PHOTOS_MCP_RUNTIME_ROOT:-${NANOBOT_PHOTOS_MCP_RUNTIME_ROOT:-$PHOTOS_MCP_HOME/runtime}}"' in content
     assert 'PHOTOS_MCP_CACHE_ROOT="${PHOTOS_MCP_CACHE_ROOT:-${NANOBOT_PHOTOS_MCP_CACHE_ROOT:-$PHOTOS_MCP_HOME/cache}}"' in content
-    assert 'PHOTO_RANKER_RUNTIME_ROOT="${PHOTO_RANKER_RUNTIME_ROOT:-$PHOTOS_MCP_RUNTIME_ROOT/photo-ranker}"' in content
-    assert 'PHOTO_RANKER_VLM_CACHE_ROOT="${PHOTO_RANKER_VLM_CACHE_ROOT:-$PHOTOS_MCP_CACHE_ROOT/vlm}"' in content
+    assert 'PHOTO_RANKER_RUNTIME_ROOT="${PHOTO_RANKER_RUNTIME_ROOT:-$PHOTOS_MCP_ROOT/.runtime/photo-ranker}"' in content
+    assert 'PHOTO_RANKER_VLM_CACHE_ROOT="${PHOTO_RANKER_VLM_CACHE_ROOT:-$PHOTOS_MCP_ROOT/.model-cache/huggingface}"' in content
+    assert 'PHOTO_RANKER_MODEL_CACHE_ROOT="${PHOTO_RANKER_MODEL_CACHE_ROOT:-$PHOTOS_MCP_ROOT/.model-cache/models/photo-ranker}"' in content
+    assert 'PHOTO_SOURCE_CACHE_ROOT="${PHOTO_SOURCE_CACHE_ROOT:-$PHOTOS_MCP_ROOT/.model-cache/photo-source}"' in content
     assert 'if [[ -z "${PHOTO_RANKER_VLM_BACKEND:-}" ]]; then' in content
     assert 'export PHOTO_RANKER_VLM_BACKEND="mlx"' in content
     assert 'export PHOTO_RANKER_VLM_MODEL="${PHOTO_RANKER_VLM_MODEL:-mlx-community/Qwen2.5-VL-7B-Instruct-4bit}"' in content
@@ -146,9 +148,11 @@ def test_photo_mcp_install_script_installs_vlm_runtime_and_cache_dirs():
     content = script_path.read_text(encoding="utf-8")
 
     assert 'PHOTOS_MCP_HOME="${PHOTOS_MCP_HOME:-$HOME/.photos-mcp}"' in content
-    assert 'PHOTO_RANKER_RUNTIME_ROOT="${PHOTO_RANKER_RUNTIME_ROOT:-$PHOTOS_MCP_RUNTIME_ROOT/photo-ranker}"' in content
-    assert 'PHOTO_RANKER_VLM_CACHE_ROOT="${PHOTO_RANKER_VLM_CACHE_ROOT:-$PHOTOS_MCP_CACHE_ROOT/vlm}"' in content
-    assert 'mkdir -p "$PHOTOS_MCP_RUNTIME_ROOT" "$PHOTOS_MCP_CACHE_ROOT" "$PHOTO_RANKER_RUNTIME_ROOT" "$PHOTO_RANKER_VLM_CACHE_ROOT"' in content
+    assert 'PHOTO_RANKER_RUNTIME_ROOT="${PHOTO_RANKER_RUNTIME_ROOT:-$PHOTOS_MCP_ROOT/.runtime/photo-ranker}"' in content
+    assert 'PHOTO_RANKER_VLM_CACHE_ROOT="${PHOTO_RANKER_VLM_CACHE_ROOT:-$PHOTOS_MCP_ROOT/.model-cache/huggingface}"' in content
+    assert 'PHOTO_RANKER_MODEL_CACHE_ROOT="${PHOTO_RANKER_MODEL_CACHE_ROOT:-$PHOTOS_MCP_ROOT/.model-cache/models/photo-ranker}"' in content
+    assert 'PHOTO_SOURCE_CACHE_ROOT="${PHOTO_SOURCE_CACHE_ROOT:-$PHOTOS_MCP_ROOT/.model-cache/photo-source}"' in content
+    assert 'mkdir -p "$PHOTOS_MCP_RUNTIME_ROOT" "$PHOTOS_MCP_CACHE_ROOT" "$PHOTO_RANKER_RUNTIME_ROOT" "$PHOTO_RANKER_VLM_CACHE_ROOT" "$PHOTO_RANKER_MODEL_CACHE_ROOT" "$PHOTO_SOURCE_CACHE_ROOT"' in content
     assert '--extra vlm' in content
     assert '--extra app --extra apple --extra vlm --extra review' in content
 
