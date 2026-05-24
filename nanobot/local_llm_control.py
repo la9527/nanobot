@@ -159,6 +159,8 @@ def _probe_vision_capability(api_base: str, model: str) -> tuple[bool, bool, str
     except HTTPError as exc:
         body_text = exc.read().decode("utf-8", errors="ignore")
         result = (False, True, _normalize_vision_probe_message(body_text))
+    except TimeoutError:
+        result = (False, False, "vision probe timed out")
     except (OSError, URLError, ValueError):
         result = (False, False, "endpoint unavailable")
 

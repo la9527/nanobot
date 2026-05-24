@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from urllib.request import Request
 
 import pytest
 
@@ -143,6 +144,30 @@ def test_status_reports_vision_capability_for_running_targets(
     assert rows["qwen35-base-mlx-4bit"]["vision_check_message"] == "vision probe passed"
     assert rows["lfm2"]["supports_vision"] is False
     assert rows["lfm2"]["vision_check_ok"] is False
+
+
+def test_probe_vision_capability_reports_timeout_separately(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nanobot import local_llm_control
+
+    local_llm_control._VISION_CHECK_CACHE.clear()
+
+    def fake_urlopen(request: Request | str, timeout: float = 0.0):
+        if isinstance(request, str):
+            raise AssertionError("models endpoint should not be probed in this test")
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(local_llm_control, "urlopen", fake_urlopen)
+
+    supports_vision, vision_check_ok, vision_check_message = local_llm_control._probe_vision_capability(
+        "http://127.0.0.1:1246/v1",
+        "mlx-community/Qwen3.6-35B-A3B-4bit",
+    )
+
+    assert supports_vision is False
+    assert vision_check_ok is False
+    assert vision_check_message == "vision probe timed out"
 
 
 def test_accepts_qwen35_target_now_supported(tmp_path: Path) -> None:
