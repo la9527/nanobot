@@ -71,6 +71,7 @@ def test_start_local_model_services_refreshes_local_wrapper_scripts():
 
     content = script_path.read_text(encoding="utf-8")
 
+    assert 'check_memory_headroom_for_model "$model"' in content
     assert 'cp "$SCRIPT_DIR/common.sh" "$LOCAL_SCRIPT_DIR/common.sh"' in content
     assert 'cp "$(model_source_script "$model")" "$(model_local_script "$model")"' in content
 
@@ -165,3 +166,14 @@ def test_use_local_model_stops_other_targets_before_activation():
 
     assert '"$SCRIPT_DIR/stop-local-model-services.sh" all' in content
     assert '"$SCRIPT_DIR/start-local-model-services.sh" "$target"' in content
+
+
+def test_qwen36_wrapper_uses_mlx_vlm_server_runtime():
+    repo_root = Path(__file__).resolve().parents[2]
+    script_path = repo_root / "infra/scripts/local-models/start-qwen36-mlx.sh"
+
+    content = script_path.read_text(encoding="utf-8")
+
+    assert 'MLX_VLM_PYTHON="$(ensure_mlx_vlm_runtime)"' in content
+    assert '"$MLX_VLM_PYTHON" -m mlx_vlm server' in content
+    assert 'MLX_SERVER_BIN="$(ensure_mlx_runtime)"' not in content

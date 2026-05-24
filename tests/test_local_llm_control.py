@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 from urllib.request import Request
@@ -19,6 +20,8 @@ def test_status_defaults_to_qwen36_without_override(tmp_path: Path) -> None:
     assert payload["default_api_base"] == "http://127.0.0.1:1246/v1"
     rows = {row["name"]: row for row in payload["targets"]}
     assert "qwen35-base-mlx-4bit" in rows
+    assert rows["qwen36"]["runtime"] == "mlx_vlm.server"
+    assert rows["qwen35-base-mlx-4bit"]["runtime"] == "mlx_lm.server"
     assert rows["qwen36"]["is_default"] is True
     assert rows["lfm2"]["is_default"] is False
 
@@ -168,6 +171,48 @@ def test_probe_vision_capability_reports_timeout_separately(
     assert supports_vision is False
     assert vision_check_ok is False
     assert vision_check_message == "vision probe timed out"
+
+
+def test_probe_vision_capability_uses_local_image_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nanobot import local_llm_control
+
+    local_llm_control._VISION_CHECK_CACHE.clear()
+    monkeypatch.setattr(local_llm_control, "_vision_probe_image_path", lambda: "/tmp/nanobot-vision-probe.png")
+
+    class _Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self) -> bytes:
+            return b"{}"
+
+    seen: dict[str, object] = {}
+
+    def fake_urlopen(request: Request | str, timeout: float = 0.0):
+        if isinstance(request, str):
+            raise AssertionError("models endpoint should not be probed in this test")
+        seen["payload"] = json.loads(request.data.decode("utf-8"))
+        return _Response()
+
+    monkeypatch.setattr(local_llm_control, "urlopen", fake_urlopen)
+
+    supports_vision, vision_check_ok, vision_check_message = local_llm_control._probe_vision_capability(
+        "http://127.0.0.1:1246/v1",
+        "mlx-community/Qwen3.6-35B-A3B-4bit",
+    )
+
+    assert supports_vision is True
+    assert vision_check_ok is True
+    assert vision_check_message == "vision probe passed"
+    payload = seen["payload"]
+    assert payload["messages"][0]["content"][1]["image_url"]["url"] == "/tmp/nanobot-vision-probe.png"
 
 
 def test_accepts_qwen35_target_now_supported(tmp_path: Path) -> None:

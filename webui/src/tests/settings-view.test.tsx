@@ -41,7 +41,7 @@ describe("SettingsView local LLM settings", () => {
           name: "qwen36",
           label: "Qwen3.6",
           provider: "vllm",
-          runtime: "mlx_lm.server",
+          runtime: "mlx_vlm.server",
           model: "mlx-community/Qwen3.6-35B-A3B-4bit",
           api_base: "http://127.0.0.1:1246/v1",
           launchd_label: "com.nanobot.local-model-qwen36",

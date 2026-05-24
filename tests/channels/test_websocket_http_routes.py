@@ -243,7 +243,7 @@ async def test_local_llm_routes_share_status_and_action_contract(
                     {
                         "name": "qwen36",
                         "label": "Qwen3.6",
-                        "runtime": "mlx_lm.server",
+                        "runtime": "mlx_vlm.server",
                         "model": "mlx-community/Qwen3.6-35B-A3B-4bit",
                         "api_base": "http://127.0.0.1:1246/v1",
                         "launchd_label": "com.nanobot.local-model-qwen36",

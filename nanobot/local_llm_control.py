@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import base64
 import subprocess
 import json
+import tempfile
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -22,15 +24,11 @@ ALL_REJECTED_ACTIONS = {"start", "restart", "smoke", "use"}
 _VISION_CHECK_TTL_SECONDS = 30.0
 _VISION_CHECK_CACHE: dict[tuple[str, str], tuple[float, tuple[bool, bool, str]]] = {}
 _VISION_PROBE_IMAGE_B64 = (
-    "/9j/4AAQSkZJRgABAQAAAQABAAD/2wCEAAkGBxAQDxAQEA8PEA8PDw8PEA8PDw8PDw8PFREWFhUR"
-    "FRUYHSggGBolGxUVITEhJSkrLi4uFx8zODMsNygtLisBCgoKDg0OGhAQGi0lHyUtLS0tLS0tLS0t"
-    "LS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLf/AABEIAAEAAQMBIgACEQEDEQH/"
-    "xAAXAAEBAQEAAAAAAAAAAAAAAAAAAQID/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAwDAQACEAMQ"
-    "AAAB6A//xAAXEAADAQAAAAAAAAAAAAAAAAAAAREC/9oACAEBAAEFAmP/xAAVEQEBAAAAAAAAAAAAAA"
-    "AAAAABAP/aAAgBAwEBPwEf/8QAFBEBAAAAAAAAAAAAAAAAAAAAEP/aAAgBAgEBPwEf/8QAFBABAAAA"
-    "AAAAAAAAAAAAAAAAAP/aAAgBAQAGPwJf/8QAFBABAAAAAAAAAAAAAAAAAAAAEP/aAAgBAQABPyFf"
-    "/9k="
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sA"
+    "AAAASUVORK5CYII="
 )
+_VISION_PROBE_IMAGE_BYTES = base64.b64decode(_VISION_PROBE_IMAGE_B64)
+_VISION_PROBE_IMAGE_PATH = Path(tempfile.gettempdir()) / "nanobot-vision-probe.png"
 
 LOCAL_LLM_TARGETS: dict[str, dict[str, str]] = {
     "lfm2": {
@@ -44,7 +42,7 @@ LOCAL_LLM_TARGETS: dict[str, dict[str, str]] = {
     "qwen36": {
         "label": "Qwen3.6",
         "provider": "vllm",
-        "runtime": "mlx_lm.server",
+        "runtime": "mlx_vlm.server",
         "model": "mlx-community/Qwen3.6-35B-A3B-4bit",
         "api_base": "http://127.0.0.1:1246/v1",
         "launchd_label": "com.nanobot.local-model-qwen36",
@@ -119,6 +117,12 @@ def _normalize_vision_probe_message(body_text: str) -> str:
     return body_text.strip() or "vision probe failed"
 
 
+def _vision_probe_image_path() -> str:
+    if not _VISION_PROBE_IMAGE_PATH.exists() or _VISION_PROBE_IMAGE_PATH.read_bytes() != _VISION_PROBE_IMAGE_BYTES:
+        _VISION_PROBE_IMAGE_PATH.write_bytes(_VISION_PROBE_IMAGE_BYTES)
+    return str(_VISION_PROBE_IMAGE_PATH)
+
+
 def _probe_vision_capability(api_base: str, model: str) -> tuple[bool, bool, str]:
     cache_key = (api_base, model)
     now = time.monotonic()
@@ -137,7 +141,7 @@ def _probe_vision_capability(api_base: str, model: str) -> tuple[bool, bool, str
                         {
                             "type": "image_url",
                             "image_url": {
-                                "url": f"data:image/jpeg;base64,{_VISION_PROBE_IMAGE_B64}",
+                                "url": _vision_probe_image_path(),
                             },
                         },
                     ],
