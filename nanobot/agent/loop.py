@@ -221,6 +221,8 @@ class AgentLoop:
     _TURN_ID_KEY = "turn_id"
     _APPROVAL_YES = frozenset({"y", "yes", "ok", "approve", "approved", "run", "continue", "예", "네", "승인", "허용"})
     _APPROVAL_NO = frozenset({"n", "no", "deny", "denied", "block", "cancel", "stop", "아니오", "아니", "거부", "취소"})
+    _PHOTOS_FOLLOWUP_POLL_INTERVAL_SECONDS = 3.0
+    _PHOTOS_FOLLOWUP_MAX_POLLS = 120
 
     def __init__(
         self,
@@ -332,6 +334,7 @@ class AgentLoop:
         self._mcp_connecting = False
         self._active_tasks: dict[str, list[asyncio.Task]] = {}  # session_key -> tasks
         self._background_tasks: list[asyncio.Task] = []
+        self._mcp_followup_tasks: dict[str, asyncio.Task] = {}
         self._session_locks: dict[str, asyncio.Lock] = {}
         # Per-session pending queues for mid-turn message injection.
         # When a session has an active task, new messages for that session
@@ -831,7 +834,11 @@ class AgentLoop:
         from nanobot.agent.tools.mcp import connect_mcp_servers
 
         try:
-            self._mcp_stacks = await connect_mcp_servers(self._mcp_servers, self.tools)
+            self._mcp_stacks = await connect_mcp_servers(
+                self._mcp_servers,
+                self.tools,
+                followup_callback=self._handle_mcp_tool_followup,
+            )
             if self._mcp_stacks:
                 self._mcp_connected = True
             else:
@@ -874,6 +881,20 @@ class AgentLoop:
                         tool.set_context(channel, chat_id, message_id, metadata=metadata)
                     else:
                         tool.set_context(channel, chat_id)
+        mcp_metadata = dict(metadata or {})
+        if message_id and "message_id" not in mcp_metadata:
+            mcp_metadata["message_id"] = message_id
+        for tool_name in self.tools.tool_names:
+            if not tool_name.startswith("mcp_"):
+                continue
+            tool = self.tools.get(tool_name)
+            if tool is not None and hasattr(tool, "set_context"):
+                tool.set_context(
+                    channel,
+                    chat_id,
+                    metadata=mcp_metadata,
+                    session_key=effective_key,
+                )
 
     @staticmethod
     def _strip_think(text: str | None) -> str | None:
@@ -1125,6 +1146,17 @@ class AgentLoop:
                 return []
 
             def _to_user_message(pending_msg: InboundMessage) -> dict[str, Any]:
+                if (
+                    pending_msg.sender_id == "subagent"
+                    and pending_msg.metadata.get("subagent_delivery_mode") == "direct"
+                ):
+                    return {
+                        "role": "assistant",
+                        "content": pending_msg.content,
+                        "injected_event": "subagent_result",
+                        "subagent_task_id": pending_msg.metadata.get("subagent_task_id"),
+                        "_nanobot_direct_final": True,
+                    }
                 content = pending_msg.content
                 media = pending_msg.media if pending_msg.media else None
                 if media:
@@ -1459,11 +1491,147 @@ class AgentLoop:
                 logger.debug("MCP server '{}' cleanup error (can be ignored)", name)
         self._mcp_stacks.clear()
 
-    def _schedule_background(self, coro) -> None:
+    def _schedule_background(self, coro) -> asyncio.Task:
         """Schedule a coroutine as a tracked background task (drained on shutdown)."""
         task = asyncio.create_task(coro)
         self._background_tasks.append(task)
         task.add_done_callback(self._background_tasks.remove)
+        return task
+
+    @staticmethod
+    def _parse_mcp_text_payload(result: Any) -> dict[str, Any] | None:
+        content = getattr(result, "content", None)
+        if not isinstance(content, list):
+            return None
+        parts: list[str] = []
+        for block in content:
+            text = getattr(block, "text", None)
+            if isinstance(text, str):
+                parts.append(text)
+            else:
+                parts.append(str(block))
+        if not parts:
+            return None
+        try:
+            parsed = json.loads("\n".join(parts))
+        except json.JSONDecodeError:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
+    def _session_locale(self, session_key: str) -> str | None:
+        session = self.sessions.get_or_create(session_key)
+        metadata = session.metadata if isinstance(session.metadata, dict) else None
+        owner_profile = metadata.get("owner_profile") if isinstance(metadata, dict) else None
+        if isinstance(owner_profile, dict):
+            preferred_language = owner_profile.get("preferred_language")
+            if isinstance(preferred_language, str) and preferred_language.strip():
+                return preferred_language.strip()
+        return None
+
+    def _render_photos_followup_content(
+        self,
+        *,
+        locale: str | None,
+        run_id: str,
+        summary: dict[str, Any],
+    ) -> str:
+        compact_summary = json.dumps(summary, ensure_ascii=False, sort_keys=True)
+        return _t(
+            "photos.followup.job_ready",
+            locale=locale,
+            job_id=run_id,
+            status=str(summary.get("status") or ""),
+            action=str(summary.get("action") or "summary"),
+            target_album_name=str(summary.get("target_album_name") or ""),
+            summary_json=compact_summary,
+        )
+
+    @staticmethod
+    def _subagent_outbound_metadata(key: str, metadata: dict[str, Any] | None) -> dict[str, Any]:
+        outbound_metadata: dict[str, Any] = {}
+        if key.startswith("slack:") and key.count(":") >= 2:
+            outbound_metadata["slack"] = {"thread_ts": key.split(":", 2)[2]}
+        if isinstance(metadata, dict) and (origin_message_id := metadata.get("origin_message_id")):
+            outbound_metadata["origin_message_id"] = origin_message_id
+        return outbound_metadata
+
+    async def _poll_mcp_photo_followup(
+        self,
+        *,
+        run_id: str,
+        channel: str,
+        chat_id: str,
+        session_key: str,
+        message_id: str | None,
+        mcp_session: Any,
+    ) -> None:
+        locale = self._session_locale(session_key)
+        try:
+            for _ in range(self._PHOTOS_FOLLOWUP_MAX_POLLS):
+                result = await mcp_session.call_tool(
+                    "photos_query",
+                    arguments={"action": "result_summary", "options": {"run_id": run_id}},
+                )
+                summary = self._parse_mcp_text_payload(result)
+                if isinstance(summary, dict):
+                    status = str(summary.get("status") or "")
+                    terminal = bool(summary.get("terminal")) or status in {"completed", "failed", "cancelled"}
+                    if terminal:
+                        metadata: dict[str, Any] = {
+                            "injected_event": "subagent_result",
+                            "subagent_task_id": f"photos-{run_id}",
+                            "subagent_delivery_mode": "direct",
+                        }
+                        if message_id:
+                            metadata["origin_message_id"] = message_id
+                        await self.bus.publish_inbound(
+                            InboundMessage(
+                                channel="system",
+                                sender_id="subagent",
+                                chat_id=f"{channel}:{chat_id}",
+                                content=self._render_photos_followup_content(
+                                    locale=locale,
+                                    run_id=run_id,
+                                    summary=summary,
+                                ),
+                                session_key_override=session_key,
+                                metadata=metadata,
+                            )
+                        )
+                        return
+                await asyncio.sleep(self._PHOTOS_FOLLOWUP_POLL_INTERVAL_SECONDS)
+        except Exception:
+            logger.exception("Photo MCP follow-up polling failed for {}", run_id)
+        finally:
+            self._mcp_followup_tasks.pop(run_id, None)
+
+    async def _handle_mcp_tool_followup(
+        self,
+        *,
+        tool_name: str,
+        payload: dict[str, Any],
+        channel: str,
+        chat_id: str,
+        session_key: str,
+        message_id: str | None,
+        metadata: dict[str, Any] | None,
+        mcp_session: Any,
+    ) -> None:
+        del tool_name, metadata
+        run_id = str(payload.get("run_id") or payload.get("job_id") or "")
+        if not run_id or run_id in self._mcp_followup_tasks:
+            return
+        task = self._schedule_background(
+            self._poll_mcp_photo_followup(
+                run_id=run_id,
+                channel=channel,
+                chat_id=chat_id,
+                session_key=session_key,
+                message_id=message_id,
+                mcp_session=mcp_session,
+            )
+        )
+        self._mcp_followup_tasks[run_id] = task
 
     def stop(self) -> None:
         """Stop the agent loop."""
@@ -1516,6 +1684,13 @@ class AgentLoop:
             if is_subagent and self._persist_subagent_followup(session, msg):
                 logger.debug("Subagent result persisted for session {}", key)
                 self.sessions.save(session)
+                if msg.metadata.get("subagent_delivery_mode") == "direct":
+                    return OutboundMessage(
+                        channel=channel,
+                        chat_id=chat_id,
+                        content=msg.content,
+                        metadata=self._subagent_outbound_metadata(key, msg.metadata),
+                    )
             self._set_tool_context(
                 channel, chat_id, msg.metadata.get("message_id"),
                 msg.metadata, session_key=key,
@@ -1570,22 +1745,12 @@ class AgentLoop:
                 options,
                 channel,
             )
-            # Reconstruct channel-specific metadata from session.key so the
-            # outbound reply lands in the originating thread (not the channel
-            # top-level). The announce InboundMessage carries only
-            # injected_event metadata; we recover thread_ts from the session
-            # key, which slack writes as "slack:<chat_id>:<thread_ts>".
-            outbound_metadata: dict[str, Any] = {}
-            if channel == "slack" and key.startswith("slack:") and key.count(":") >= 2:
-                outbound_metadata["slack"] = {"thread_ts": key.split(":", 2)[2]}
-            if origin_message_id := msg.metadata.get("origin_message_id"):
-                outbound_metadata["origin_message_id"] = origin_message_id
             return OutboundMessage(
                 channel=channel,
                 chat_id=chat_id,
                 content=content,
                 buttons=buttons,
-                metadata=outbound_metadata,
+                metadata=self._subagent_outbound_metadata(key, msg.metadata),
             )
 
         # Extract document text from media at the processing boundary so all
@@ -1796,6 +1961,9 @@ class AgentLoop:
         elif session.metadata.get(self._SMART_ROUTER_MODEL_KEY):
             session.metadata.pop(self._SMART_ROUTER_MODEL_KEY, None)
         self.sessions.save(session)
+
+        if stop_reason == "direct_followup":
+            return None
 
         if final_content is None or not final_content.strip():
             final_content = EMPTY_FINAL_RESPONSE_MESSAGE

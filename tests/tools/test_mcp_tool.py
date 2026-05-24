@@ -4,6 +4,7 @@ import asyncio
 import sys
 from contextlib import asynccontextmanager
 from types import ModuleType, SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -285,6 +286,51 @@ async def test_execute_returns_text_blocks() -> None:
     result = await wrapper.execute(value=1)
 
     assert result == "hello\n42"
+
+
+@pytest.mark.asyncio
+async def test_execute_emits_accepted_photo_payload_to_followup_callback() -> None:
+    accepted_payload = {
+        "run_id": "job-123",
+        "job_id": "job-123",
+        "status": "pending",
+        "terminal": False,
+        "summary_available": False,
+        "result_available": False,
+        "action": "curate_to_album",
+        "request_kind": "photos_workflow",
+        "submitted_at": "2026-05-23T12:00:00Z",
+    }
+
+    async def call_tool(_name: str, arguments: dict) -> object:
+        assert arguments == {"target_album_name": "album"}
+        return SimpleNamespace(content=[_FakeTextContent('{"run_id":"job-123","job_id":"job-123","status":"pending","terminal":false,"summary_available":false,"result_available":false,"action":"curate_to_album","request_kind":"photos_workflow","submitted_at":"2026-05-23T12:00:00Z"}')])
+
+    callback = AsyncMock()
+    wrapper = MCPToolWrapper(
+        SimpleNamespace(call_tool=call_tool),
+        "photos-mcp",
+        _make_tool_def("photos_workflow"),
+        followup_callback=callback,
+    )
+    wrapper.set_context(
+        "websocket",
+        "chat-1",
+        metadata={"message_id": "msg-1"},
+        session_key="websocket:chat-1",
+    )
+
+    result = await wrapper.execute(target_album_name="album")
+
+    assert result == '{"run_id":"job-123","job_id":"job-123","status":"pending","terminal":false,"summary_available":false,"result_available":false,"action":"curate_to_album","request_kind":"photos_workflow","submitted_at":"2026-05-23T12:00:00Z"}'
+    callback.assert_awaited_once()
+    call = callback.await_args
+    assert call.kwargs["tool_name"] == "mcp_photos-mcp_photos_workflow"
+    assert call.kwargs["payload"] == accepted_payload
+    assert call.kwargs["channel"] == "websocket"
+    assert call.kwargs["chat_id"] == "chat-1"
+    assert call.kwargs["session_key"] == "websocket:chat-1"
+    assert call.kwargs["message_id"] == "msg-1"
 
 
 @pytest.mark.asyncio

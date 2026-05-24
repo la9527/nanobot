@@ -1,11 +1,12 @@
 """MCP client: connects to MCP servers and wraps their tools as native nanobot tools."""
 
 import asyncio
+import json
 import os
 import re
 import shutil
 from contextlib import AsyncExitStack, suppress
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 import httpx
 from loguru import logger
@@ -32,6 +33,12 @@ _WINDOWS_SHELL_LAUNCHERS: frozenset[str] = frozenset(("npx", "npm", "pnpm", "yar
 # Characters allowed in tool names by model providers (Anthropic, OpenAI, etc.).
 # Replace anything outside [a-zA-Z0-9_-] with underscore and collapse runs.
 _SANITIZE_RE = re.compile(r"_+")
+_PHOTOS_FOLLOWUP_TOOL_NAMES: frozenset[str] = frozenset((
+    "photos_query",
+    "photos_select",
+    "photos_write",
+    "photos_workflow",
+))
 
 
 def _sanitize_name(name: str) -> str:
@@ -141,17 +148,65 @@ def _normalize_schema_for_openai(schema: Any) -> dict[str, Any]:
     return normalized
 
 
+def _stringify_mcp_tool_result(result: Any) -> str:
+    from mcp import types
+
+    parts: list[str] = []
+    for block in result.content:
+        if isinstance(block, types.TextContent):
+            parts.append(block.text)
+        elif isinstance(getattr(block, "text", None), str):
+            parts.append(str(block.text))
+        else:
+            parts.append(str(block))
+    return "\n".join(parts) or "(no output)"
+
+
+def _parse_json_payload(text: str) -> dict[str, Any] | None:
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _is_accepted_photo_followup_payload(
+    server_name: str,
+    original_name: str,
+    payload: dict[str, Any] | None,
+) -> bool:
+    if server_name != "photos-mcp" or original_name not in _PHOTOS_FOLLOWUP_TOOL_NAMES or not isinstance(payload, dict):
+        return False
+    run_id = str(payload.get("run_id") or payload.get("job_id") or "")
+    status = str(payload.get("status") or "")
+    terminal = bool(payload.get("terminal"))
+    return bool(run_id) and status in {"pending", "running"} and not terminal
+
+
 class MCPToolWrapper(Tool):
     """Wraps a single MCP server tool as a nanobot Tool."""
 
-    def __init__(self, session, server_name: str, tool_def, tool_timeout: int = 30):
+    def __init__(
+        self,
+        session,
+        server_name: str,
+        tool_def,
+        tool_timeout: int = 30,
+        followup_callback: Callable[..., Awaitable[None]] | None = None,
+    ):
         self._session = session
+        self._server_name = server_name
         self._original_name = tool_def.name
         self._name = _sanitize_name(f"mcp_{server_name}_{tool_def.name}")
         self._description = tool_def.description or tool_def.name
         raw_schema = tool_def.inputSchema or {"type": "object", "properties": {}}
         self._parameters = _normalize_schema_for_openai(raw_schema)
         self._tool_timeout = tool_timeout
+        self._followup_callback = followup_callback
+        self._channel = ""
+        self._chat_id = ""
+        self._metadata: dict[str, Any] = {}
+        self._session_key: str | None = None
 
     @property
     def name(self) -> str:
@@ -165,9 +220,20 @@ class MCPToolWrapper(Tool):
     def parameters(self) -> dict[str, Any]:
         return self._parameters
 
-    async def execute(self, **kwargs: Any) -> str:
-        from mcp import types
+    def set_context(
+        self,
+        channel: str,
+        chat_id: str,
+        *,
+        metadata: dict[str, Any] | None = None,
+        session_key: str | None = None,
+    ) -> None:
+        self._channel = channel
+        self._chat_id = chat_id
+        self._metadata = dict(metadata or {})
+        self._session_key = session_key
 
+    async def execute(self, **kwargs: Any) -> str:
         for attempt in range(2):  # At most 1 retry
             try:
                 result = await asyncio.wait_for(
@@ -212,14 +278,25 @@ class MCPToolWrapper(Tool):
                 )
                 return f"(MCP tool call failed: {type(exc).__name__})"
             else:
-                # Success — extract result
-                parts = []
-                for block in result.content:
-                    if isinstance(block, types.TextContent):
-                        parts.append(block.text)
-                    else:
-                        parts.append(str(block))
-                return "\n".join(parts) or "(no output)"
+                text = _stringify_mcp_tool_result(result)
+                payload = _parse_json_payload(text)
+                if (
+                    self._followup_callback is not None
+                    and self._channel
+                    and self._chat_id
+                    and _is_accepted_photo_followup_payload(self._server_name, self._original_name, payload)
+                ):
+                    await self._followup_callback(
+                        tool_name=self._name,
+                        payload=payload,
+                        channel=self._channel,
+                        chat_id=self._chat_id,
+                        session_key=self._session_key or f"{self._channel}:{self._chat_id}",
+                        message_id=str(self._metadata.get("message_id") or "") or None,
+                        metadata=dict(self._metadata),
+                        mcp_session=self._session,
+                    )
+                return text
 
         return "(MCP tool call failed)"  # Unreachable, but satisfies type checkers
 
@@ -431,7 +508,10 @@ class MCPPromptWrapper(Tool):
 
 
 async def connect_mcp_servers(
-    mcp_servers: dict, registry: ToolRegistry
+    mcp_servers: dict,
+    registry: ToolRegistry,
+    *,
+    followup_callback: Callable[..., Awaitable[None]] | None = None,
 ) -> dict[str, AsyncExitStack]:
     """Connect to configured MCP servers and register their tools, resources, prompts.
 
@@ -535,7 +615,13 @@ async def connect_mcp_servers(
                         name,
                     )
                     continue
-                wrapper = MCPToolWrapper(session, name, tool_def, tool_timeout=cfg.tool_timeout)
+                wrapper = MCPToolWrapper(
+                    session,
+                    name,
+                    tool_def,
+                    tool_timeout=cfg.tool_timeout,
+                    followup_callback=followup_callback,
+                )
                 registry.register(wrapper)
                 logger.debug("MCP: registered tool '{}' from server '{}'", wrapper.name, name)
                 registered_count += 1

@@ -1,5 +1,6 @@
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -916,6 +917,101 @@ def test_set_tool_context_passes_thread_session_key_to_spawn(tmp_path: Path) -> 
     assert spawn_tool._origin_message_id.get() == "msg-123"
 
 
+def test_set_tool_context_passes_session_key_to_mcp_tools(tmp_path: Path) -> None:
+    loop = _make_full_loop(tmp_path)
+
+    class _DummyMcpTool:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str, dict | None, str | None]] = []
+
+        @property
+        def name(self) -> str:
+            return "mcp_photos-mcp_photos_workflow"
+
+        @property
+        def description(self) -> str:
+            return "dummy"
+
+        @property
+        def parameters(self) -> dict[str, object]:
+            return {"type": "object", "properties": {}}
+
+        async def execute(self, **kwargs):
+            return kwargs
+
+        def set_context(
+            self,
+            channel: str,
+            chat_id: str,
+            *,
+            metadata: dict | None = None,
+            session_key: str | None = None,
+        ) -> None:
+            self.calls.append((channel, chat_id, metadata, session_key))
+
+    tool = _DummyMcpTool()
+    loop.tools.register(tool)
+
+    loop._set_tool_context(
+        "websocket",
+        "chat-1",
+        message_id="msg-1",
+        metadata={"webui": True},
+        session_key="websocket:chat-1",
+    )
+
+    assert tool.calls == [
+        ("websocket", "chat-1", {"webui": True, "message_id": "msg-1"}, "websocket:chat-1"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_mcp_photo_followup_polls_terminal_summary_and_publishes_inbound(tmp_path: Path) -> None:
+    loop = _make_full_loop(tmp_path)
+
+    async def call_tool(name: str, arguments: dict) -> object:
+        assert name == "photos_query"
+        assert arguments == {"action": "result_summary", "options": {"run_id": "job-123"}}
+        return SimpleNamespace(
+            content=[
+                SimpleNamespace(
+                    text='{"run_id":"job-123","status":"completed","terminal":true,"summary_available":true,"result_available":true,"action":"summary","target_album_name":"봄 앨범"}'
+                )
+            ]
+        )
+
+    await loop._handle_mcp_tool_followup(
+        tool_name="mcp_photos-mcp_photos_workflow",
+        payload={
+            "run_id": "job-123",
+            "job_id": "job-123",
+            "status": "pending",
+            "terminal": False,
+            "request_kind": "photos_workflow",
+            "action": "curate_to_album",
+        },
+        channel="websocket",
+        chat_id="chat-1",
+        session_key="websocket:chat-1",
+        message_id="msg-1",
+        metadata={"webui": True},
+        mcp_session=SimpleNamespace(call_tool=call_tool),
+    )
+
+    assert len(loop._background_tasks) == 1
+    await asyncio.gather(*list(loop._background_tasks), return_exceptions=False)
+
+    followup = await loop.bus.consume_inbound()
+    assert followup.sender_id == "subagent"
+    assert followup.session_key_override == "websocket:chat-1"
+    assert followup.metadata["injected_event"] == "subagent_result"
+    assert followup.metadata["subagent_task_id"] == "photos-job-123"
+    assert followup.metadata["subagent_delivery_mode"] == "direct"
+    assert followup.metadata["origin_message_id"] == "msg-1"
+    assert "job-123" in followup.content
+    assert "봄 앨범" in followup.content
+
+
 @pytest.mark.asyncio
 async def test_system_subagent_followup_uses_thread_session_and_slack_metadata(tmp_path: Path) -> None:
     loop = _make_full_loop(tmp_path)
@@ -963,3 +1059,40 @@ async def test_system_subagent_followup_uses_thread_session_and_slack_metadata(t
     loop.sessions.invalidate("slack:C123:1700.42")
     persisted = loop.sessions.get_or_create("slack:C123:1700.42")
     assert any(m.get("subagent_task_id") == "sub-1" for m in persisted.messages)
+
+
+@pytest.mark.asyncio
+async def test_system_mcp_followup_bypasses_llm_and_returns_direct_outbound(tmp_path: Path) -> None:
+    loop = _make_full_loop(tmp_path)
+    loop.consolidator.maybe_consolidate_by_tokens = AsyncMock(return_value=False)  # type: ignore[method-assign]
+
+    fake_run_agent_loop = AsyncMock()
+    loop._run_agent_loop = fake_run_agent_loop  # type: ignore[method-assign]
+
+    outbound = await loop._process_message(
+        InboundMessage(
+            channel="system",
+            sender_id="subagent",
+            chat_id="websocket:chat-1",
+            content="사진 작업 job-123 상태가 failed 로 바뀌었습니다.",
+            session_key_override="websocket:chat-1",
+            metadata={
+                "subagent_task_id": "photos-job-123",
+                "origin_message_id": "msg-1",
+                "subagent_delivery_mode": "direct",
+            },
+        )
+    )
+
+    assert outbound is not None
+    assert outbound.channel == "websocket"
+    assert outbound.chat_id == "chat-1"
+    assert outbound.content == "사진 작업 job-123 상태가 failed 로 바뀌었습니다."
+    assert outbound.metadata == {"origin_message_id": "msg-1"}
+    fake_run_agent_loop.assert_not_awaited()
+
+    loop.sessions.invalidate("websocket:chat-1")
+    persisted = loop.sessions.get_or_create("websocket:chat-1")
+    followups = [m for m in persisted.messages if m.get("injected_event") == "subagent_result"]
+    assert len(followups) == 1
+    assert followups[0]["content"] == "사진 작업 job-123 상태가 failed 로 바뀌었습니다."

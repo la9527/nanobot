@@ -2421,6 +2421,60 @@ async def test_checkpoint1_injects_after_tool_execution():
 
 
 @pytest.mark.asyncio
+async def test_direct_followup_injection_after_tool_execution_stops_without_finalization():
+    """Direct subagent follow-ups should end the turn without another LLM reply."""
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner
+
+    provider = MagicMock()
+    call_count = {"n": 0}
+
+    async def chat_with_retry(*, messages, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return LLMResponse(
+                content="using tool",
+                tool_calls=[ToolCallRequest(id="c1", name="read_file", arguments={"path": "x"})],
+                usage={},
+            )
+        return LLMResponse(content="should not be called", tool_calls=[], usage={})
+
+    provider.chat_with_retry = chat_with_retry
+    tools = MagicMock()
+    tools.get_definitions.return_value = []
+    tools.execute = AsyncMock(return_value="file content")
+
+    async def inject_cb():
+        return [{
+            "role": "assistant",
+            "content": "사진 작업 job-123 상태가 completed 로 바뀌었습니다.",
+            "injected_event": "subagent_result",
+            "subagent_task_id": "photos-job-123",
+            "_nanobot_direct_final": True,
+        }]
+
+    runner = AgentRunner(provider)
+    result = await runner.run(AgentRunSpec(
+        initial_messages=[{"role": "user", "content": "hello"}],
+        tools=tools,
+        model="test-model",
+        max_iterations=5,
+        max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+        injection_callback=inject_cb,
+    ))
+
+    assert result.had_injections is True
+    assert result.stop_reason == "direct_followup"
+    assert result.final_content is None
+    assert call_count["n"] == 1
+    followups = [
+        m for m in result.messages
+        if m.get("role") == "assistant" and m.get("injected_event") == "subagent_result"
+    ]
+    assert len(followups) == 1
+    assert followups[0]["content"] == "사진 작업 job-123 상태가 completed 로 바뀌었습니다."
+
+
+@pytest.mark.asyncio
 async def test_checkpoint2_injects_after_final_response_with_resuming_stream():
     """After final response, if injections exist, stream_end should get resuming=True."""
     from nanobot.agent.runner import AgentRunSpec, AgentRunner
