@@ -139,8 +139,9 @@ async def test_bootstrap_resolves_env_backed_model_target_strings(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setenv("LOCAL_LLM_MODEL", "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0")
+    monkeypatch.setenv("LOCAL_LLM_MODEL", "LiquidAI/LFM2-24B-A2B-MLX-4bit")
     monkeypatch.setattr("nanobot.config.loader._current_config_path", config_path)
+    monkeypatch.setattr("nanobot.model_targets._live_local_target_status", lambda: None)
 
     channel = _ch(bus, session_manager=sm, port=29914)
     server_task = asyncio.create_task(channel.start())
@@ -150,12 +151,12 @@ async def test_bootstrap_resolves_env_backed_model_target_strings(
         assert resp.status_code == 200
         body = resp.json()
         rows = {row["name"]: row for row in body["model_targets"]}
-        assert rows["local-llm"]["model"] == "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0"
-        assert rows["local-llm"]["description"] == "current local runtime (LiquidAI/LFM2-24B-A2B-GGUF:Q4_0)"
+        assert rows["local-llm"]["model"] == "LiquidAI/LFM2-24B-A2B-MLX-4bit"
+        assert rows["local-llm"]["description"] == "current local runtime (LiquidAI/LFM2-24B-A2B-MLX-4bit)"
         assert rows["smart-router-local"]["provider"] == "vllm"
-        assert rows["smart-router-local"]["model"] == "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0"
+        assert rows["smart-router-local"]["model"] == "LiquidAI/LFM2-24B-A2B-MLX-4bit"
         assert rows["smart-router-local"]["description"] == (
-            "smart-router forced local tier (LiquidAI/LFM2-24B-A2B-GGUF:Q4_0)"
+            "smart-router forced local tier (LiquidAI/LFM2-24B-A2B-MLX-4bit)"
         )
     finally:
         await channel.stop()
@@ -188,8 +189,9 @@ async def test_settings_route_resolves_env_backed_local_model_and_preserves_conf
         ),
         encoding="utf-8",
     )
-    monkeypatch.setenv("LOCAL_LLM_MODEL", "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0")
+    monkeypatch.setenv("LOCAL_LLM_MODEL", "LiquidAI/LFM2-24B-A2B-MLX-4bit")
     monkeypatch.setattr("nanobot.config.loader._current_config_path", config_path)
+    monkeypatch.setattr("nanobot.model_targets._live_local_target_status", lambda: None)
 
     channel = _ch(bus, session_manager=sm, port=29915)
     server_task = asyncio.create_task(channel.start())
@@ -202,7 +204,7 @@ async def test_settings_route_resolves_env_backed_local_model_and_preserves_conf
         settings = await _http_get("http://127.0.0.1:29915/api/settings", headers=auth)
         assert settings.status_code == 200
         body = settings.json()
-        assert body["agent"]["model"] == "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0"
+        assert body["agent"]["model"] == "LiquidAI/LFM2-24B-A2B-MLX-4bit"
         assert body["agent"]["configured_model"] == "${LOCAL_LLM_MODEL}"
         assert body["agent"]["provider"] == "vllm"
         assert body["agent"]["resolved_provider"] == "vllm"
@@ -215,7 +217,7 @@ async def test_settings_route_resolves_env_backed_local_model_and_preserves_conf
         )
         assert updated.status_code == 200
         updated_body = updated.json()
-        assert updated_body["agent"]["model"] == "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0"
+        assert updated_body["agent"]["model"] == "LiquidAI/LFM2-24B-A2B-MLX-4bit"
         assert updated_body["agent"]["provider"] == "vllm"
         saved = json.loads(config_path.read_text(encoding="utf-8"))
         assert saved["agents"]["defaults"]["model"] == "${LOCAL_LLM_MODEL}"

@@ -270,15 +270,15 @@ describe("ThreadComposer", () => {
     const onSelectModelTarget = vi.fn();
     const loadLocalLlmStatus = vi.fn().mockResolvedValue({
       default_target: "lfm2",
-      default_model: "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0",
+      default_model: "LiquidAI/LFM2-24B-A2B-MLX-4bit",
       default_api_base: "http://127.0.0.1:1242/v1",
       targets: [
         {
           name: "lfm2",
           label: "LFM2",
-          provider: "llama.cpp",
-          runtime: "llama.cpp",
-          model: "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0",
+          provider: "rapid-mlx",
+          runtime: "rapid-mlx",
+          model: "LiquidAI/LFM2-24B-A2B-MLX-4bit",
           api_base: "http://127.0.0.1:1242/v1",
           launchd_label: "com.nanobot.local-model-lfm2",
           running: true,
@@ -298,9 +298,9 @@ describe("ThreadComposer", () => {
         activeTarget="smart-router"
         modelTargets={[
           { name: "default", kind: "provider_model", model: "openai/gpt-5.4", description: "Startup default provider/model." },
-          { name: "local-llm", kind: "provider_model", provider: "vllm", model: "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0", description: "현재 기본 local runtime (LiquidAI/LFM2-24B-A2B-GGUF:Q4_0)" },
+          { name: "local-llm", kind: "provider_model", provider: "vllm", model: "LiquidAI/LFM2-24B-A2B-MLX-4bit", description: "현재 기본 local runtime (LiquidAI/LFM2-24B-A2B-MLX-4bit)" },
           { name: "smart-router", kind: "smart_router", display_name: "Auto", group: "smart-router", smart_router_mode: "auto", description: "smart-router runtime plugin target." },
-          { name: "smart-router-local", kind: "smart_router", provider: "vllm", model: "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0", display_name: "Local", group: "smart-router", smart_router_mode: "local", description: "smart-router forced local tier (LiquidAI/LFM2-24B-A2B-GGUF:Q4_0)" },
+          { name: "smart-router-local", kind: "smart_router", provider: "vllm", model: "LiquidAI/LFM2-24B-A2B-MLX-4bit", display_name: "Local", group: "smart-router", smart_router_mode: "local", description: "smart-router forced local tier (LiquidAI/LFM2-24B-A2B-MLX-4bit)" },
           { name: "smart-router-mini", kind: "smart_router", provider: "openrouter", model: "openai/gpt-5.4-mini", display_name: "Mini", group: "smart-router", smart_router_mode: "mini", description: "smart-router forced mini tier." },
           { name: "smart-router-full", kind: "smart_router", provider: "openrouter", model: "openai/gpt-5.4", display_name: "Full", group: "smart-router", smart_router_mode: "full", description: "smart-router forced full tier." },
         ]}
@@ -316,7 +316,7 @@ describe("ThreadComposer", () => {
     expect(screen.getByText(/^Mini$/i)).toBeInTheDocument();
     expect(screen.getByText(/^Full$/i)).toBeInTheDocument();
     expect(screen.getByText("Automatic model selection")).toBeInTheDocument();
-    expect(screen.getByText("llama.cpp -> LiquidAI/LFM2-24B-A2B-GGUF:Q4_0")).toBeInTheDocument();
+    expect(screen.getByText("rapid-mlx -> LiquidAI/LFM2-24B-A2B-MLX-4bit")).toBeInTheDocument();
     expect(screen.getByText("openrouter -> openai/gpt-5.4-mini")).toBeInTheDocument();
     expect(screen.getByText("openrouter -> openai/gpt-5.4")).toBeInTheDocument();
     expect(screen.queryByText("Local LLM")).not.toBeInTheDocument();

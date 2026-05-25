@@ -55,9 +55,9 @@ describe("SettingsView local LLM settings", () => {
         {
           name: "lfm2",
           label: "LFM2",
-          provider: "llama.cpp",
-          runtime: "llama.cpp",
-          model: "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0",
+          provider: "rapid-mlx",
+          runtime: "rapid-mlx",
+          model: "LiquidAI/LFM2-24B-A2B-MLX-4bit",
           api_base: "http://127.0.0.1:1242/v1",
           launchd_label: "com.nanobot.local-model-lfm2",
           running: false,

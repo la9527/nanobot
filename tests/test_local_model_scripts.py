@@ -20,9 +20,11 @@ def test_local_models_help_lists_supported_targets():
     assert "lfm2" in output.lower()
     assert "qwen36" in output.lower()
     assert "qwen35-base-mlx-4bit" in output.lower()
+    assert "qwen3-vl-4b" in output.lower()
+    assert "qwen3-vl-8b" in output.lower()
     lines = [line.strip().lower() for line in output.splitlines()]
-    assert "install <lfm2|qwen35-base-mlx-4bit|qwen36>        install and start one launchd service" in lines
-    assert "start <lfm2|qwen35-base-mlx-4bit|qwen36>          start one installed launchd service" in lines
+    assert "install <lfm2|qwen35-base-mlx-4bit|qwen36|qwen3-vl-4b|qwen3-vl-8b>        install and start one launchd service" in lines
+    assert "start <lfm2|qwen35-base-mlx-4bit|qwen36|qwen3-vl-4b|qwen3-vl-8b>          start one installed launchd service" in lines
 
 
 def test_local_models_rejects_start_all():
@@ -55,14 +57,20 @@ def test_local_models_rejects_install_all():
     assert "install all is not allowed" in proc.stderr.lower()
 
 
-def test_lfm2_llama_cpp_default_cache_path_uses_nanobot_infra_storage():
+def test_lfm2_wrapper_uses_rapid_mlx_and_official_mlx_repo():
     repo_root = Path(__file__).resolve().parents[2]
     script_path = repo_root / "infra/scripts/local-models/start-lfm2-llama-cpp.sh"
 
     content = script_path.read_text(encoding="utf-8")
 
-    assert "/Volumes/ExtData/Nanobot/infra/.local-model-cache/llama-cpp-storage" in content
-    assert "/Volumes/ExtData/AI_Project/LLM_Test/.cache/llama-cpp-storage" not in content
+    assert 'LiquidAI/LFM2-24B-A2B-MLX-4bit' in content
+    assert 'rapid-mlx' in content
+    assert '--no-thinking' in content
+    assert 'llama-server' not in content
+    assert 'RAPID_MLX_HF_HOME' in content
+    assert 'RAPID_MLX_HUGGINGFACE_HUB_CACHE' in content
+    assert 'RAPID_MLX_TRANSFORMERS_CACHE' in content
+    assert '${HF_HOME:-' not in content
 
 
 def test_start_local_model_services_refreshes_local_wrapper_scripts():
@@ -177,3 +185,24 @@ def test_qwen36_wrapper_uses_mlx_vlm_server_runtime():
     assert 'MLX_VLM_PYTHON="$(ensure_mlx_vlm_runtime)"' in content
     assert '"$MLX_VLM_PYTHON" -m mlx_vlm server' in content
     assert 'MLX_SERVER_BIN="$(ensure_mlx_runtime)"' not in content
+
+
+def test_qwen3_vl_wrappers_use_rapid_mlx_multimodal_serve_path():
+    repo_root = Path(__file__).resolve().parents[2]
+    qwen3_vl_4b = repo_root / "infra/scripts/local-models/start-qwen3-vl-4b-rapid-mlx.sh"
+    qwen3_vl_8b = repo_root / "infra/scripts/local-models/start-qwen3-vl-8b-rapid-mlx.sh"
+
+    content_4b = qwen3_vl_4b.read_text(encoding="utf-8")
+    content_8b = qwen3_vl_8b.read_text(encoding="utf-8")
+
+    assert 'serve qwen3-vl-4b' in content_4b
+    assert '--mllm' in content_4b
+    assert 'RAPID_MLX_VENV_DIR' in content_4b
+    assert 'RAPID_MLX_STORAGE_ROOT' in content_4b
+    assert 'LOCAL_MODEL_RUNTIME_CACHE_ROOT' in content_4b
+
+    assert 'serve qwen3-vl-8b' in content_8b
+    assert '--mllm' in content_8b
+    assert 'RAPID_MLX_VENV_DIR' in content_8b
+    assert 'RAPID_MLX_STORAGE_ROOT' in content_8b
+    assert 'LOCAL_MODEL_RUNTIME_CACHE_ROOT' in content_8b

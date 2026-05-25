@@ -18,7 +18,7 @@ LOCAL_LLM_ENV_FILENAME = "local-llm.env"
 DEFAULT_SCRIPT_PATH = "/Volumes/ExtData/Nanobot/infra/scripts/local-models/local-models.sh"
 
 ALLOWED_ACTIONS = {"status", "start", "stop", "restart", "smoke", "use"}
-ALLOWED_TARGETS = {"lfm2", "qwen35-base-mlx-4bit", "qwen36", "all"}
+ALLOWED_TARGETS = {"lfm2", "qwen35-base-mlx-4bit", "qwen36", "qwen3-vl-4b", "qwen3-vl-8b", "all"}
 ALL_REJECTED_ACTIONS = {"start", "restart", "smoke", "use"}
 
 _VISION_CHECK_TTL_SECONDS = 30.0
@@ -33,9 +33,9 @@ _VISION_PROBE_IMAGE_PATH = Path(tempfile.gettempdir()) / "nanobot-vision-probe.p
 LOCAL_LLM_TARGETS: dict[str, dict[str, str]] = {
     "lfm2": {
         "label": "LFM2",
-        "provider": "llama.cpp",
-        "runtime": "llama.cpp",
-        "model": "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0",
+        "provider": "rapid-mlx",
+        "runtime": "rapid-mlx",
+        "model": "LiquidAI/LFM2-24B-A2B-MLX-4bit",
         "api_base": "http://127.0.0.1:1242/v1",
         "launchd_label": "com.nanobot.local-model-lfm2",
     },
@@ -54,6 +54,22 @@ LOCAL_LLM_TARGETS: dict[str, dict[str, str]] = {
         "model": "mlx-community/Qwen3.5-27B-4bit",
         "api_base": "http://127.0.0.1:1248/v1",
         "launchd_label": "com.nanobot.local-model-qwen35-base-mlx-4bit",
+    },
+    "qwen3-vl-4b": {
+        "label": "Qwen3-VL 4B",
+        "provider": "rapid-mlx",
+        "runtime": "rapid-mlx",
+        "model": "mlx-community/Qwen3-VL-4B-Instruct-4bit",
+        "api_base": "http://127.0.0.1:1252/v1",
+        "launchd_label": "com.nanobot.local-model-qwen3-vl-4b",
+    },
+    "qwen3-vl-8b": {
+        "label": "Qwen3-VL 8B",
+        "provider": "rapid-mlx",
+        "runtime": "rapid-mlx",
+        "model": "mlx-community/Qwen3-VL-8B-Instruct-4bit",
+        "api_base": "http://127.0.0.1:1254/v1",
+        "launchd_label": "com.nanobot.local-model-qwen3-vl-8b",
     },
 }
 

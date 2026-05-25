@@ -20,8 +20,12 @@ def test_status_defaults_to_qwen36_without_override(tmp_path: Path) -> None:
     assert payload["default_api_base"] == "http://127.0.0.1:1246/v1"
     rows = {row["name"]: row for row in payload["targets"]}
     assert "qwen35-base-mlx-4bit" in rows
+    assert "qwen3-vl-4b" in rows
+    assert "qwen3-vl-8b" in rows
     assert rows["qwen36"]["runtime"] == "mlx_vlm.server"
     assert rows["qwen35-base-mlx-4bit"]["runtime"] == "mlx_lm.server"
+    assert rows["qwen3-vl-4b"]["runtime"] == "rapid-mlx"
+    assert rows["qwen3-vl-8b"]["runtime"] == "rapid-mlx"
     assert rows["qwen36"]["is_default"] is True
     assert rows["lfm2"]["is_default"] is False
 
@@ -30,7 +34,7 @@ def test_status_reads_local_llm_override_file(tmp_path: Path) -> None:
     (tmp_path / "local-llm.env").write_text(
         "NANOBOT_LOCAL_LLM_TARGET=lfm2\n"
         "LOCAL_LLM_BASE_URL=http://127.0.0.1:1242/v1\n"
-        "LOCAL_LLM_MODEL=LiquidAI/LFM2-24B-A2B-GGUF:Q4_0\n",
+        "LOCAL_LLM_MODEL=LiquidAI/LFM2-24B-A2B-MLX-4bit\n",
         encoding="utf-8",
     )
     controller = LocalLlmController(nanobot_home=tmp_path)
@@ -70,7 +74,7 @@ def test_status_prefers_only_running_target_when_override_target_is_down(
     payload = controller.status()
 
     assert payload["default_target"] == "lfm2"
-    assert payload["default_model"] == "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0"
+    assert payload["default_model"] == "LiquidAI/LFM2-24B-A2B-MLX-4bit"
     rows = {row["name"]: row for row in payload["targets"]}
     assert rows["lfm2"]["running"] is True
     assert rows["lfm2"]["is_default"] is True
@@ -233,3 +237,23 @@ def test_accepts_qwen35_target_now_supported(tmp_path: Path) -> None:
     assert response["ok"] is True
     assert response["target"] == "qwen35-base-mlx-4bit"
     assert calls == [["/tmp/local-models.sh", "use", "qwen35-base-mlx-4bit"]]
+
+
+def test_accepts_qwen3_vl_8b_target_now_supported(tmp_path: Path) -> None:
+    calls: list[list[str]] = []
+
+    def runner(argv: list[str]) -> subprocess.CompletedProcess[str]:
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout="ok\n", stderr="")
+
+    controller = LocalLlmController(
+        script_path="/tmp/local-models.sh",
+        nanobot_home=tmp_path,
+        runner=runner,
+    )
+
+    response = controller.run_action("use", "qwen3-vl-8b")
+
+    assert response["ok"] is True
+    assert response["target"] == "qwen3-vl-8b"
+    assert calls == [["/tmp/local-models.sh", "use", "qwen3-vl-8b"]]

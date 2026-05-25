@@ -611,15 +611,15 @@ describe("ThreadShell", () => {
         if (url.includes("/api/local-llm/status")) {
           return httpJson({
             default_target: "lfm2",
-            default_model: "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0",
+            default_model: "LiquidAI/LFM2-24B-A2B-MLX-4bit",
             default_api_base: "http://127.0.0.1:1242/v1",
             targets: [
               {
                 name: "lfm2",
                 label: "LFM2",
-                provider: "llama.cpp",
-                runtime: "llama.cpp",
-                model: "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0",
+                provider: "rapid-mlx",
+                runtime: "rapid-mlx",
+                model: "LiquidAI/LFM2-24B-A2B-MLX-4bit",
                 api_base: "http://127.0.0.1:1242/v1",
                 launchd_label: "com.nanobot.local-model-lfm2",
                 running: true,
@@ -668,7 +668,7 @@ describe("ThreadShell", () => {
       );
     });
     expect(await screen.findByText("Automatic model selection")).toBeInTheDocument();
-    expect(screen.getByText("llama.cpp -> LiquidAI/LFM2-24B-A2B-GGUF:Q4_0")).toBeInTheDocument();
+    expect(screen.getByText("rapid-mlx -> LiquidAI/LFM2-24B-A2B-MLX-4bit")).toBeInTheDocument();
   });
 
   it("shows the resolved model label for smart-router-local", async () => {
@@ -731,8 +731,8 @@ describe("ThreadShell", () => {
             name: "local-llm",
             kind: "provider_model",
             provider: "vllm",
-            model: "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0",
-            description: "current local runtime (LiquidAI/LFM2-24B-A2B-GGUF:Q4_0)",
+            model: "LiquidAI/LFM2-24B-A2B-MLX-4bit",
+            description: "current local runtime (LiquidAI/LFM2-24B-A2B-MLX-4bit)",
           },
         });
       }
@@ -760,7 +760,7 @@ describe("ThreadShell", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText("LFM2-24B-A2B-GGUF:Q4_0")).toBeInTheDocument();
+      expect(screen.getByText("LFM2-24B-A2B-MLX-4bit")).toBeInTheDocument();
     });
   });
 
