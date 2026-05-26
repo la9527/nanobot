@@ -852,6 +852,17 @@ class AgentLoop:
         finally:
             self._mcp_connecting = False
 
+    async def _ensure_mcp_connected(self) -> None:
+        """Connect MCP servers without letting child-task cancellation kill the caller."""
+        task = asyncio.create_task(self._connect_mcp())
+        try:
+            await task
+        except asyncio.CancelledError:
+            current = asyncio.current_task()
+            if current is not None and current.cancelling() > 0:
+                raise
+            logger.warning("MCP connection task was cancelled; continuing without MCP")
+
     def _set_tool_context(
         self, channel: str, chat_id: str,
         message_id: str | None = None, metadata: dict | None = None,
@@ -1262,7 +1273,7 @@ class AgentLoop:
     async def run(self) -> None:
         """Run the agent loop, dispatching messages as tasks to stay responsive to /stop."""
         self._running = True
-        await self._connect_mcp()
+        await self._ensure_mcp_connected()
         logger.info("Agent loop started")
 
         while self._running:
@@ -2395,7 +2406,7 @@ class AgentLoop:
         on_stream_end: Callable[..., Awaitable[None]] | None = None,
     ) -> OutboundMessage | None:
         """Process a message directly and return the outbound payload."""
-        await self._connect_mcp()
+        await self._ensure_mcp_connected()
         msg = InboundMessage(
             channel=channel, sender_id="user", chat_id=chat_id,
             content=content, media=media or [],

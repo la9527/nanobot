@@ -36,12 +36,21 @@ class LoggingSettings:
 
 
 @dataclass(slots=True)
+class LocalHybridSettings:
+    enabled: bool
+    mode: str
+    vision: TierTarget | None
+    on_vision_unavailable: str
+
+
+@dataclass(slots=True)
 class RouterConfig:
     enabled: bool
     allow_local_tools: bool
     local: TierTarget
     mini: TierTarget
     full: TierTarget
+    local_hybrid: LocalHybridSettings
     policy: PolicySettings
     health: HealthSettings
     logging: LoggingSettings
@@ -101,6 +110,12 @@ def load_router_config(
     )
     mini = _tier_target("mini", getattr(value, "mini", None))
     full = _tier_target("full", getattr(value, "full", None))
+    local_hybrid_value = getattr(value, "local_hybrid", None)
+    local_hybrid_enabled = bool(getattr(local_hybrid_value, "enabled", False))
+    local_hybrid_vision_value = getattr(local_hybrid_value, "vision", None)
+    local_hybrid_vision = None
+    if local_hybrid_enabled or getattr(local_hybrid_vision_value, "model", None):
+        local_hybrid_vision = _tier_target("local", local_hybrid_vision_value)
     policy_value = getattr(value, "policy")
     health_value = getattr(value, "health")
     logging_value = getattr(value, "logging")
@@ -111,6 +126,12 @@ def load_router_config(
         local=local,
         mini=mini,
         full=full,
+        local_hybrid=LocalHybridSettings(
+            enabled=local_hybrid_enabled,
+            mode=str(getattr(local_hybrid_value, "mode", "vision_first_text_writer")),
+            vision=local_hybrid_vision,
+            on_vision_unavailable=str(getattr(local_hybrid_value, "on_vision_unavailable", "error")),
+        ),
         policy=PolicySettings(
             local_score_max=policy_value.local_score_max,
             full_score_min=policy_value.full_score_min,

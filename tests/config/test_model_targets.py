@@ -72,6 +72,36 @@ def test_build_model_targets_includes_smart_router_target_when_configured() -> N
     assert targets["smart-router-full"].display_name == "Full"
 
 
+def test_build_model_targets_surfaces_local_hybrid_vision_model_in_local_description() -> None:
+    config = Config.model_validate(
+        {
+            "plugins": {
+                "smartrouter": {
+                    "enabled": True,
+                    "local": {"provider": "vllm", "model": "LiquidAI/LFM2-24B-A2B-MLX-4bit"},
+                    "mini": {"provider": "openrouter", "model": "openai/gpt-5.4-mini"},
+                    "full": {"provider": "openrouter", "model": "openai/gpt-5.4"},
+                    "localHybrid": {
+                        "enabled": True,
+                        "vision": {
+                            "provider": "vllm",
+                            "model": "mlx-community/Qwen3-VL-4B-Instruct-4bit",
+                        },
+                    },
+                }
+            }
+        }
+    )
+
+    targets = build_model_targets(config)
+
+    assert targets["smart-router-local"].description == (
+        "smart-router forced local tier "
+        "(text: LiquidAI/LFM2-24B-A2B-MLX-4bit; "
+        "hybrid vision: mlx-community/Qwen3-VL-4B-Instruct-4bit)"
+    )
+
+
 def test_build_model_targets_merges_plugin_contributed_targets(monkeypatch) -> None:
     plugin = RuntimePlugin(
         name="sample",
@@ -127,6 +157,13 @@ def test_build_model_targets_prefers_live_local_llm_status_for_local_targets(
                     "local": {"provider": "vllm", "model": "mlx-community/Qwen3.6-35B-A3B-4bit"},
                     "mini": {"provider": "openrouter", "model": "openai/gpt-5.4-mini"},
                     "full": {"provider": "openrouter", "model": "openai/gpt-5.4"},
+                    "localHybrid": {
+                        "enabled": True,
+                        "vision": {
+                            "provider": "rapid-mlx",
+                            "model": "mlx-community/Qwen3-VL-4B-Instruct-4bit",
+                        },
+                    },
                 }
             },
         }
@@ -167,7 +204,11 @@ def test_build_model_targets_prefers_live_local_llm_status_for_local_targets(
     assert targets["local-llm"].description == "current local runtime (LiquidAI/LFM2-24B-A2B-GGUF:Q4_0)"
     assert targets["smart-router-local"].provider == "vllm"
     assert targets["smart-router-local"].model == "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0"
-    assert targets["smart-router-local"].description == "smart-router forced local tier (LiquidAI/LFM2-24B-A2B-GGUF:Q4_0)"
+    assert targets["smart-router-local"].description == (
+        "smart-router forced local tier "
+        "(text: LiquidAI/LFM2-24B-A2B-GGUF:Q4_0; "
+        "hybrid vision: mlx-community/Qwen3-VL-4B-Instruct-4bit)"
+    )
 
 
 def test_apply_model_target_updates_smart_router_local_tier_from_live_local_status(
@@ -218,7 +259,73 @@ def test_apply_model_target_updates_smart_router_local_tier_from_live_local_stat
 
     updated = apply_model_target(config, build_model_targets(config)["smart-router-local"])
 
-    assert updated.plugins.smartrouter.local.provider == "llama.cpp"
+    assert updated.plugins.smartrouter.local.provider == "vllm"
     assert updated.plugins.smartrouter.local.model == "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0"
-    assert updated.smart_router.local.provider == "llama.cpp"
+    assert updated.smart_router.local.provider == "vllm"
     assert updated.smart_router.local.model == "LiquidAI/LFM2-24B-A2B-GGUF:Q4_0"
+
+
+def test_apply_model_target_preserves_smart_router_local_provider_when_live_status_uses_runtime_family(
+    monkeypatch,
+) -> None:
+    config = Config.model_validate(
+        {
+            "agents": {"defaults": {"model": "LiquidAI/LFM2-24B-A2B-MLX-4bit", "provider": "vllm"}},
+            "providers": {
+                "vllm": {"apiBase": "http://127.0.0.1:1242/v1"},
+                "rapidMlx": {"apiBase": "http://127.0.0.1:1252/v1"},
+            },
+            "plugins": {
+                "smartrouter": {
+                    "enabled": True,
+                    "local": {"provider": "vllm", "model": "LiquidAI/LFM2-24B-A2B-MLX-4bit"},
+                    "mini": {"provider": "openrouter", "model": "openai/gpt-5.4-mini"},
+                    "full": {"provider": "openrouter", "model": "openai/gpt-5.4"},
+                    "localHybrid": {
+                        "enabled": True,
+                        "vision": {
+                            "provider": "rapid-mlx",
+                            "model": "mlx-community/Qwen3-VL-4B-Instruct-4bit",
+                        },
+                    },
+                }
+            },
+        }
+    )
+    monkeypatch.setattr(
+        "nanobot.local_llm_control.default_controller",
+        lambda: type(
+            "_Controller",
+            (),
+            {
+                "status": staticmethod(
+                    lambda: {
+                        "default_target": "lfm2",
+                        "default_model": "LiquidAI/LFM2-24B-A2B-MLX-4bit",
+                        "default_api_base": "http://127.0.0.1:1242/v1",
+                        "targets": [
+                            {
+                                "name": "lfm2",
+                                "label": "LFM2",
+                                "provider": "rapid-mlx",
+                                "runtime": "rapid-mlx",
+                                "model": "LiquidAI/LFM2-24B-A2B-MLX-4bit",
+                                "api_base": "http://127.0.0.1:1242/v1",
+                                "role": "text",
+                                "running": True,
+                                "endpoint_ok": True,
+                                "is_default": True,
+                            }
+                        ],
+                    }
+                )
+            },
+        )(),
+    )
+
+    updated = apply_model_target(config, build_model_targets(config)["smart-router-local"])
+
+    assert updated.plugins.smartrouter.local.provider == "vllm"
+    assert updated.plugins.smartrouter.local.model == "LiquidAI/LFM2-24B-A2B-MLX-4bit"
+    assert updated.smart_router.local.provider == "vllm"
+    assert updated.smart_router.local.model == "LiquidAI/LFM2-24B-A2B-MLX-4bit"

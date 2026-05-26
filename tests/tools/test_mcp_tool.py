@@ -566,6 +566,41 @@ async def test_connect_mcp_servers_one_failure_does_not_block_others(
 
 
 @pytest.mark.asyncio
+async def test_connect_mcp_servers_skips_streamable_http_when_endpoint_unreachable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called = False
+
+    class _FakeAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+        async def request(self, method: str, url: str, **kwargs):
+            raise httpx.ConnectError("boom", request=httpx.Request(method, url))
+
+    @asynccontextmanager
+    async def _should_not_run(_url: str, http_client=None):
+        nonlocal called
+        called = True
+        yield object(), object(), object()
+
+    monkeypatch.setattr("nanobot.agent.tools.mcp.httpx.AsyncClient", lambda *args, **kwargs: _FakeAsyncClient())
+    monkeypatch.setattr(sys.modules["mcp.client.streamable_http"], "streamable_http_client", _should_not_run)
+
+    registry = ToolRegistry()
+    stacks = await connect_mcp_servers(
+        {"photos": MCPServerConfig(url="http://127.0.0.1:18791/mcp", type="streamableHttp")},
+        registry,
+    )
+
+    assert stacks == {}
+    assert called is False
+
+
+@pytest.mark.asyncio
 async def test_connect_mcp_servers_wraps_windows_stdio_launchers(
     fake_mcp_runtime: dict[str, object | None],
     monkeypatch: pytest.MonkeyPatch,

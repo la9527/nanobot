@@ -133,6 +133,13 @@ async def test_bootstrap_resolves_env_backed_model_target_strings(
                         "local": {"provider": "vllm", "model": "${LOCAL_LLM_MODEL}"},
                         "mini": {"provider": "openrouter", "model": "openai/gpt-5.4-mini"},
                         "full": {"provider": "openrouter", "model": "openai/gpt-5.4"},
+                        "localHybrid": {
+                            "enabled": True,
+                            "vision": {
+                                "provider": "rapid-mlx",
+                                "model": "mlx-community/Qwen3-VL-4B-Instruct-4bit",
+                            },
+                        },
                     }
                 },
             }
@@ -156,7 +163,9 @@ async def test_bootstrap_resolves_env_backed_model_target_strings(
         assert rows["smart-router-local"]["provider"] == "vllm"
         assert rows["smart-router-local"]["model"] == "LiquidAI/LFM2-24B-A2B-MLX-4bit"
         assert rows["smart-router-local"]["description"] == (
-            "smart-router forced local tier (LiquidAI/LFM2-24B-A2B-MLX-4bit)"
+            "smart-router forced local tier "
+            "(text: LiquidAI/LFM2-24B-A2B-MLX-4bit; "
+            "hybrid vision: mlx-community/Qwen3-VL-4B-Instruct-4bit)"
         )
     finally:
         await channel.stop()
@@ -245,10 +254,13 @@ async def test_local_llm_routes_share_status_and_action_contract(
                     {
                         "name": "qwen36",
                         "label": "Qwen3.6",
+                        "provider": "vllm",
                         "runtime": "mlx_vlm.server",
                         "model": "mlx-community/Qwen3.6-35B-A3B-4bit",
                         "api_base": "http://127.0.0.1:1246/v1",
                         "launchd_label": "com.nanobot.local-model-qwen36",
+                        "role": "text",
+                        "recommendation": "general_text",
                         "running": True,
                         "endpoint_ok": True,
                         "is_default": True,
@@ -280,6 +292,22 @@ async def test_local_llm_routes_share_status_and_action_contract(
         status = await _http_get("http://127.0.0.1:29916/api/local-llm/status", headers=auth)
         assert status.status_code == 200
         assert status.json()["default_target"] == "qwen36"
+        assert status.json()["targets"] == [
+            {
+                "name": "qwen36",
+                "label": "Qwen3.6",
+                "provider": "vllm",
+                "runtime": "mlx_vlm.server",
+                "model": "mlx-community/Qwen3.6-35B-A3B-4bit",
+                "api_base": "http://127.0.0.1:1246/v1",
+                "launchd_label": "com.nanobot.local-model-qwen36",
+                "role": "text",
+                "recommendation": "general_text",
+                "running": True,
+                "endpoint_ok": True,
+                "is_default": True,
+            }
+        ]
 
         action = await _http_get("http://127.0.0.1:29916/api/local-llm/use/qwen36", headers=auth)
         assert action.status_code == 200

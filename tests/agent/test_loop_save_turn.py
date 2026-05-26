@@ -9,6 +9,8 @@ from nanobot.agent.context import ContextBuilder
 from nanobot.agent.loop import AgentLoop
 from nanobot.bus.events import InboundMessage
 from nanobot.bus.queue import MessageBus
+from nanobot.config.schema import Config
+from nanobot.model_targets import SESSION_MODEL_TARGET_KEY
 from nanobot.providers.base import LLMResponse
 from nanobot.session.manager import Session
 from nanobot.utils.webui_titles import (
@@ -31,6 +33,40 @@ def _make_full_loop(tmp_path: Path) -> AgentLoop:
     provider.get_default_model.return_value = "test-model"
     provider.chat_with_retry = AsyncMock(return_value=LLMResponse(content="Test title"))
     return AgentLoop(bus=MessageBus(), provider=provider, workspace=tmp_path, model="test-model")
+
+
+def _make_router_binding_provider(*, local_provider: str, local_model: str) -> MagicMock:
+    provider = MagicMock()
+    provider.get_default_model.return_value = local_model
+    provider.generation = SimpleNamespace(max_tokens=4096, temperature=0.1, reasoning_effort=None)
+
+    async def _chat_with_retry(**kwargs):
+        if local_provider != "vllm":
+            return LLMResponse(
+                content=(
+                    "Error: {'detail': 'The model `LiquidAI/LFM2-24B-A2B-MLX-4bit` "
+                    "does not exist. Available: mlx-community/Qwen3-VL-4B-Instruct-4bit, qwen3-vl-4b'}"
+                ),
+                finish_reason="error",
+            )
+        return LLMResponse(
+            content="이미지",
+            finish_reason="stop",
+            provider_metadata={
+                "smart_router_final_tier": "local",
+                "smart_router_final_model": local_model,
+            },
+        )
+
+    async def _chat_stream_with_retry(*, on_content_delta=None, **kwargs):
+        response = await _chat_with_retry(**kwargs)
+        if response.finish_reason != "error" and on_content_delta is not None:
+            await on_content_delta(response.content or "")
+        return response
+
+    provider.chat_with_retry = _chat_with_retry
+    provider.chat_stream_with_retry = _chat_stream_with_retry
+    return provider
 
 
 @pytest.mark.asyncio
@@ -486,6 +522,139 @@ async def test_process_message_persists_media_only_turn_without_text(tmp_path: P
     assert persisted.messages[0]["role"] == "user"
     assert persisted.messages[0]["content"] == ""
     assert persisted.messages[0]["media"] == [str(img)]
+
+
+@pytest.mark.asyncio
+async def test_process_message_selected_smart_router_local_image_turn_persists_final_reply(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    img = tmp_path / "smart-router-local.png"
+    img.write_bytes(_PNG_1X1)
+
+    config = Config.model_validate(
+        {
+            "agents": {
+                "defaults": {
+                    "model": "LiquidAI/LFM2-24B-A2B-MLX-4bit",
+                    "provider": "vllm",
+                }
+            },
+            "providers": {
+                "vllm": {"apiBase": "http://127.0.0.1:1242/v1"},
+                "rapidMlx": {"apiBase": "http://127.0.0.1:1252/v1"},
+            },
+            "plugins": {
+                "smartrouter": {
+                    "enabled": True,
+                    "local": {
+                        "provider": "vllm",
+                        "model": "LiquidAI/LFM2-24B-A2B-MLX-4bit",
+                    },
+                    "mini": {"provider": "openrouter", "model": "openai/gpt-5.4-mini"},
+                    "full": {"provider": "openrouter", "model": "openai/gpt-5.4"},
+                    "localHybrid": {
+                        "enabled": True,
+                        "mode": "vision_first_text_writer",
+                        "vision": {
+                            "provider": "rapid-mlx",
+                            "model": "mlx-community/Qwen3-VL-4B-Instruct-4bit",
+                        },
+                    },
+                }
+            },
+        }
+    )
+    monkeypatch.setattr(
+        "nanobot.local_llm_control.default_controller",
+        lambda: type(
+            "_Controller",
+            (),
+            {
+                "status": staticmethod(
+                    lambda: {
+                        "default_target": "lfm2",
+                        "default_model": "LiquidAI/LFM2-24B-A2B-MLX-4bit",
+                        "default_api_base": "http://127.0.0.1:1242/v1",
+                        "targets": [
+                            {
+                                "name": "lfm2",
+                                "label": "LFM2",
+                                "provider": "rapid-mlx",
+                                "runtime": "rapid-mlx",
+                                "model": "LiquidAI/LFM2-24B-A2B-MLX-4bit",
+                                "api_base": "http://127.0.0.1:1242/v1",
+                                "role": "text",
+                                "running": True,
+                                "endpoint_ok": True,
+                                "is_default": True,
+                            }
+                        ],
+                    }
+                )
+            },
+        )(),
+    )
+
+    def _make_provider(runtime_config: Config):
+        router = runtime_config.plugins.smartrouter
+        return _make_router_binding_provider(
+            local_provider=router.local.provider,
+            local_model=router.local.model,
+        )
+
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=_make_provider(config),
+        workspace=tmp_path,
+        model=config.agents.defaults.model,
+        runtime_config=config,
+        make_provider=_make_provider,
+        max_iterations=config.agents.defaults.max_tool_iterations,
+        context_window_tokens=config.agents.defaults.context_window_tokens,
+        max_tool_result_chars=config.agents.defaults.max_tool_result_chars,
+        tools_config=config.tools,
+    )
+    loop.consolidator.maybe_consolidate_by_tokens = AsyncMock(return_value=False)  # type: ignore[method-assign]
+
+    session = loop.sessions.get_or_create("websocket:smart-router-local-image")
+    session.metadata[SESSION_MODEL_TARGET_KEY] = "smart-router-local"
+    loop.sessions.save(session)
+
+    streamed: list[str] = []
+    stream_end: list[dict[str, object]] = []
+
+    result = await loop._process_message(
+        InboundMessage(
+            channel="websocket",
+            sender_id="u1",
+            chat_id="smart-router-local-image",
+            content="첨부 이미지를 보고 한 단어로만 묘사해줘.",
+            media=[str(img)],
+        ),
+        on_stream=lambda delta: _append_and_return(streamed, delta),
+        on_stream_end=lambda **kwargs: _append_stream_end(stream_end, kwargs),
+    )
+
+    assert result is not None
+    assert result.content == "이미지"
+    assert "[Assistant reply unavailable due to model error.]" not in result.content
+    assert "".join(streamed) == "이미지"
+    assert stream_end == [{"resuming": False, "response_model": "smart-router-local", "active_target": "smart-router-local"}]
+
+    loop.sessions.invalidate("websocket:smart-router-local-image")
+    persisted = loop.sessions.get_or_create("websocket:smart-router-local-image")
+    assert [m["role"] for m in persisted.messages] == ["user", "assistant"]
+    assert persisted.messages[-1]["content"] == "이미지"
+    assert AgentLoop._PENDING_USER_TURN_KEY not in persisted.metadata
+
+
+async def _append_and_return(target: list[str], delta: str) -> None:
+    target.append(delta)
+
+
+async def _append_stream_end(target: list[dict[str, object]], payload: dict[str, object]) -> None:
+    target.append(payload)
 
 
 @pytest.mark.asyncio

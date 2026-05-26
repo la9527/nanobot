@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+import asyncio
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -29,8 +30,9 @@ async def test_connect_mcp_retries_when_no_servers_connect(tmp_path, monkeypatch
     loop = _make_loop(tmp_path)
     attempts = 0
 
-    async def _fake_connect(_servers, _registry):
+    async def _fake_connect(_servers, _registry, *, followup_callback=None):
         nonlocal attempts
+        assert followup_callback is None or callable(followup_callback)
         attempts += 1
         return {}
 
@@ -42,3 +44,11 @@ async def test_connect_mcp_retries_when_no_servers_connect(tmp_path, monkeypatch
     assert attempts == 2
     assert loop._mcp_connected is False
     assert loop._mcp_stacks == {}
+
+
+@pytest.mark.asyncio
+async def test_ensure_mcp_connected_ignores_child_task_cancellation(tmp_path) -> None:
+    loop = _make_loop(tmp_path)
+    loop._connect_mcp = AsyncMock(side_effect=asyncio.CancelledError())
+
+    await loop._ensure_mcp_connected()

@@ -131,6 +131,34 @@ async def test_message_with_single_image_forwards_saved_path(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_webui_message_with_single_image_sets_webui_metadata_and_saved_path(tmp_path) -> None:
+    channel = _make_channel()
+    mock_conn = AsyncMock()
+    envelope = {
+        "type": "message",
+        "chat_id": "abc123",
+        "content": "첨부 이미지를 보고 한 단어로만 묘사해줘.",
+        "media": [{"data_url": _tiny_png_data_url(), "name": "shot.png"}],
+        "webui": True,
+    }
+
+    with patch(
+        "nanobot.channels.websocket.get_media_dir", return_value=tmp_path
+    ):
+        await channel._dispatch_envelope(mock_conn, "client-1", envelope)
+
+    channel._handle_message.assert_awaited_once()
+    call = channel._handle_message.call_args
+    assert call.kwargs["metadata"]["webui"] is True
+    paths = call.kwargs["media"]
+    assert isinstance(paths, list) and len(paths) == 1
+    saved = Path(paths[0])
+    assert saved.exists()
+    assert saved.suffix == ".png"
+    assert saved.is_relative_to(tmp_path)
+
+
+@pytest.mark.asyncio
 async def test_message_with_multiple_images(tmp_path) -> None:
     channel = _make_channel()
     mock_conn = AsyncMock()

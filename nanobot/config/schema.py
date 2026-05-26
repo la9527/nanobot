@@ -150,6 +150,19 @@ class SmartRouterTierConfig(Base):
     model: str | None = None
 
 
+class SmartRouterLocalHybridConfig(Base):
+    """Optional local hybrid routing settings."""
+
+    enabled: bool = False
+    mode: Literal["vision_first_text_writer", "vision_only_direct"] = "vision_first_text_writer"
+    vision: SmartRouterTierConfig = Field(default_factory=SmartRouterTierConfig)
+    on_vision_unavailable: Literal["error", "mini", "full"] = Field(
+        default="error",
+        validation_alias=AliasChoices("onVisionUnavailable", "on_vision_unavailable"),
+        serialization_alias="onVisionUnavailable",
+    )
+
+
 class SmartRouterPolicyConfig(Base):
     """Rule-based routing thresholds and keyword groups."""
 
@@ -232,6 +245,11 @@ class SmartRouterConfig(Base):
     local: SmartRouterTierConfig = Field(default_factory=SmartRouterTierConfig)
     mini: SmartRouterTierConfig = Field(default_factory=SmartRouterTierConfig)
     full: SmartRouterTierConfig = Field(default_factory=SmartRouterTierConfig)
+    local_hybrid: SmartRouterLocalHybridConfig = Field(
+        default_factory=SmartRouterLocalHybridConfig,
+        validation_alias=AliasChoices("localHybrid", "local_hybrid"),
+        serialization_alias="localHybrid",
+    )
     policy: SmartRouterPolicyConfig = Field(default_factory=SmartRouterPolicyConfig)
     health: SmartRouterHealthConfig = Field(default_factory=SmartRouterHealthConfig)
     logging: SmartRouterLoggingConfig = Field(default_factory=SmartRouterLoggingConfig)
@@ -278,6 +296,7 @@ class ProvidersConfig(Base):
     """Configuration for LLM providers."""
 
     custom: ProviderConfig = Field(default_factory=ProviderConfig)  # Any OpenAI-compatible endpoint
+    rapid_mlx: ProviderConfig = Field(default_factory=ProviderConfig)  # Rapid-MLX local OpenAI-compatible runtime
     azure_openai: ProviderConfig = Field(default_factory=ProviderConfig)  # Azure OpenAI (model = deployment name)
     bedrock: BedrockProviderConfig = Field(default_factory=BedrockProviderConfig)  # AWS Bedrock Converse
     anthropic: ProviderConfig = Field(default_factory=ProviderConfig)

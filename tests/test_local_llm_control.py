@@ -26,6 +26,14 @@ def test_status_defaults_to_qwen36_without_override(tmp_path: Path) -> None:
     assert rows["qwen35-base-mlx-4bit"]["runtime"] == "mlx_lm.server"
     assert rows["qwen3-vl-4b"]["runtime"] == "rapid-mlx"
     assert rows["qwen3-vl-8b"]["runtime"] == "rapid-mlx"
+    assert rows["lfm2"]["role"] == "text"
+    assert rows["lfm2"]["recommendation"] == "default_text"
+    assert rows["qwen36"]["role"] == "text"
+    assert rows["qwen36"]["recommendation"] == "general_text"
+    assert rows["qwen3-vl-4b"]["role"] == "vision"
+    assert rows["qwen3-vl-4b"]["recommendation"] == "hybrid_vision_fast"
+    assert rows["qwen3-vl-8b"]["role"] == "vision"
+    assert rows["qwen3-vl-8b"]["recommendation"] == "hybrid_vision_quality"
     assert rows["qwen36"]["is_default"] is True
     assert rows["lfm2"]["is_default"] is False
 

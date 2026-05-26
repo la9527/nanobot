@@ -12,8 +12,11 @@ if str(CUSTOM_PLUGINS) not in sys.path:
     sys.path.insert(0, str(CUSTOM_PLUGINS))
 
 from smartrouter import SmartRouterProvider
-from smartrouter.config import HealthSettings, LoggingSettings, PolicySettings, RouterConfig
+from smartrouter.config import HealthSettings, LocalHybridSettings, LoggingSettings, PolicySettings, RouterConfig
 from smartrouter.types import TierTarget
+
+
+_CALL_SEQUENCE = 0
 
 
 class _StubProvider(LLMProvider):
@@ -34,7 +37,16 @@ class _StubProvider(LLMProvider):
         reasoning_effort=None,
         tool_choice=None,
     ) -> LLMResponse:
-        self.calls.append({"tools": tools, "model": model})
+        global _CALL_SEQUENCE
+        _CALL_SEQUENCE += 1
+        self.calls.append(
+            {
+                "messages": messages,
+                "tools": tools,
+                "model": model,
+                "call_sequence": _CALL_SEQUENCE,
+            }
+        )
         return self.responses.pop(0)
 
     async def chat_stream(
@@ -62,6 +74,42 @@ class _StubProvider(LLMProvider):
         return self.name
 
 
+def _local_hybrid_settings() -> LocalHybridSettings:
+    return LocalHybridSettings(
+        enabled=False,
+        mode="vision_first_text_writer",
+        vision=None,
+        on_vision_unavailable="error",
+    )
+
+
+def _enabled_local_hybrid_settings(
+    *,
+    on_vision_unavailable: str = "error",
+) -> LocalHybridSettings:
+    return LocalHybridSettings(
+        enabled=True,
+        mode="vision_first_text_writer",
+        vision=TierTarget(tier="local", provider="vllm", model="vision-model"),
+        on_vision_unavailable=on_vision_unavailable,
+    )
+
+
+def _image_request_messages() -> list[dict[str, object]]:
+    return [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is in this image?"},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/png;base64,ZmFrZQ=="},
+                },
+            ],
+        }
+    ]
+
+
 def _router(tmp_path: Path, *, allow_local_tools: bool = False) -> SmartRouterProvider:
     config = RouterConfig(
         enabled=True,
@@ -69,6 +117,7 @@ def _router(tmp_path: Path, *, allow_local_tools: bool = False) -> SmartRouterPr
         local=TierTarget(tier="local", provider="vllm", model="local-model"),
         mini=TierTarget(tier="mini", provider="openrouter", model="mini-model"),
         full=TierTarget(tier="full", provider="openrouter", model="full-model"),
+        local_hybrid=_local_hybrid_settings(),
         policy=PolicySettings(
             local_score_max=2,
             full_score_min=6,
@@ -95,6 +144,47 @@ def _router(tmp_path: Path, *, allow_local_tools: bool = False) -> SmartRouterPr
         tier_providers={"local": local, "mini": mini, "full": full},
         default_model="router",
     )
+
+
+def test_smart_router_stores_optional_hybrid_vision_provider(tmp_path: Path) -> None:
+    config = RouterConfig(
+        enabled=True,
+        allow_local_tools=False,
+        local=TierTarget(tier="local", provider="vllm", model="local-model"),
+        mini=TierTarget(tier="mini", provider="openrouter", model="mini-model"),
+        full=TierTarget(tier="full", provider="openrouter", model="full-model"),
+        local_hybrid=_local_hybrid_settings(),
+        policy=PolicySettings(
+            local_score_max=2,
+            full_score_min=6,
+            short_prompt_chars=120,
+            medium_prompt_chars=800,
+            long_prompt_chars=2000,
+            tool_bonus=2,
+            code_bonus=3,
+            reasoning_bonus=3,
+            history_bonus=2,
+            attachment_bonus=2,
+            full_keywords=["architecture", "refactor", "benchmark"],
+            code_keywords=["python", "function", "traceback"],
+            tool_keywords=["docker", "pytest", "command"],
+        ),
+        health=HealthSettings(failure_threshold=1, cooldown_seconds=999),
+        logging=LoggingSettings(enabled=True, path=str(tmp_path / "smart-router.jsonl")),
+    )
+    local = _StubProvider("local", [LLMResponse(content="local ok")])
+    mini = _StubProvider("mini", [LLMResponse(content="mini ok")])
+    full = _StubProvider("full", [LLMResponse(content="full ok")])
+    hybrid_vision = _StubProvider("vision", [LLMResponse(content="vision ok")])
+
+    router = SmartRouterProvider(
+        router_config=config,
+        tier_providers={"local": local, "mini": mini, "full": full},
+        default_model="router",
+        hybrid_vision_provider=hybrid_vision,
+    )
+
+    assert router._hybrid_vision_provider is hybrid_vision
 
 
 @pytest.mark.asyncio
@@ -136,6 +226,7 @@ async def test_smart_router_falls_back_after_local_error(tmp_path: Path) -> None
         local=TierTarget(tier="local", provider="vllm", model="local-model"),
         mini=TierTarget(tier="mini", provider="openrouter", model="mini-model"),
         full=TierTarget(tier="full", provider="openrouter", model="full-model"),
+        local_hybrid=_local_hybrid_settings(),
         policy=PolicySettings(
             local_score_max=2,
             full_score_min=6,
@@ -178,6 +269,7 @@ async def test_smart_router_cools_down_local_immediately_after_timeout(tmp_path:
         local=TierTarget(tier="local", provider="vllm", model="local-model"),
         mini=TierTarget(tier="mini", provider="openrouter", model="mini-model"),
         full=TierTarget(tier="full", provider="openrouter", model="full-model"),
+        local_hybrid=_local_hybrid_settings(),
         policy=PolicySettings(
             local_score_max=2,
             full_score_min=6,
@@ -215,6 +307,227 @@ async def test_smart_router_cools_down_local_immediately_after_timeout(tmp_path:
     assert second.content == "mini second"
     assert len(local.calls) == 1
     assert len(mini.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_smart_router_uses_vision_first_writer_for_local_image_request(tmp_path: Path) -> None:
+    config = RouterConfig(
+        enabled=True,
+        allow_local_tools=False,
+        local=TierTarget(tier="local", provider="vllm", model="local-model"),
+        mini=TierTarget(tier="mini", provider="openrouter", model="mini-model"),
+        full=TierTarget(tier="full", provider="openrouter", model="full-model"),
+        local_hybrid=_enabled_local_hybrid_settings(),
+        policy=PolicySettings(
+            local_score_max=2,
+            full_score_min=6,
+            short_prompt_chars=120,
+            medium_prompt_chars=800,
+            long_prompt_chars=2000,
+            tool_bonus=2,
+            code_bonus=3,
+            reasoning_bonus=3,
+            history_bonus=2,
+            attachment_bonus=2,
+            full_keywords=["architecture"],
+            code_keywords=["python"],
+            tool_keywords=["docker"],
+        ),
+        health=HealthSettings(failure_threshold=1, cooldown_seconds=999),
+        logging=LoggingSettings(enabled=False, path=str(tmp_path / "smart-router.jsonl")),
+    )
+    local = _StubProvider("local", [LLMResponse(content="local writer ok")])
+    mini = _StubProvider("mini", [LLMResponse(content="mini ok")])
+    full = _StubProvider("full", [LLMResponse(content="full ok")])
+    vision = _StubProvider("vision", [LLMResponse(content="A camera icon on an orange background.")])
+    router = SmartRouterProvider(
+        router_config=config,
+        tier_providers={"local": local, "mini": mini, "full": full},
+        default_model="router",
+        hybrid_vision_provider=vision,
+    )
+
+    response = await router.chat(messages=_image_request_messages())
+
+    assert response.content == "local writer ok"
+    assert len(vision.calls) == 1
+    assert len(local.calls) == 1
+    assert vision.calls[0]["call_sequence"] < local.calls[0]["call_sequence"]
+    writer_message = local.calls[0]["messages"][0]
+    assert writer_message["role"] == "user"
+    assert "A camera icon on an orange background." in writer_message["content"]
+    assert local.calls[0]["tools"] is None
+    assert response.provider_metadata["smart_router_hybrid_mode"] == "vision_first_text_writer"
+    assert response.provider_metadata["smart_router_vision_model"] == "vision-model"
+    assert response.provider_metadata["smart_router_final_tier"] == "local"
+
+
+@pytest.mark.asyncio
+async def test_smart_router_compacts_hybrid_vision_messages_to_last_image_turn(tmp_path: Path) -> None:
+    config = RouterConfig(
+        enabled=True,
+        allow_local_tools=False,
+        local=TierTarget(tier="local", provider="vllm", model="local-model"),
+        mini=TierTarget(tier="mini", provider="openrouter", model="mini-model"),
+        full=TierTarget(tier="full", provider="openrouter", model="full-model"),
+        local_hybrid=_enabled_local_hybrid_settings(),
+        policy=PolicySettings(
+            local_score_max=2,
+            full_score_min=6,
+            short_prompt_chars=120,
+            medium_prompt_chars=800,
+            long_prompt_chars=2000,
+            tool_bonus=2,
+            code_bonus=3,
+            reasoning_bonus=3,
+            history_bonus=2,
+            attachment_bonus=2,
+            full_keywords=["architecture"],
+            code_keywords=["python"],
+            tool_keywords=["docker"],
+        ),
+        health=HealthSettings(failure_threshold=1, cooldown_seconds=999),
+        logging=LoggingSettings(enabled=False, path=str(tmp_path / "smart-router.jsonl")),
+    )
+    local = _StubProvider("local", [LLMResponse(content="local writer ok")])
+    mini = _StubProvider("mini", [LLMResponse(content="mini ok")])
+    full = _StubProvider("full", [LLMResponse(content="full ok")])
+    vision = _StubProvider("vision", [LLMResponse(content="사진")])
+    router = SmartRouterProvider(
+        router_config=config,
+        tier_providers={"local": local, "mini": mini, "full": full},
+        default_model="router",
+        hybrid_vision_provider=vision,
+    )
+
+    messages = [
+        {"role": "system", "content": "very long system prompt"},
+        {"role": "user", "content": "previous text-only question"},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "[Runtime Context]\nCurrent Time: now\n[/Runtime Context]"},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/png;base64,ZmFrZQ=="},
+                    "_meta": {"path": "/tmp/example.png"},
+                },
+                {"type": "text", "text": "첨부 이미지를 보고 한 단어로만 묘사해줘."},
+            ],
+        },
+    ]
+
+    await router.chat(messages=messages)
+
+    vision_messages = vision.calls[0]["messages"]
+    assert len(vision_messages) == 1
+    assert vision_messages[0]["role"] == "user"
+    blocks = vision_messages[0]["content"]
+    assert [block["type"] for block in blocks] == ["text", "image_url", "text"]
+    assert blocks[1]["_meta"] == {"path": "/tmp/example.png"}
+
+
+@pytest.mark.asyncio
+async def test_smart_router_returns_error_when_hybrid_vision_unavailable(tmp_path: Path) -> None:
+    config = RouterConfig(
+        enabled=True,
+        allow_local_tools=False,
+        local=TierTarget(tier="local", provider="vllm", model="local-model"),
+        mini=TierTarget(tier="mini", provider="openrouter", model="mini-model"),
+        full=TierTarget(tier="full", provider="openrouter", model="full-model"),
+        local_hybrid=_enabled_local_hybrid_settings(on_vision_unavailable="error"),
+        policy=PolicySettings(
+            local_score_max=2,
+            full_score_min=6,
+            short_prompt_chars=120,
+            medium_prompt_chars=800,
+            long_prompt_chars=2000,
+            tool_bonus=2,
+            code_bonus=3,
+            reasoning_bonus=3,
+            history_bonus=2,
+            attachment_bonus=2,
+            full_keywords=["architecture"],
+            code_keywords=["python"],
+            tool_keywords=["docker"],
+        ),
+        health=HealthSettings(failure_threshold=1, cooldown_seconds=999),
+        logging=LoggingSettings(enabled=False, path=str(tmp_path / "smart-router.jsonl")),
+    )
+    local = _StubProvider("local", [LLMResponse(content="local writer ok")])
+    mini = _StubProvider("mini", [LLMResponse(content="mini ok")])
+    full = _StubProvider("full", [LLMResponse(content="full ok")])
+    vision = _StubProvider(
+        "vision",
+        [LLMResponse(content="vision endpoint unavailable", finish_reason="error", error_kind="connection")],
+    )
+    router = SmartRouterProvider(
+        router_config=config,
+        tier_providers={"local": local, "mini": mini, "full": full},
+        default_model="router",
+        hybrid_vision_provider=vision,
+    )
+
+    response = await router.chat(messages=_image_request_messages())
+
+    assert response.finish_reason == "error"
+    assert "vision" in (response.content or "").lower()
+    assert len(local.calls) == 0
+    assert len(mini.calls) == 0
+    assert response.provider_metadata["smart_router_hybrid_mode"] == "vision_first_text_writer"
+    assert response.provider_metadata["smart_router_vision_model"] == "vision-model"
+    assert response.provider_metadata["smart_router_final_tier"] == "local"
+
+
+@pytest.mark.asyncio
+async def test_smart_router_falls_through_to_mini_when_hybrid_vision_unavailable(tmp_path: Path) -> None:
+    config = RouterConfig(
+        enabled=True,
+        allow_local_tools=False,
+        local=TierTarget(tier="local", provider="vllm", model="local-model"),
+        mini=TierTarget(tier="mini", provider="openrouter", model="mini-model"),
+        full=TierTarget(tier="full", provider="openrouter", model="full-model"),
+        local_hybrid=_enabled_local_hybrid_settings(on_vision_unavailable="mini"),
+        policy=PolicySettings(
+            local_score_max=2,
+            full_score_min=6,
+            short_prompt_chars=120,
+            medium_prompt_chars=800,
+            long_prompt_chars=2000,
+            tool_bonus=2,
+            code_bonus=3,
+            reasoning_bonus=3,
+            history_bonus=2,
+            attachment_bonus=2,
+            full_keywords=["architecture"],
+            code_keywords=["python"],
+            tool_keywords=["docker"],
+        ),
+        health=HealthSettings(failure_threshold=1, cooldown_seconds=999),
+        logging=LoggingSettings(enabled=False, path=str(tmp_path / "smart-router.jsonl")),
+    )
+    local = _StubProvider("local", [LLMResponse(content="local writer ok")])
+    mini = _StubProvider("mini", [LLMResponse(content="mini recovered")])
+    full = _StubProvider("full", [LLMResponse(content="full ok")])
+    vision = _StubProvider(
+        "vision",
+        [LLMResponse(content="vision endpoint unavailable", finish_reason="error", error_kind="connection")],
+    )
+    router = SmartRouterProvider(
+        router_config=config,
+        tier_providers={"local": local, "mini": mini, "full": full},
+        default_model="router",
+        hybrid_vision_provider=vision,
+    )
+
+    response = await router.chat(messages=_image_request_messages())
+
+    assert response.content == "mini recovered"
+    assert len(local.calls) == 0
+    assert len(mini.calls) == 1
+    assert response.provider_metadata["smart_router_hybrid_mode"] == "vision_first_text_writer"
+    assert response.provider_metadata["smart_router_vision_model"] == "vision-model"
+    assert response.provider_metadata["smart_router_final_tier"] == "mini"
 
 
 @pytest.mark.asyncio

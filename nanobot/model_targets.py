@@ -31,7 +31,21 @@ def _live_local_target_label(target: dict[str, Any]) -> str:
     return str(label).strip() or "Local LLM"
 
 
-def _sync_live_local_targets(targets: dict[str, "ResolvedModelTarget"]) -> None:
+def _smart_router_local_description(config: Any, text_model: Any) -> str:
+    text_model_text = str(text_model).strip() if text_model else "Local LLM"
+    hybrid = getattr(config.plugins.smartrouter, "local_hybrid", None)
+    hybrid_enabled = bool(getattr(hybrid, "enabled", False))
+    vision = getattr(hybrid, "vision", None)
+    vision_model = str(getattr(vision, "model", "")).strip() if vision is not None else ""
+    if hybrid_enabled and vision_model:
+        return (
+            "smart-router forced local tier "
+            f"(text: {text_model_text}; hybrid vision: {vision_model})"
+        )
+    return f"smart-router forced local tier ({text_model_text})"
+
+
+def _sync_live_local_targets(config: Any, targets: dict[str, "ResolvedModelTarget"]) -> None:
     if "local-llm" not in targets:
         return
 
@@ -54,7 +68,7 @@ def _sync_live_local_targets(targets: dict[str, "ResolvedModelTarget"]) -> None:
     if smart_router_local is not None:
         if model:
             smart_router_local.model = str(model)
-        smart_router_local.description = f"smart-router forced local tier ({model_text})"
+        smart_router_local.description = _smart_router_local_description(config, model_text)
 
 
 def _sync_live_local_router_config(config: Any) -> None:
@@ -62,11 +76,7 @@ def _sync_live_local_router_config(config: Any) -> None:
     if live_target is None:
         return
 
-    provider = live_target.get("provider") or live_target.get("runtime")
     model = live_target.get("model")
-    if provider:
-        config.plugins.smartrouter.local.provider = str(provider)
-        config.smart_router.local.provider = str(provider)
     if model:
         config.plugins.smartrouter.local.model = str(model)
         config.smart_router.local.model = str(model)
@@ -133,7 +143,7 @@ def _smart_router_variants(config: Any) -> dict[str, ResolvedModelTarget]:
             provider=router.local.provider,
             model=router.local.model,
             display_name="Local",
-            description=f"smart-router forced local tier ({router.local.model}).",
+            description=_smart_router_local_description(config, router.local.model),
         ),
         SMART_ROUTER_TARGET_NAMES["mini"]: _smart_router_variant(
             name=SMART_ROUTER_TARGET_NAMES["mini"],
@@ -172,6 +182,9 @@ def _normalize_smart_router_targets(config: Any, targets: dict[str, ResolvedMode
             current.group = default_target.group
         if not current.smart_router_mode:
             current.smart_router_mode = default_target.smart_router_mode
+        if name == SMART_ROUTER_TARGET_NAMES["local"]:
+            current.description = _smart_router_local_description(config, current.model or default_target.model)
+            continue
         if not current.description:
             current.description = default_target.description
 
@@ -224,7 +237,7 @@ def build_model_targets(config: Any) -> dict[str, ResolvedModelTarget]:
     if config._router_has_values(config.plugins.smartrouter):
         _normalize_smart_router_targets(config, targets)
 
-    _sync_live_local_targets(targets)
+    _sync_live_local_targets(config, targets)
 
     return targets
 

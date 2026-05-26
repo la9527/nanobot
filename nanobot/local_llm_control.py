@@ -38,6 +38,8 @@ LOCAL_LLM_TARGETS: dict[str, dict[str, str]] = {
         "model": "LiquidAI/LFM2-24B-A2B-MLX-4bit",
         "api_base": "http://127.0.0.1:1242/v1",
         "launchd_label": "com.nanobot.local-model-lfm2",
+        "role": "text",
+        "recommendation": "default_text",
     },
     "qwen36": {
         "label": "Qwen3.6",
@@ -46,6 +48,8 @@ LOCAL_LLM_TARGETS: dict[str, dict[str, str]] = {
         "model": "mlx-community/Qwen3.6-35B-A3B-4bit",
         "api_base": "http://127.0.0.1:1246/v1",
         "launchd_label": "com.nanobot.local-model-qwen36",
+        "role": "text",
+        "recommendation": "general_text",
     },
     "qwen35-base-mlx-4bit": {
         "label": "Qwen3.5 Base",
@@ -54,6 +58,8 @@ LOCAL_LLM_TARGETS: dict[str, dict[str, str]] = {
         "model": "mlx-community/Qwen3.5-27B-4bit",
         "api_base": "http://127.0.0.1:1248/v1",
         "launchd_label": "com.nanobot.local-model-qwen35-base-mlx-4bit",
+        "role": "text",
+        "recommendation": "text_fallback",
     },
     "qwen3-vl-4b": {
         "label": "Qwen3-VL 4B",
@@ -62,6 +68,8 @@ LOCAL_LLM_TARGETS: dict[str, dict[str, str]] = {
         "model": "mlx-community/Qwen3-VL-4B-Instruct-4bit",
         "api_base": "http://127.0.0.1:1252/v1",
         "launchd_label": "com.nanobot.local-model-qwen3-vl-4b",
+        "role": "vision",
+        "recommendation": "hybrid_vision_fast",
     },
     "qwen3-vl-8b": {
         "label": "Qwen3-VL 8B",
@@ -70,6 +78,8 @@ LOCAL_LLM_TARGETS: dict[str, dict[str, str]] = {
         "model": "mlx-community/Qwen3-VL-8B-Instruct-4bit",
         "api_base": "http://127.0.0.1:1254/v1",
         "launchd_label": "com.nanobot.local-model-qwen3-vl-8b",
+        "role": "vision",
+        "recommendation": "hybrid_vision_quality",
     },
 }
 
@@ -241,6 +251,8 @@ class LocalLlmController:
                 "model": meta["model"],
                 "api_base": meta["api_base"],
                 "launchd_label": meta["launchd_label"],
+                "role": meta["role"],
+                "recommendation": meta["recommendation"],
                 "running": endpoint_ok,
                 "endpoint_ok": endpoint_ok,
                 "supports_vision": supports_vision,

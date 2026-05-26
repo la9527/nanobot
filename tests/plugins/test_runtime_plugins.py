@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from typing import Any
 
 from nanobot.agent.hook import AgentHook
@@ -162,3 +163,47 @@ def test_initialize_runtime_plugins_registers_tools(monkeypatch) -> None:
 
     assert statuses[0].registered_tools == ["sample_tool"]
     assert loop.tools.has("sample_tool")
+
+
+def test_smart_router_runtime_plugin_builds_local_hybrid_vision_provider() -> None:
+    plugin = load_runtime_plugin("smartrouter")
+    config = Config.model_validate(
+        {
+            "plugins": {
+                "smartrouter": {
+                    "enabled": True,
+                    "local": {"provider": "vllm", "model": "LiquidAI/LFM2-24B-A2B-MLX-4bit"},
+                    "mini": {"provider": "openrouter", "model": "openai/gpt-5.4-mini"},
+                    "full": {"provider": "openrouter", "model": "openai/gpt-5.4"},
+                    "localHybrid": {
+                        "enabled": True,
+                        "vision": {
+                            "provider": "vllm",
+                            "model": "mlx-community/Qwen3-VL-4B-Instruct-4bit",
+                        },
+                    },
+                }
+            }
+        }
+    )
+    calls: list[tuple[str | None, str | None]] = []
+
+    def make_base_provider(runtime_config: Config, *, model: str | None = None, provider_name: str | None = None):
+        assert runtime_config is config
+        calls.append((provider_name, model))
+        return SimpleNamespace(name=model, generation=SimpleNamespace())
+
+    provider = plugin.build_provider(
+        SimpleNamespace(
+            config=config,
+            make_base_provider=make_base_provider,
+        )
+    )
+
+    assert calls == [
+        ("vllm", "LiquidAI/LFM2-24B-A2B-MLX-4bit"),
+        ("openrouter", "openai/gpt-5.4-mini"),
+        ("openrouter", "openai/gpt-5.4"),
+        ("vllm", "mlx-community/Qwen3-VL-4B-Instruct-4bit"),
+    ]
+    assert provider._hybrid_vision_provider.name == "mlx-community/Qwen3-VL-4B-Instruct-4bit"

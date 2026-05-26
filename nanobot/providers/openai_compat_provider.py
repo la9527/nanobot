@@ -459,6 +459,8 @@ class OpenAICompatProvider(LLMProvider):
                     clean["content"] = None
             if "tool_call_id" in clean and clean["tool_call_id"]:
                 clean["tool_call_id"] = map_id(clean["tool_call_id"])
+            if force_string_content and "content" in clean:
+                clean["content"] = self._coerce_content_to_string(clean.get("content"))
 
         trailing_pending_tool_call = (
             dict(sanitized[-1])
@@ -607,6 +609,9 @@ class OpenAICompatProvider(LLMProvider):
         model_name = model or self.default_model
         spec = self._spec
 
+        if spec and spec.name == "rapid_mlx":
+            messages = self._prefer_image_paths(messages)
+
         if spec and spec.supports_prompt_caching:
             model_name = model or self.default_model
             if any(model_name.lower().startswith(k) for k in ("anthropic/", "claude")):
@@ -709,6 +714,46 @@ class OpenAICompatProvider(LLMProvider):
             kwargs["extra_body"] = _deep_merge(existing, self._extra_body)
 
         return kwargs
+
+    @staticmethod
+    def _prefer_image_paths(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Swap data-URI image blocks for local paths when provider supports them.
+
+        Rapid-MLX vision requests are markedly more reliable with absolute file
+        paths than with base64 data URIs. When Nanobot carries the original path
+        in ``_meta.path``, prefer that path for the outbound request.
+        """
+        rewritten: list[dict[str, Any]] = []
+        for msg in messages:
+            content = msg.get("content")
+            if not isinstance(content, list):
+                rewritten.append(msg)
+                continue
+
+            changed = False
+            new_content: list[Any] = []
+            for item in content:
+                if not isinstance(item, dict) or item.get("type") != "image_url":
+                    new_content.append(item)
+                    continue
+
+                image_url = item.get("image_url") or {}
+                url = image_url.get("url") if isinstance(image_url, dict) else None
+                path = (item.get("_meta") or {}).get("path")
+                if isinstance(url, str) and url.startswith("data:image/") and isinstance(path, str) and path:
+                    new_item = dict(item)
+                    new_item["image_url"] = {"url": path}
+                    new_content.append(new_item)
+                    changed = True
+                    continue
+
+                new_content.append(item)
+
+            if changed:
+                rewritten.append({**msg, "content": new_content})
+            else:
+                rewritten.append(msg)
+        return rewritten
 
     def _should_use_responses_api(
         self,

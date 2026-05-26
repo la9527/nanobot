@@ -425,6 +425,8 @@ def test_find_by_name_accepts_camel_case_and_hyphen_aliases():
     assert find_by_name("volcengineCodingPlan").name == "volcengine_coding_plan"
     assert find_by_name("github-copilot") is not None
     assert find_by_name("github-copilot").name == "github_copilot"
+    assert find_by_name("rapid-mlx") is not None
+    assert find_by_name("rapid-mlx").name == "rapid_mlx"
     assert find_by_name("longcat") is not None
     assert find_by_name("longcat").name == "longcat"
 

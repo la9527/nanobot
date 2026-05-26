@@ -33,10 +33,18 @@ def _build_provider(context: RuntimePluginContext):
 			provider_name=router_config.full.provider,
 		),
 	}
+	hybrid_vision_provider = None
+	if router_config.local_hybrid.enabled and router_config.local_hybrid.vision is not None:
+		hybrid_vision_provider = context.make_base_provider(
+			context.config,
+			model=router_config.local_hybrid.vision.model,
+			provider_name=router_config.local_hybrid.vision.provider,
+		)
 	provider = SmartRouterProvider(
 		router_config=router_config,
 		tier_providers=tier_providers,
 		default_model=defaults.model,
+		hybrid_vision_provider=hybrid_vision_provider,
 	)
 	provider.generation = tier_providers["local"].generation
 	return provider

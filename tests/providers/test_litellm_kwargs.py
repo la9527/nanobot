@@ -593,6 +593,38 @@ def test_openai_compat_preserves_message_level_reasoning_fields() -> None:
     assert sanitized[1]["tool_calls"][0]["extra_content"] == {"google": {"thought_signature": "sig"}}
 
 
+def test_rapid_mlx_prefers_local_image_paths_over_data_urls() -> None:
+    with patch("nanobot.providers.openai_compat_provider.AsyncOpenAI"):
+        provider = OpenAICompatProvider(spec=find_by_name("rapid_mlx"))
+
+    kwargs = provider._build_kwargs(
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,AAAA"},
+                        "_meta": {"path": "/tmp/test-image.png"},
+                    },
+                    {"type": "text", "text": "Describe this image."},
+                ],
+            }
+        ],
+        tools=None,
+        model="mlx-community/Qwen3-VL-4B-Instruct-4bit",
+        max_tokens=64,
+        temperature=0.1,
+        reasoning_effort=None,
+        tool_choice=None,
+    )
+
+    block = kwargs["messages"][0]["content"][0]
+    assert block["type"] == "image_url"
+    assert block["image_url"]["url"] == "/tmp/test-image.png"
+    assert "_meta" not in block
+
+
 def _deepseek_kwargs(messages: list[dict]) -> dict:
     with patch("nanobot.providers.openai_compat_provider.AsyncOpenAI"):
         provider = OpenAICompatProvider(

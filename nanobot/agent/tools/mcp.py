@@ -183,6 +183,37 @@ def _is_accepted_photo_followup_payload(
     return bool(run_id) and status in {"pending", "running"} and not terminal
 
 
+async def _streamable_http_endpoint_reachable(
+    url: str,
+    headers: dict[str, str] | None = None,
+) -> bool:
+    """Return whether a streamable-HTTP MCP endpoint is TCP-reachable.
+
+    This is a narrow preflight for the common "server isn't up" case. It avoids
+    entering the MCP SDK's streamable HTTP context when the endpoint refuses the
+    connection, which otherwise produces noisy anyio/task-group stderr during
+    startup even though the caller handles the failure.
+    """
+    try:
+        async with httpx.AsyncClient(
+            headers=headers or None,
+            follow_redirects=True,
+            timeout=httpx.Timeout(5.0, connect=2.0),
+        ) as client:
+            response = await client.request(
+                "OPTIONS",
+                url,
+                headers={
+                    "Accept": "application/json, text/event-stream",
+                    **(headers or {}),
+                },
+            )
+            await response.aclose()
+            return True
+    except (httpx.ConnectError, httpx.ConnectTimeout):
+        return False
+
+
 class MCPToolWrapper(Tool):
     """Wraps a single MCP server tool as a nanobot Tool."""
 
@@ -577,6 +608,14 @@ async def connect_mcp_servers(
                     sse_client(cfg.url, httpx_client_factory=httpx_client_factory)
                 )
             elif transport_type == "streamableHttp":
+                if not await _streamable_http_endpoint_reachable(cfg.url, cfg.headers or None):
+                    logger.warning(
+                        "MCP server '{}': streamableHttp endpoint unreachable at {}, skipping",
+                        name,
+                        cfg.url,
+                    )
+                    await server_stack.aclose()
+                    return name, None
                 http_client = await server_stack.enter_async_context(
                     httpx.AsyncClient(
                         headers=cfg.headers or None,
