@@ -22,14 +22,23 @@ class LeaseRecord:
 
 
 @dataclass
+class BrokerEventRecord:
+    event: str
+    holder: str | None
+    timestamp: float
+
+
+@dataclass
 class BrokerTargetState:
     target: str
     model: str
     api_base: str
     running: bool = False
     last_used_at: float | None = None
+    idle_deadline_at: float | None = None
     idle_timeout_seconds: float = 300.0
     holders: dict[str, LeaseRecord] = field(default_factory=dict)
+    recent_events: list[BrokerEventRecord] = field(default_factory=list)
 
 
 class VisionRuntimeBroker:
@@ -44,6 +53,7 @@ class VisionRuntimeBroker:
         sleep: Callable[[float], object] | None = None,
         idle_timeout_seconds: float = 300.0,
         lease_ttl_seconds: float = 30.0,
+        trace_capacity: int = 16,
     ) -> None:
         self.state_root = Path(state_root)
         self.script_path = str(script_path)
@@ -53,6 +63,7 @@ class VisionRuntimeBroker:
         self.sleep = sleep or asyncio.sleep
         self.idle_timeout_seconds = float(idle_timeout_seconds)
         self.lease_ttl_seconds = float(lease_ttl_seconds)
+        self.trace_capacity = max(1, int(trace_capacity))
         self._locks: dict[str, asyncio.Lock] = {}
         self._stop_tasks: dict[str, asyncio.Task[None]] = {}
         self.state_root.mkdir(parents=True, exist_ok=True)
@@ -73,6 +84,8 @@ class VisionRuntimeBroker:
                 expires_at=now + self.lease_ttl_seconds,
             )
             state.last_used_at = now
+            state.idle_deadline_at = None
+            self._append_event(state, "acquire", holder, now)
             self._save_state(state)
             return self._snapshot_for(state)
 
@@ -81,6 +94,12 @@ class VisionRuntimeBroker:
             state = self._load_state(target)
             state.holders.pop(holder, None)
             state.last_used_at = self.monotonic()
+            self._append_event(state, "release", holder, state.last_used_at)
+            state.idle_deadline_at = (
+                state.last_used_at + state.idle_timeout_seconds
+                if not state.holders and state.last_used_at is not None
+                else None
+            )
             self._save_state(state)
             if not state.holders:
                 self._schedule_stop(target)
@@ -95,6 +114,8 @@ class VisionRuntimeBroker:
                 lease.last_used_at = now
                 lease.expires_at = now + self.lease_ttl_seconds
             state.last_used_at = now
+            state.idle_deadline_at = None
+            self._append_event(state, "mark_used", holder, now)
             self._save_state(state)
             return self._snapshot_for(state)
 
@@ -138,14 +159,21 @@ class VisionRuntimeBroker:
             holder: LeaseRecord(**lease_payload)
             for holder, lease_payload in payload.get("holders", {}).items()
         }
+        recent_events = [
+            BrokerEventRecord(**event_payload)
+            for event_payload in payload.get("recent_events", [])
+            if isinstance(event_payload, dict)
+        ]
         return BrokerTargetState(
             target=payload.get("target", target),
             model=payload.get("model", meta["model"]),
             api_base=payload.get("api_base", meta["api_base"]),
             running=bool(payload.get("running", False)),
             last_used_at=payload.get("last_used_at"),
+            idle_deadline_at=payload.get("idle_deadline_at"),
             idle_timeout_seconds=float(payload.get("idle_timeout_seconds", self.idle_timeout_seconds)),
             holders=holders,
+            recent_events=recent_events,
         )
 
     def _save_state(self, state: BrokerTargetState) -> None:
@@ -158,19 +186,41 @@ class VisionRuntimeBroker:
 
     def _snapshot_for(self, state: BrokerTargetState) -> dict[str, Any]:
         stop_task = self._stop_tasks.get(state.target)
+        stop_scheduled = bool(stop_task is not None and not stop_task.done()) or (
+            state.idle_deadline_at is not None and state.running and not state.holders
+        )
         return {
             "target": state.target,
             "model": state.model,
             "running": state.running,
             "last_used_at": state.last_used_at,
+            "idle_deadline_at": state.idle_deadline_at,
             "idle_timeout_seconds": state.idle_timeout_seconds,
             "holder_count": len(state.holders),
             "holders": {
                 holder: asdict(lease)
                 for holder, lease in sorted(state.holders.items())
             },
-            "stop_scheduled": bool(stop_task is not None and not stop_task.done()),
+            "recent_events": [asdict(event) for event in state.recent_events],
+            "stop_scheduled": stop_scheduled,
         }
+
+    def _append_event(
+        self,
+        state: BrokerTargetState,
+        event: str,
+        holder: str | None,
+        timestamp: float | None = None,
+    ) -> None:
+        state.recent_events.append(
+            BrokerEventRecord(
+                event=event,
+                holder=holder,
+                timestamp=self.monotonic() if timestamp is None else timestamp,
+            )
+        )
+        if len(state.recent_events) > self.trace_capacity:
+            state.recent_events = state.recent_events[-self.trace_capacity :]
 
     async def _run_script(self, action: str, target: str) -> None:
         result = await asyncio.to_thread(self.runner, [self.script_path, action, target])
@@ -197,6 +247,7 @@ class VisionRuntimeBroker:
                 if await asyncio.to_thread(self.endpoint_ok, state.api_base):
                     await self._run_script("stop", target)
                 state.running = False
+                state.idle_deadline_at = None
                 self._save_state(state)
         finally:
             current = self._stop_tasks.get(target)
