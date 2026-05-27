@@ -61,6 +61,7 @@ _KIMI_THINKING_MODELS: frozenset[str] = frozenset({
 })
 _OPENAI_COMPAT_REQUEST_TIMEOUT_S = 120.0
 _OPENAI_COMPAT_LOCAL_REQUEST_TIMEOUT_S = 90.0
+_RAPID_MLX_LOCAL_REQUEST_TIMEOUT_S = 180.0
 
 # Maps ProviderSpec.thinking_style → extra_body builder.
 # Each builder takes a bool (thinking_enabled) and returns the dict to
@@ -96,11 +97,13 @@ def _openai_compat_timeout_s() -> float:
     return _float_env("NANOBOT_OPENAI_COMPAT_TIMEOUT_S", _OPENAI_COMPAT_REQUEST_TIMEOUT_S)
 
 
-def _openai_compat_local_timeout_s() -> float:
+def _openai_compat_local_timeout_s(spec: "ProviderSpec | None" = None) -> float:
     """Return the shorter default timeout used for local OpenAI-compatible endpoints."""
     default = _OPENAI_COMPAT_LOCAL_REQUEST_TIMEOUT_S
     if os.environ.get("NANOBOT_OPENAI_COMPAT_TIMEOUT_S"):
         default = _openai_compat_timeout_s()
+    if spec is not None and spec.name == "rapid_mlx":
+        default = _RAPID_MLX_LOCAL_REQUEST_TIMEOUT_S
     return _float_env("NANOBOT_OPENAI_COMPAT_LOCAL_TIMEOUT_S", default)
 
 
@@ -303,7 +306,7 @@ class OpenAICompatProvider(LLMProvider):
         # default pool settings for them.
         is_local_endpoint = _is_local_endpoint(spec, effective_base)
         timeout_s = (
-            _openai_compat_local_timeout_s()
+            _openai_compat_local_timeout_s(spec)
             if is_local_endpoint
             else _openai_compat_timeout_s()
         )

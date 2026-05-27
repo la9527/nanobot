@@ -10,11 +10,13 @@ from __future__ import annotations
 
 import base64
 import json
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from PIL import Image
 
 from nanobot.channels.websocket import (
     WebSocketChannel,
@@ -23,12 +25,13 @@ from nanobot.channels.websocket import (
 
 
 def _tiny_png_data_url() -> str:
-    """A 1-pixel PNG prefixed as a data URL — just enough for magic-bytes sniffing."""
-    # 1x1 transparent PNG
+    """A valid 1-pixel PNG prefixed as a data URL for transport-path tests."""
+    # Keep this fixture as a real PNG so transport tests do not normalize a
+    # broken image asset into future live probe workflows.
     png = (
         b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00"
         b"\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx"
-        b"\x9cc\xf8\xcf\xc0\x00\x00\x00\x03\x00\x01\x00\x18\xdd\x8d\xb4\x00"
+        b"\x9cc````\x00\x00\x00\x05\x00\x01\xa5\xf6E@\x00"
         b"\x00\x00\x00IEND\xaeB`\x82"
     )
     return f"data:image/png;base64,{base64.b64encode(png).decode()}"
@@ -68,6 +71,16 @@ def _make_channel() -> WebSocketChannel:
 )
 def test_extract_data_url_mime(url: Any, expected: str | None) -> None:
     assert _extract_data_url_mime(url) == expected
+
+
+def test_tiny_png_fixture_is_a_valid_png() -> None:
+    payload = base64.b64decode(_tiny_png_data_url().split(",", 1)[1])
+
+    image = Image.open(BytesIO(payload))
+    image.load()
+
+    assert image.size == (1, 1)
+    assert image.mode == "RGBA"
 
 
 # -- max_message_bytes bump ----------------------------------------------------

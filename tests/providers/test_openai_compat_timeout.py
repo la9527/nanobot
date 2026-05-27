@@ -79,3 +79,48 @@ def test_openai_compat_provider_uses_local_timeout_override(monkeypatch) -> None
 
     assert mock_http_client.call_args.kwargs["timeout"] == 20.0
     assert mock_async_openai.call_args.kwargs["timeout"] == 20.0
+
+
+def test_rapid_mlx_provider_uses_longer_local_timeout_by_default() -> None:
+    spec = ProviderSpec(
+        name="rapid_mlx",
+        keywords=("rapid-mlx",),
+        env_key="",
+        is_local=True,
+        default_api_base="http://127.0.0.1:1252/v1",
+    )
+
+    with (
+        patch("nanobot.providers.openai_compat_provider.AsyncOpenAI") as mock_async_openai,
+        patch(
+            "nanobot.providers.openai_compat_provider.httpx.AsyncClient",
+            return_value=sentinel.http_client,
+        ) as mock_http_client,
+    ):
+        OpenAICompatProvider(spec=spec)
+
+    assert mock_http_client.call_args.kwargs["timeout"] == 180.0
+    assert mock_async_openai.call_args.kwargs["timeout"] == 180.0
+
+
+def test_rapid_mlx_provider_still_honors_local_timeout_override(monkeypatch) -> None:
+    spec = ProviderSpec(
+        name="rapid_mlx",
+        keywords=("rapid-mlx",),
+        env_key="",
+        is_local=True,
+        default_api_base="http://127.0.0.1:1252/v1",
+    )
+    monkeypatch.setenv("NANOBOT_OPENAI_COMPAT_LOCAL_TIMEOUT_S", "30")
+
+    with (
+        patch("nanobot.providers.openai_compat_provider.AsyncOpenAI") as mock_async_openai,
+        patch(
+            "nanobot.providers.openai_compat_provider.httpx.AsyncClient",
+            return_value=sentinel.http_client,
+        ) as mock_http_client,
+    ):
+        OpenAICompatProvider(spec=spec)
+
+    assert mock_http_client.call_args.kwargs["timeout"] == 30.0
+    assert mock_async_openai.call_args.kwargs["timeout"] == 30.0

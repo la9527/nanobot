@@ -433,6 +433,126 @@ describe("ThreadComposer", () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
+  it("keeps smart-router-local available for image input when hybrid vision is ready", async () => {
+    const user = userEvent.setup();
+    const onSelectModelTarget = vi.fn();
+    const loadLocalLlmStatus = vi.fn().mockResolvedValue({
+      default_target: "lfm2",
+      default_model: "LiquidAI/LFM2-24B-A2B-MLX-4bit",
+      default_api_base: "http://127.0.0.1:1242/v1",
+      smart_router_local_text_target: "lfm2",
+      smart_router_local_vision_target: "qwen3-vl-4b",
+      smart_router_local_image_ready: true,
+      smart_router_local_image_mode: "hybrid",
+      smart_router_local_image_message: "smart-router-local hybrid vision ready via `qwen3-vl-4b`",
+      targets: [
+        {
+          name: "lfm2",
+          label: "LFM2",
+          provider: "rapid-mlx",
+          runtime: "rapid-mlx",
+          model: "LiquidAI/LFM2-24B-A2B-MLX-4bit",
+          api_base: "http://127.0.0.1:1242/v1",
+          launchd_label: "com.nanobot.local-model-lfm2",
+          running: true,
+          endpoint_ok: true,
+          supports_vision: false,
+          vision_check_ok: false,
+          vision_check_message: "endpoint unavailable",
+          hybrid_vision_target: "qwen3-vl-4b",
+          hybrid_vision_ready: true,
+          hybrid_vision_check_message: "smart-router-local hybrid vision ready via `qwen3-vl-4b`",
+          is_default: true,
+        },
+      ],
+    });
+
+    const { container } = render(
+      <ThreadComposer
+        onSend={vi.fn()}
+        modelLabel="smart-router"
+        activeTarget="smart-router"
+        modelTargets={[
+          { name: "smart-router", kind: "smart_router", display_name: "Auto", group: "smart-router", smart_router_mode: "auto", description: "smart-router runtime plugin target." },
+          { name: "smart-router-local", kind: "smart_router", provider: "vllm", model: "LiquidAI/LFM2-24B-A2B-MLX-4bit", display_name: "Local", group: "smart-router", smart_router_mode: "local", description: "smart-router forced local tier." },
+        ]}
+        loadLocalLlmStatus={loadLocalLlmStatus}
+        onSelectModelTarget={onSelectModelTarget}
+      />,
+    );
+
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const file = new File([new Uint8Array([137, 80, 78, 71])], "vision.png", { type: "image/png" });
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    await user.click(screen.getByRole("button", { name: "Choose model target" }));
+    await waitFor(() => expect(loadLocalLlmStatus).toHaveBeenCalledTimes(1));
+
+    const localItem = screen.getByRole("menuitemradio", { name: /Local/i });
+    expect(localItem).not.toHaveAttribute("data-disabled");
+    await user.click(localItem);
+    expect(onSelectModelTarget).toHaveBeenCalledWith("smart-router-local");
+  });
+
+  it("allows sending image input on smart-router-local when hybrid vision is ready", async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn();
+    const loadLocalLlmStatus = vi.fn().mockResolvedValue({
+      default_target: "lfm2",
+      default_model: "LiquidAI/LFM2-24B-A2B-MLX-4bit",
+      default_api_base: "http://127.0.0.1:1242/v1",
+      smart_router_local_text_target: "lfm2",
+      smart_router_local_vision_target: "qwen3-vl-4b",
+      smart_router_local_image_ready: true,
+      smart_router_local_image_mode: "hybrid",
+      smart_router_local_image_message: "smart-router-local hybrid vision ready via `qwen3-vl-4b`",
+      targets: [
+        {
+          name: "lfm2",
+          label: "LFM2",
+          provider: "rapid-mlx",
+          runtime: "rapid-mlx",
+          model: "LiquidAI/LFM2-24B-A2B-MLX-4bit",
+          api_base: "http://127.0.0.1:1242/v1",
+          launchd_label: "com.nanobot.local-model-lfm2",
+          running: true,
+          endpoint_ok: true,
+          supports_vision: false,
+          vision_check_ok: false,
+          vision_check_message: "endpoint unavailable",
+          hybrid_vision_target: "qwen3-vl-4b",
+          hybrid_vision_ready: true,
+          hybrid_vision_check_message: "smart-router-local hybrid vision ready via `qwen3-vl-4b`",
+          is_default: true,
+        },
+      ],
+    });
+
+    const { container } = render(
+      <ThreadComposer
+        onSend={onSend}
+        activeTarget="smart-router-local"
+        modelLabel="Local"
+        modelTargets={[
+          { name: "smart-router-local", kind: "smart_router", provider: "vllm", model: "LiquidAI/LFM2-24B-A2B-MLX-4bit", display_name: "Local", group: "smart-router", smart_router_mode: "local", description: "smart-router forced local tier." },
+        ]}
+        loadLocalLlmStatus={loadLocalLlmStatus}
+      />,
+    );
+
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const file = new File([new Uint8Array([137, 80, 78, 71])], "vision.png", { type: "image/png" });
+    fireEvent.change(fileInput, { target: { files: [file] } });
+    await user.type(screen.getByLabelText("Message input"), "What is in this image?");
+
+    await waitFor(() => expect(loadLocalLlmStatus).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText("Current local LLM does not support image input.")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    expect(onSend).toHaveBeenCalledWith("What is in this image?", expect.any(Array), undefined);
+  });
+
   it("recalls prior sent text with up/down history navigation", async () => {
     const user = userEvent.setup();
     const onSend = vi.fn();

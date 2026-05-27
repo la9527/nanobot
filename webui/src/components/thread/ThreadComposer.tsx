@@ -82,6 +82,20 @@ function resolveLiveLocalTarget(status: LocalLlmStatusPayload | null): LocalLlmS
   return status.targets.find((target) => target.is_default || target.name === status.default_target) ?? null;
 }
 
+function smartRouterLocalImageReady(status: LocalLlmStatusPayload | null): boolean {
+  return !!status?.smart_router_local_image_ready;
+}
+
+function smartRouterLocalImageMessage(
+  status: LocalLlmStatusPayload | null,
+  fallbackLabel: string,
+): string {
+  const message = typeof status?.smart_router_local_image_message === "string"
+    ? status.smart_router_local_image_message.trim()
+    : "";
+  return message || fallbackLabel;
+}
+
 function describeModelTarget(
   target: ModelTargetOption,
   localLlmStatus: LocalLlmStatusPayload | null,
@@ -125,6 +139,11 @@ function getModelTargetDisableReason(
   localVisionUnsupportedLabel: string,
 ): string | null {
   if (!hasAttachedImages || !isLocalVisionTarget(target)) return null;
+  if (target.smart_router_mode === "local") {
+    return smartRouterLocalImageReady(localLlmStatus)
+      ? null
+      : smartRouterLocalImageMessage(localLlmStatus, localVisionUnsupportedLabel);
+  }
   const liveLocalTarget = resolveLiveLocalTarget(localLlmStatus);
   if (!liveLocalTarget || liveLocalTarget.supports_vision) return null;
   return localVisionUnsupportedLabel;
