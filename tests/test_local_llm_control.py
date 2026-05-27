@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import subprocess
+from types import SimpleNamespace
 from pathlib import Path
 from urllib.request import Request
 
@@ -13,7 +15,14 @@ from nanobot.local_llm_control import LocalLlmController, LocalLlmError
 def test_status_defaults_to_qwen36_without_override(tmp_path: Path) -> None:
     controller = LocalLlmController(nanobot_home=tmp_path)
 
-    payload = controller.status()
+    from nanobot import local_llm_control
+
+    original_targets = local_llm_control._load_smart_router_local_targets
+    local_llm_control._load_smart_router_local_targets = lambda: (None, None)
+    try:
+        payload = controller.status()
+    finally:
+        local_llm_control._load_smart_router_local_targets = original_targets
 
     assert payload["default_target"] == "qwen36"
     assert payload["default_model"] == "mlx-community/Qwen3.6-35B-A3B-4bit"
@@ -50,11 +59,14 @@ def test_status_reads_local_llm_override_file(tmp_path: Path) -> None:
     from nanobot import local_llm_control
 
     original_endpoint_ok = local_llm_control._endpoint_ok
+    original_targets = local_llm_control._load_smart_router_local_targets
     local_llm_control._endpoint_ok = lambda api_base: False
+    local_llm_control._load_smart_router_local_targets = lambda: (None, None)
     try:
         payload = controller.status()
     finally:
         local_llm_control._endpoint_ok = original_endpoint_ok
+        local_llm_control._load_smart_router_local_targets = original_targets
 
     assert payload["default_target"] == "lfm2"
     rows = {row["name"]: row for row in payload["targets"]}
@@ -77,6 +89,7 @@ def test_status_prefers_only_running_target_when_override_target_is_down(
         return api_base == "http://127.0.0.1:1242/v1"
 
     monkeypatch.setattr("nanobot.local_llm_control._endpoint_ok", fake_endpoint_ok)
+    monkeypatch.setattr("nanobot.local_llm_control._load_smart_router_local_targets", lambda: (None, None))
     controller = LocalLlmController(nanobot_home=tmp_path)
 
     payload = controller.status()
@@ -146,6 +159,10 @@ def test_status_reports_vision_capability_for_running_targets(
 
     monkeypatch.setattr("nanobot.local_llm_control._endpoint_ok", fake_endpoint_ok)
     monkeypatch.setattr("nanobot.local_llm_control._probe_vision_capability", fake_vision_probe)
+    monkeypatch.setattr(
+        "nanobot.local_llm_control._load_smart_router_local_targets",
+        lambda: ("qwen36", "qwen3-vl-4b"),
+    )
     controller = LocalLlmController(nanobot_home=tmp_path)
 
     payload = controller.status()
@@ -159,6 +176,61 @@ def test_status_reports_vision_capability_for_running_targets(
     assert rows["qwen35-base-mlx-4bit"]["vision_check_message"] == "vision probe passed"
     assert rows["lfm2"]["supports_vision"] is False
     assert rows["lfm2"]["vision_check_ok"] is False
+    assert payload["smart_router_local_image_ready"] is False
+    assert payload["smart_router_local_vision_target"] == "qwen3-vl-4b"
+    assert rows["qwen36"]["hybrid_vision_target"] == "qwen3-vl-4b"
+    assert rows["qwen36"]["hybrid_vision_ready"] is False
+
+
+def test_status_reports_smart_router_local_hybrid_ready(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    broker_snapshot = {
+        "qwen3-vl-4b": {
+            "management_mode": "broker",
+            "running": True,
+            "holder_count": 1,
+            "holders": {
+                "smart-router-local": {"expires_at": 10.0},
+            },
+        }
+    }
+
+    def fake_endpoint_ok(api_base: str) -> bool:
+        return api_base in {
+            "http://127.0.0.1:1242/v1",
+            "http://127.0.0.1:1252/v1",
+        }
+
+    def fake_vision_probe(api_base: str, model: str) -> tuple[bool, bool, str]:
+        if api_base.endswith(":1252/v1"):
+            return True, True, "vision probe passed"
+        return False, True, "Only 'text' content type is supported."
+
+    monkeypatch.setattr("nanobot.local_llm_control._endpoint_ok", fake_endpoint_ok)
+    monkeypatch.setattr("nanobot.local_llm_control._probe_vision_capability", fake_vision_probe)
+    monkeypatch.setattr(
+        "nanobot.local_llm_control.default_vision_runtime_broker",
+        lambda: SimpleNamespace(snapshot=lambda: broker_snapshot),
+    )
+    monkeypatch.setattr(
+        "nanobot.local_llm_control._load_smart_router_local_targets",
+        lambda: ("lfm2", "qwen3-vl-4b"),
+    )
+    controller = LocalLlmController(nanobot_home=tmp_path)
+
+    payload = controller.status()
+
+    rows = {row["name"]: row for row in payload["targets"]}
+    assert payload["smart_router_local_image_ready"] is True
+    assert payload["smart_router_local_image_mode"] == "hybrid"
+    assert payload["smart_router_local_vision_runtime_mode"] == "broker"
+    assert payload["smart_router_local_vision_runtime_running"] is True
+    assert rows["lfm2"]["hybrid_vision_target"] == "qwen3-vl-4b"
+    assert rows["lfm2"]["hybrid_vision_ready"] is True
+    assert rows["qwen3-vl-4b"]["management_mode"] == "broker"
+    assert rows["qwen3-vl-4b"]["holder_count"] == 1
 
 
 def test_probe_vision_capability_reports_timeout_separately(
@@ -265,3 +337,74 @@ def test_accepts_qwen3_vl_8b_target_now_supported(tmp_path: Path) -> None:
     assert response["ok"] is True
     assert response["target"] == "qwen3-vl-8b"
     assert calls == [["/tmp/local-models.sh", "use", "qwen3-vl-8b"]]
+
+
+@pytest.mark.asyncio
+async def test_hybrid_runtime_manager_delegates_to_broker() -> None:
+    from nanobot.local_llm_control import HybridVisionRuntimeManager
+
+    events: list[tuple[str, str, str]] = []
+
+    class FakeBroker:
+        async def acquire(self, target: str, holder: str) -> dict[str, str]:
+            events.append(("acquire", target, holder))
+            return {"target": target}
+
+        async def mark_used(self, target: str, holder: str) -> dict[str, str]:
+            events.append(("mark_used", target, holder))
+            return {"target": target}
+
+        async def release(self, target: str, holder: str) -> dict[str, str]:
+            events.append(("release", target, holder))
+            return {"target": target}
+
+    manager = HybridVisionRuntimeManager(
+        broker=FakeBroker(),
+        holder="smart-router-local",
+    )
+
+    await manager.ensure_runtime_ready("mlx-community/Qwen3-VL-4B-Instruct-4bit")
+    await manager.mark_used("mlx-community/Qwen3-VL-4B-Instruct-4bit")
+    await manager.release("mlx-community/Qwen3-VL-4B-Instruct-4bit")
+
+    assert events == [
+        ("acquire", "qwen3-vl-4b", "smart-router-local"),
+        ("mark_used", "qwen3-vl-4b", "smart-router-local"),
+        ("release", "qwen3-vl-4b", "smart-router-local"),
+    ]
+
+
+def test_status_includes_broker_holder_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    broker_snapshot = {
+        "qwen3-vl-4b": {
+            "management_mode": "broker",
+            "running": True,
+            "holder_count": 2,
+            "holders": {
+                "smart-router-local": {"expires_at": 10.0},
+                "photo-ranker:pid-42": {"expires_at": 10.0},
+            },
+        }
+    }
+
+    monkeypatch.setattr(
+        "nanobot.local_llm_control.default_vision_runtime_broker",
+        lambda: SimpleNamespace(snapshot=lambda: broker_snapshot),
+    )
+    monkeypatch.setattr("nanobot.local_llm_control._endpoint_ok", lambda _api_base: True)
+    monkeypatch.setattr(
+        "nanobot.local_llm_control._load_smart_router_local_targets",
+        lambda: ("lfm2", "qwen3-vl-4b"),
+    )
+
+    payload = LocalLlmController(nanobot_home=tmp_path).status()
+
+    row = {item["name"]: item for item in payload["targets"]}["qwen3-vl-4b"]
+    assert row["management_mode"] == "broker"
+    assert row["holder_count"] == 2
+    assert row["holders"] == ["photo-ranker:pid-42", "smart-router-local"]
+    assert payload["smart_router_local_vision_runtime_running"] is True
+

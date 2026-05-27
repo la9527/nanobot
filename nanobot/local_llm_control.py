@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import subprocess
 import json
@@ -9,9 +10,13 @@ import tempfile
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+if TYPE_CHECKING:
+    from nanobot.vision_runtime_broker import VisionRuntimeBroker
 
 DEFAULT_LOCAL_LLM_TARGET = "qwen36"
 LOCAL_LLM_ENV_FILENAME = "local-llm.env"
@@ -29,6 +34,9 @@ _VISION_PROBE_IMAGE_B64 = (
 )
 _VISION_PROBE_IMAGE_BYTES = base64.b64decode(_VISION_PROBE_IMAGE_B64)
 _VISION_PROBE_IMAGE_PATH = Path(tempfile.gettempdir()) / "nanobot-vision-probe.png"
+_VISION_RUNTIME_IDLE_TIMEOUT_SECONDS = 300.0
+_VISION_RUNTIME_WARMUP_TIMEOUT_SECONDS = 90.0
+_VISION_RUNTIME_POLL_INTERVAL_SECONDS = 1.0
 
 LOCAL_LLM_TARGETS: dict[str, dict[str, str]] = {
     "lfm2": {
@@ -94,6 +102,47 @@ class LocalLlmError(RuntimeError):
         self.status = status
 
 
+class HybridVisionRuntimeManager:
+    def __init__(
+        self,
+        *,
+        broker: VisionRuntimeBroker | None = None,
+        holder: str = "smart-router-local",
+    ) -> None:
+        self._broker = broker or default_vision_runtime_broker()
+        self._holder = holder
+
+    def _resolve_target(self, vision_model: str) -> tuple[str, dict[str, str]] | tuple[None, None]:
+        target_name = _target_name_for_model(vision_model)
+        if target_name is None:
+            return None, None
+        meta = LOCAL_LLM_TARGETS.get(target_name)
+        if meta is None or meta.get("role") != "vision":
+            return None, None
+        return target_name, meta
+
+    def snapshot(self) -> dict[str, dict[str, Any]]:
+        return _broker_snapshot()
+
+    async def ensure_runtime_ready(self, vision_model: str) -> None:
+        target_name, _meta = self._resolve_target(vision_model)
+        if target_name is None:
+            return
+        await self._broker.acquire(target_name, self._holder)
+
+    async def mark_used(self, vision_model: str) -> None:
+        target_name, _meta = self._resolve_target(vision_model)
+        if target_name is None:
+            return
+        await self._broker.mark_used(target_name, self._holder)
+
+    async def release(self, vision_model: str) -> None:
+        target_name, _meta = self._resolve_target(vision_model)
+        if target_name is None:
+            return
+        await self._broker.release(target_name, self._holder)
+
+
 def _default_runner(argv: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         argv,
@@ -147,6 +196,120 @@ def _vision_probe_image_path() -> str:
     if not _VISION_PROBE_IMAGE_PATH.exists() or _VISION_PROBE_IMAGE_PATH.read_bytes() != _VISION_PROBE_IMAGE_BYTES:
         _VISION_PROBE_IMAGE_PATH.write_bytes(_VISION_PROBE_IMAGE_BYTES)
     return str(_VISION_PROBE_IMAGE_PATH)
+
+
+def _target_name_for_model(model: str | None) -> str | None:
+    normalized = str(model or "").strip()
+    if not normalized:
+        return None
+    for name, meta in LOCAL_LLM_TARGETS.items():
+        if normalized == meta["model"]:
+            return name
+    return None
+
+
+def _load_smart_router_local_targets() -> tuple[str | None, str | None]:
+    try:
+        from nanobot.config.loader import load_config, resolve_config_env_vars
+
+        config = load_config()
+        try:
+            config = resolve_config_env_vars(config)
+        except ValueError:
+            pass
+
+        router = getattr(getattr(config, "plugins", None), "smartrouter", None)
+        if router is None or not bool(getattr(router, "enabled", False)):
+            return None, None
+
+        local = getattr(router, "local", None)
+        text_target = _target_name_for_model(getattr(local, "model", None))
+
+        hybrid = getattr(router, "local_hybrid", None)
+        if hybrid is None or not bool(getattr(hybrid, "enabled", False)):
+            return text_target, None
+
+        vision = getattr(hybrid, "vision", None)
+        vision_target = _target_name_for_model(getattr(vision, "model", None))
+        return text_target, vision_target
+    except Exception:
+        return None, None
+
+
+_DEFAULT_VISION_RUNTIME_BROKER: VisionRuntimeBroker | None = None
+
+
+def default_vision_runtime_broker() -> VisionRuntimeBroker:
+    global _DEFAULT_VISION_RUNTIME_BROKER
+    if _DEFAULT_VISION_RUNTIME_BROKER is None:
+        from nanobot.vision_runtime_broker import VisionRuntimeBroker
+
+        _DEFAULT_VISION_RUNTIME_BROKER = VisionRuntimeBroker(
+            state_root=Path.home() / ".nanobot" / "state" / "vision-runtime-broker",
+        )
+    return _DEFAULT_VISION_RUNTIME_BROKER
+
+
+def _broker_snapshot() -> dict[str, dict[str, Any]]:
+    try:
+        return default_vision_runtime_broker().snapshot()
+    except Exception:
+        return {}
+
+
+def _smart_router_local_image_status(rows_by_name: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    text_target, vision_target = _load_smart_router_local_targets()
+    payload = {
+        "text_target": text_target,
+        "vision_target": vision_target,
+        "image_ready": False,
+        "message": "smart-router-local image path unavailable",
+        "mode": "unavailable",
+        "vision_runtime_mode": None,
+        "vision_runtime_running": False,
+    }
+    if not text_target:
+        payload["message"] = "smart-router-local local tier is not configured"
+        return payload
+
+    text_row = rows_by_name.get(text_target)
+    if text_row is None:
+        payload["message"] = f"smart-router-local text target `{text_target}` is not present in local LLM status"
+        return payload
+
+    if text_row.get("supports_vision"):
+        payload.update({
+            "image_ready": True,
+            "message": f"smart-router-local image path ready via direct local target `{text_target}`",
+            "mode": "direct",
+        })
+        return payload
+
+    if not vision_target:
+        payload["message"] = f"smart-router-local text target `{text_target}` has no configured hybrid vision target"
+        return payload
+
+    vision_row = rows_by_name.get(vision_target)
+    if vision_row is None:
+        payload["message"] = f"smart-router-local hybrid vision target `{vision_target}` is not present in local LLM status"
+    elif vision_row.get("running") and vision_row.get("supports_vision"):
+        payload.update({
+            "image_ready": True,
+            "message": f"smart-router-local hybrid vision ready via `{vision_target}`",
+            "mode": "hybrid",
+            "vision_runtime_mode": vision_row.get("management_mode"),
+            "vision_runtime_running": bool(vision_row.get("runtime_running") or vision_row.get("running")),
+        })
+    else:
+        detail = str(vision_row.get("vision_check_message") or "endpoint unavailable").strip()
+        payload["message"] = f"smart-router-local hybrid vision target `{vision_target}` unavailable: {detail}"
+        payload["vision_runtime_mode"] = vision_row.get("management_mode")
+        payload["vision_runtime_running"] = bool(vision_row.get("runtime_running") or vision_row.get("running"))
+
+    text_row["hybrid_vision_target"] = vision_target
+    text_row["hybrid_vision_ready"] = bool(payload["image_ready"] and payload["mode"] == "hybrid")
+    text_row["hybrid_vision_check_message"] = payload["message"]
+    return payload
 
 
 def _probe_vision_capability(api_base: str, model: str) -> tuple[bool, bool, str]:
@@ -207,10 +370,12 @@ class LocalLlmController:
         nanobot_home: str | Path | None = None,
         script_path: str | Path = DEFAULT_SCRIPT_PATH,
         runner: Runner | None = None,
+        runtime_manager: HybridVisionRuntimeManager | None = None,
     ) -> None:
         self.nanobot_home = Path(nanobot_home).expanduser() if nanobot_home is not None else Path.home() / ".nanobot"
         self.script_path = str(script_path)
         self.runner = runner or _default_runner
+        self.runtime_manager = runtime_manager or default_hybrid_vision_runtime_manager()
 
     @property
     def local_llm_env_path(self) -> Path:
@@ -232,6 +397,8 @@ class LocalLlmController:
 
     def status(self) -> dict[str, Any]:
         values = _parse_env_file(self.local_llm_env_path)
+        runtime_snapshot = self.runtime_manager.snapshot()
+        broker_snapshot = _broker_snapshot()
         targets: list[dict[str, Any]] = []
         for name, meta in LOCAL_LLM_TARGETS.items():
             endpoint_ok = _endpoint_ok(meta["api_base"])
@@ -243,6 +410,9 @@ class LocalLlmController:
                     meta["api_base"],
                     meta["model"],
                 )
+            runtime_state = runtime_snapshot.get(name, {})
+            broker_state = broker_snapshot.get(name, {}) if meta.get("role") == "vision" else {}
+            holder_names = sorted(broker_state.get("holders", {}).keys()) if broker_state else []
             targets.append({
                 "name": name,
                 "label": meta["label"],
@@ -258,6 +428,33 @@ class LocalLlmController:
                 "supports_vision": supports_vision,
                 "vision_check_ok": vision_check_ok,
                 "vision_check_message": vision_check_message,
+                "management_mode": (
+                    broker_state.get("management_mode", "broker")
+                    if broker_state
+                    else runtime_state.get("management_mode", "manual")
+                ),
+                "runtime_running": (
+                    bool(broker_state.get("running", endpoint_ok))
+                    if broker_state
+                    else runtime_state.get("runtime_running", endpoint_ok)
+                ),
+                "runtime_warming_up": runtime_state.get("runtime_warming_up", False),
+                "runtime_last_used_at": broker_state.get("last_used_at", runtime_state.get("runtime_last_used_at")),
+                "runtime_idle_timeout_seconds": broker_state.get(
+                    "idle_timeout_seconds",
+                    runtime_state.get("runtime_idle_timeout_seconds"),
+                ),
+                "runtime_idle_deadline_at": broker_state.get(
+                    "idle_deadline_at",
+                    runtime_state.get("runtime_idle_deadline_at"),
+                ),
+                "runtime_stop_scheduled": broker_state.get(
+                    "stop_scheduled",
+                    runtime_state.get("runtime_stop_scheduled", False),
+                ),
+                "runtime_stop_remaining_seconds": runtime_state.get("runtime_stop_remaining_seconds"),
+                "holder_count": int(broker_state.get("holder_count", 0)),
+                "holders": holder_names,
                 "is_default": False,
             })
 
@@ -273,10 +470,19 @@ class LocalLlmController:
         for row in targets:
             row["is_default"] = row["name"] == default_target
 
+        smart_router_local = _smart_router_local_image_status({row["name"]: row for row in targets})
+
         return {
             "default_target": default_target,
             "default_model": default_meta["model"],
             "default_api_base": default_meta["api_base"],
+            "smart_router_local_text_target": smart_router_local["text_target"],
+            "smart_router_local_vision_target": smart_router_local["vision_target"],
+            "smart_router_local_image_ready": smart_router_local["image_ready"],
+            "smart_router_local_image_mode": smart_router_local["mode"],
+            "smart_router_local_image_message": smart_router_local["message"],
+            "smart_router_local_vision_runtime_mode": smart_router_local["vision_runtime_mode"],
+            "smart_router_local_vision_runtime_running": smart_router_local["vision_runtime_running"],
             "targets": targets,
         }
 
@@ -307,6 +513,14 @@ class LocalLlmController:
 
 
 _DEFAULT_CONTROLLER: LocalLlmController | None = None
+_DEFAULT_HYBRID_VISION_RUNTIME_MANAGER: HybridVisionRuntimeManager | None = None
+
+
+def default_hybrid_vision_runtime_manager() -> HybridVisionRuntimeManager:
+    global _DEFAULT_HYBRID_VISION_RUNTIME_MANAGER
+    if _DEFAULT_HYBRID_VISION_RUNTIME_MANAGER is None:
+        _DEFAULT_HYBRID_VISION_RUNTIME_MANAGER = HybridVisionRuntimeManager()
+    return _DEFAULT_HYBRID_VISION_RUNTIME_MANAGER
 
 
 def default_controller() -> LocalLlmController:

@@ -444,18 +444,33 @@ export interface SettingsUpdate {
 }
 
 export interface LocalLlmTargetStatus {
-  name: "lfm2" | "qwen35-base-mlx-4bit" | "qwen36";
+  name: "lfm2" | "qwen35-base-mlx-4bit" | "qwen36" | "qwen3-vl-4b" | "qwen3-vl-8b";
   label: string;
   provider?: string;
   runtime: string;
   model: string;
   api_base: string;
   launchd_label: string;
+  role?: string;
+  recommendation?: string;
   running: boolean;
   endpoint_ok: boolean;
   supports_vision: boolean;
   vision_check_ok: boolean;
   vision_check_message: string;
+  management_mode?: "manual" | "on_demand" | "broker";
+  holder_count?: number;
+  holders?: string[];
+  runtime_running?: boolean;
+  runtime_warming_up?: boolean;
+  runtime_last_used_at?: number | null;
+  runtime_idle_timeout_seconds?: number | null;
+  runtime_idle_deadline_at?: number | null;
+  runtime_stop_scheduled?: boolean;
+  runtime_stop_remaining_seconds?: number | null;
+  hybrid_vision_target?: string | null;
+  hybrid_vision_ready?: boolean;
+  hybrid_vision_check_message?: string;
   is_default: boolean;
 }
 
@@ -463,6 +478,13 @@ export interface LocalLlmStatusPayload {
   default_target: string | null;
   default_model: string | null;
   default_api_base: string | null;
+  smart_router_local_text_target?: string | null;
+  smart_router_local_vision_target?: string | null;
+  smart_router_local_image_ready?: boolean;
+  smart_router_local_image_mode?: "direct" | "hybrid" | "unavailable";
+  smart_router_local_image_message?: string;
+  smart_router_local_vision_runtime_mode?: "on_demand" | "broker" | null;
+  smart_router_local_vision_runtime_running?: boolean;
   targets: LocalLlmTargetStatus[];
 }
 

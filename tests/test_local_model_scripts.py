@@ -1,5 +1,6 @@
 from pathlib import Path
 import subprocess
+import json
 
 
 def test_local_models_help_lists_supported_targets():
@@ -25,6 +26,109 @@ def test_local_models_help_lists_supported_targets():
     lines = [line.strip().lower() for line in output.splitlines()]
     assert "install <lfm2|qwen35-base-mlx-4bit|qwen36|qwen3-vl-4b|qwen3-vl-8b>        install and start one launchd service" in lines
     assert "start <lfm2|qwen35-base-mlx-4bit|qwen36|qwen3-vl-4b|qwen3-vl-8b>          start one installed launchd service" in lines
+
+
+def test_local_models_help_lists_broker_actions():
+    repo_root = Path(__file__).resolve().parents[2]
+    script_path = repo_root / "infra/scripts/local-models/local-models.sh"
+
+    proc = subprocess.run(
+        ["/bin/zsh", str(script_path), "help"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    output = proc.stdout.lower()
+    assert "lease-status" in output
+    assert "reconcile" in output
+
+
+def test_local_models_lease_status_prints_broker_state(tmp_path: Path):
+    repo_root = Path(__file__).resolve().parents[2]
+    script_path = repo_root / "infra/scripts/local-models/local-models.sh"
+    broker_state_root = tmp_path / "vision-runtime-broker"
+    broker_state_root.mkdir()
+    (broker_state_root / "qwen3-vl-4b.json").write_text(
+        json.dumps(
+            {
+                "target": "qwen3-vl-4b",
+                "model": "mlx-community/Qwen3-VL-4B-Instruct-4bit",
+                "api_base": "http://127.0.0.1:1252/v1",
+                "running": True,
+                "last_used_at": 42.0,
+                "idle_timeout_seconds": 300.0,
+                "holders": {
+                    "smart-router-local": {
+                        "acquired_at": 40.0,
+                        "last_used_at": 42.0,
+                        "expires_at": 900.0,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        ["/bin/zsh", str(script_path), "lease-status", "qwen3-vl-4b"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        env={
+            **subprocess.os.environ,
+            "NANOBOT_VISION_RUNTIME_BROKER_STATE_ROOT": str(broker_state_root),
+        },
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    payload = json.loads(proc.stdout)
+    assert payload["qwen3-vl-4b"]["holder_count"] == 1
+    assert "smart-router-local" in payload["qwen3-vl-4b"]["holders"]
+
+
+def test_local_models_reconcile_drops_expired_holders(tmp_path: Path):
+    repo_root = Path(__file__).resolve().parents[2]
+    script_path = repo_root / "infra/scripts/local-models/local-models.sh"
+    broker_state_root = tmp_path / "vision-runtime-broker"
+    broker_state_root.mkdir()
+    (broker_state_root / "qwen3-vl-8b.json").write_text(
+        json.dumps(
+            {
+                "target": "qwen3-vl-8b",
+                "model": "mlx-community/Qwen3-VL-8B-Instruct-4bit",
+                "api_base": "http://127.0.0.1:1254/v1",
+                "running": True,
+                "last_used_at": 42.0,
+                "idle_timeout_seconds": 300.0,
+                "holders": {
+                    "photo-ranker:pid-9": {
+                        "acquired_at": 1.0,
+                        "last_used_at": 2.0,
+                        "expires_at": 3.0,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        ["/bin/zsh", str(script_path), "reconcile", "qwen3-vl-8b"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        env={
+            **subprocess.os.environ,
+            "NANOBOT_VISION_RUNTIME_BROKER_STATE_ROOT": str(broker_state_root),
+        },
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    payload = json.loads(proc.stdout)
+    assert payload["qwen3-vl-8b"]["holder_count"] == 0
+    assert payload["qwen3-vl-8b"]["holders"] == {}
 
 
 def test_local_models_rejects_start_all():
@@ -114,7 +218,7 @@ def test_photo_mcp_wrappers_use_my_mcp_servers_root():
     assert "/Volumes/ExtData/MyOpenClawRepo/mcp-servers/photo-ranker" not in ranker_content
 
 
-def test_photo_ranker_wrapper_sets_dedicated_vlm_runtime_paths():
+def test_photo_ranker_wrapper_defaults_to_shared_local_vision_endpoint():
     repo_root = Path(__file__).resolve().parents[2]
     ranker_wrapper = repo_root / "infra/scripts/run-photos-mcp-app.sh"
 
@@ -127,8 +231,10 @@ def test_photo_ranker_wrapper_sets_dedicated_vlm_runtime_paths():
     assert 'PHOTO_RANKER_MODEL_CACHE_ROOT="${PHOTO_RANKER_MODEL_CACHE_ROOT:-$PHOTOS_MCP_ROOT/.model-cache/models/photo-ranker}"' in content
     assert 'PHOTO_SOURCE_CACHE_ROOT="${PHOTO_SOURCE_CACHE_ROOT:-$PHOTOS_MCP_ROOT/.model-cache/photo-source}"' in content
     assert 'if [[ -z "${PHOTO_RANKER_VLM_BACKEND:-}" ]]; then' in content
-    assert 'export PHOTO_RANKER_VLM_BACKEND="mlx"' in content
-    assert 'export PHOTO_RANKER_VLM_MODEL="${PHOTO_RANKER_VLM_MODEL:-mlx-community/Qwen2.5-VL-7B-Instruct-4bit}"' in content
+    assert 'export PHOTO_RANKER_VLM_BACKEND="openai_compat"' in content
+    assert 'export PHOTO_RANKER_VLM_API_BASE="${PHOTO_RANKER_VLM_API_BASE:-http://127.0.0.1:1252/v1}"' in content
+    assert 'export PHOTO_RANKER_VLM_MODEL="${PHOTO_RANKER_VLM_MODEL:-mlx-community/Qwen3-VL-4B-Instruct-4bit}"' in content
+    assert 'export PHOTO_RANKER_VLM_TARGET="${PHOTO_RANKER_VLM_TARGET:-qwen3-vl-4b}"' in content
     assert 'PHOTO_RANKER_VLM_AUTO_UNLOAD="${PHOTO_RANKER_VLM_AUTO_UNLOAD:-1}"' in content
     assert 'export HF_HOME="$PHOTO_RANKER_VLM_CACHE_ROOT"' in content
 

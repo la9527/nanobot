@@ -31,6 +31,11 @@ class _FakeLocalLlmController:
             "default_target": "qwen36",
             "default_model": "mlx-community/Qwen3.6-35B-A3B-4bit",
             "default_api_base": "http://127.0.0.1:1246/v1",
+            "smart_router_local_text_target": "qwen36",
+            "smart_router_local_vision_target": "qwen3-vl-4b",
+            "smart_router_local_image_ready": False,
+            "smart_router_local_image_mode": "unavailable",
+            "smart_router_local_image_message": "smart-router-local hybrid vision target `qwen3-vl-4b` unavailable: endpoint unavailable",
             "targets": [
                 {
                     "name": "qwen36",
@@ -40,6 +45,11 @@ class _FakeLocalLlmController:
                     "supports_vision": False,
                     "vision_check_ok": True,
                     "vision_check_message": "Only 'text' content type is supported.",
+                    "hybrid_vision_target": "qwen3-vl-4b",
+                    "hybrid_vision_ready": False,
+                    "hybrid_vision_check_message": "smart-router-local hybrid vision target `qwen3-vl-4b` unavailable: endpoint unavailable",
+                    "management_mode": "on_demand",
+                    "runtime_warming_up": False,
                     "is_default": True,
                 },
                 {
@@ -50,6 +60,22 @@ class _FakeLocalLlmController:
                     "supports_vision": False,
                     "vision_check_ok": False,
                     "vision_check_message": "endpoint unavailable",
+                    "management_mode": "manual",
+                    "runtime_warming_up": False,
+                    "is_default": False,
+                },
+                {
+                    "name": "qwen3-vl-4b",
+                    "model": "mlx-community/Qwen3-VL-4B-Instruct-4bit",
+                    "running": True,
+                    "endpoint_ok": True,
+                    "supports_vision": True,
+                    "vision_check_ok": True,
+                    "vision_check_message": "vision probe passed",
+                    "management_mode": "broker",
+                    "holder_count": 2,
+                    "holders": ["photo-ranker:pid-42", "smart-router-local"],
+                    "runtime_warming_up": False,
                     "is_default": False,
                 },
             ],
@@ -78,8 +104,12 @@ async def test_cmd_local_llm_status_uses_shared_controller(
     assert "Default: `qwen36`" in out.content
     assert "qwen36" in out.content
     assert "endpoint ok" in out.content
-    assert "vision unsupported" in out.content
-    assert "Only 'text' content type is supported." in out.content
+    assert "hybrid vision unavailable" in out.content
+    assert "on-demand" in out.content
+    assert "broker" in out.content
+    assert "holders: 2" in out.content
+    assert "photo-ranker:pid-42, smart-router-local" in out.content
+    assert "smart-router-local: smart-router-local hybrid vision target `qwen3-vl-4b` unavailable: endpoint unavailable" in out.content
     assert "Use `/model smart-router-local`" in out.content
 
 

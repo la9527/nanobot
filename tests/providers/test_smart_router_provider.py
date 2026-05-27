@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 from nanobot.providers.base import GenerationSettings, LLMProvider, LLMResponse
 
@@ -44,6 +45,8 @@ class _StubProvider(LLMProvider):
                 "messages": messages,
                 "tools": tools,
                 "model": model,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
                 "call_sequence": _CALL_SEQUENCE,
             }
         )
@@ -74,6 +77,61 @@ class _StubProvider(LLMProvider):
         return self.name
 
 
+class _FailOnStreamProvider(_StubProvider):
+    async def chat_stream(
+        self,
+        messages,
+        tools=None,
+        model=None,
+        max_tokens=4096,
+        temperature=0.7,
+        reasoning_effort=None,
+        tool_choice=None,
+        on_content_delta=None,
+    ) -> LLMResponse:
+        raise AssertionError("chat_stream should not be used")
+
+
+class _ExplodingProvider(_StubProvider):
+    async def chat(
+        self,
+        messages,
+        tools=None,
+        model=None,
+        max_tokens=4096,
+        temperature=0.7,
+        reasoning_effort=None,
+        tool_choice=None,
+    ) -> LLMResponse:
+        global _CALL_SEQUENCE
+        _CALL_SEQUENCE += 1
+        self.calls.append(
+            {
+                "messages": messages,
+                "tools": tools,
+                "model": model,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "call_sequence": _CALL_SEQUENCE,
+            }
+        )
+        raise RuntimeError("writer exploded")
+
+
+class _StubHybridVisionRuntimeManager:
+    def __init__(self) -> None:
+        self.events: list[tuple[str, str]] = []
+
+    async def ensure_runtime_ready(self, vision_model: str) -> None:
+        self.events.append(("ensure", vision_model))
+
+    async def mark_used(self, vision_model: str) -> None:
+        self.events.append(("mark_used", vision_model))
+
+    async def release(self, vision_model: str) -> None:
+        self.events.append(("release", vision_model))
+
+
 def _local_hybrid_settings() -> LocalHybridSettings:
     return LocalHybridSettings(
         enabled=False,
@@ -95,12 +153,12 @@ def _enabled_local_hybrid_settings(
     )
 
 
-def _image_request_messages() -> list[dict[str, object]]:
+def _image_request_messages(request_text: str = "What is in this image?") -> list[dict[str, object]]:
     return [
         {
             "role": "user",
             "content": [
-                {"type": "text", "text": "What is in this image?"},
+                {"type": "text", "text": request_text},
                 {
                     "type": "image_url",
                     "image_url": {"url": "data:image/png;base64,ZmFrZQ=="},
@@ -108,6 +166,11 @@ def _image_request_messages() -> list[dict[str, object]]:
             ],
         }
     ]
+
+
+def _write_test_image(path: Path, *, size: tuple[int, int]) -> Path:
+    Image.new("RGB", size, color=(240, 120, 80)).save(path)
+    return path
 
 
 def _router(tmp_path: Path, *, allow_local_tools: bool = False) -> SmartRouterProvider:
@@ -353,13 +416,138 @@ async def test_smart_router_uses_vision_first_writer_for_local_image_request(tmp
     assert len(vision.calls) == 1
     assert len(local.calls) == 1
     assert vision.calls[0]["call_sequence"] < local.calls[0]["call_sequence"]
+    assert len(local.calls[0]["messages"]) == 1
     writer_message = local.calls[0]["messages"][0]
     assert writer_message["role"] == "user"
+    assert "Use the vision summary as the primary factual source" in writer_message["content"]
+    assert "Do not restate, explain, or comment on the request itself" in writer_message["content"]
+    assert "Prefer the most specific concrete subject, object, or concept" in writer_message["content"]
+    assert "Avoid generic fallback words like image, photo, picture, object, or scene" in writer_message["content"]
+    assert "Name the depicted icon or object itself" in writer_message["content"]
+    assert "camera icon, answer camera rather than image, photo, or sound" in writer_message["content"]
+    assert "return only that payload with no markdown or extra prose" in writer_message["content"]
     assert "A camera icon on an orange background." in writer_message["content"]
+    assert "[User request]" in writer_message["content"]
+    assert "[/User request]" in writer_message["content"]
+    assert "What is in this image?" in writer_message["content"]
     assert local.calls[0]["tools"] is None
     assert response.provider_metadata["smart_router_hybrid_mode"] == "vision_first_text_writer"
     assert response.provider_metadata["smart_router_vision_model"] == "vision-model"
     assert response.provider_metadata["smart_router_final_tier"] == "local"
+    assert local.calls[0]["max_tokens"] == 256
+    assert local.calls[0]["temperature"] == 0.7
+
+
+@pytest.mark.asyncio
+async def test_smart_router_ensures_on_demand_vision_runtime_before_hybrid_call(tmp_path: Path) -> None:
+    config = RouterConfig(
+        enabled=True,
+        allow_local_tools=False,
+        local=TierTarget(tier="local", provider="vllm", model="local-model"),
+        mini=TierTarget(tier="mini", provider="openrouter", model="mini-model"),
+        full=TierTarget(tier="full", provider="openrouter", model="full-model"),
+        local_hybrid=LocalHybridSettings(
+            enabled=True,
+            mode="vision_first_text_writer",
+            vision=TierTarget(
+                tier="local",
+                provider="rapid-mlx",
+                model="mlx-community/Qwen3-VL-4B-Instruct-4bit",
+            ),
+            on_vision_unavailable="error",
+        ),
+        policy=PolicySettings(
+            local_score_max=2,
+            full_score_min=6,
+            short_prompt_chars=120,
+            medium_prompt_chars=800,
+            long_prompt_chars=2000,
+            tool_bonus=2,
+            code_bonus=3,
+            reasoning_bonus=3,
+            history_bonus=2,
+            attachment_bonus=2,
+            full_keywords=["architecture"],
+            code_keywords=["python"],
+            tool_keywords=["docker"],
+        ),
+        health=HealthSettings(failure_threshold=1, cooldown_seconds=999),
+        logging=LoggingSettings(enabled=False, path=str(tmp_path / "smart-router.jsonl")),
+    )
+    local = _StubProvider("local", [LLMResponse(content="local writer ok")])
+    mini = _StubProvider("mini", [LLMResponse(content="mini ok")])
+    full = _StubProvider("full", [LLMResponse(content="full ok")])
+    vision = _StubProvider("vision", [LLMResponse(content="camera icon")])
+    runtime_manager = _StubHybridVisionRuntimeManager()
+    router = SmartRouterProvider(
+        router_config=config,
+        tier_providers={"local": local, "mini": mini, "full": full},
+        default_model="router",
+        hybrid_vision_provider=vision,
+    )
+    router._hybrid_vision_runtime_manager = runtime_manager
+
+    response = await router.chat(messages=_image_request_messages())
+
+    assert response.content == "local writer ok"
+    assert runtime_manager.events == [
+        ("ensure", "mlx-community/Qwen3-VL-4B-Instruct-4bit"),
+        ("mark_used", "mlx-community/Qwen3-VL-4B-Instruct-4bit"),
+        ("release", "mlx-community/Qwen3-VL-4B-Instruct-4bit"),
+    ]
+    assert response.provider_metadata["smart_router_vision_runtime_mode"] == "broker"
+
+
+@pytest.mark.asyncio
+async def test_smart_router_releases_broker_lease_when_hybrid_writer_raises(tmp_path: Path) -> None:
+    config = RouterConfig(
+        enabled=True,
+        allow_local_tools=False,
+        local=TierTarget(tier="local", provider="vllm", model="local-model"),
+        mini=TierTarget(tier="mini", provider="openrouter", model="mini-model"),
+        full=TierTarget(tier="full", provider="openrouter", model="full-model"),
+        local_hybrid=_enabled_local_hybrid_settings(),
+        policy=PolicySettings(
+            local_score_max=2,
+            full_score_min=6,
+            short_prompt_chars=120,
+            medium_prompt_chars=800,
+            long_prompt_chars=2000,
+            tool_bonus=2,
+            code_bonus=3,
+            reasoning_bonus=3,
+            history_bonus=2,
+            attachment_bonus=2,
+            full_keywords=["architecture"],
+            code_keywords=["python"],
+            tool_keywords=["docker"],
+        ),
+        health=HealthSettings(failure_threshold=1, cooldown_seconds=999),
+        logging=LoggingSettings(enabled=False, path=str(tmp_path / "smart-router.jsonl")),
+    )
+    local = _ExplodingProvider("local", [])
+    mini = _StubProvider("mini", [LLMResponse(content="mini ok")])
+    full = _StubProvider("full", [LLMResponse(content="full ok")])
+    vision = _StubProvider("vision", [LLMResponse(content="camera icon")])
+    runtime_manager = _StubHybridVisionRuntimeManager()
+    router = SmartRouterProvider(
+        router_config=config,
+        tier_providers={"local": local, "mini": mini, "full": full},
+        default_model="router",
+        hybrid_vision_provider=vision,
+    )
+    router._hybrid_vision_runtime_manager = runtime_manager
+
+    response = await router.chat(messages=_image_request_messages())
+
+    assert response.content == "mini ok"
+    assert len(local.calls) == 1
+    assert len(mini.calls) == 1
+    assert runtime_manager.events == [
+        ("ensure", "vision-model"),
+        ("mark_used", "vision-model"),
+        ("release", "vision-model"),
+    ]
 
 
 @pytest.mark.asyncio
@@ -422,9 +610,130 @@ async def test_smart_router_compacts_hybrid_vision_messages_to_last_image_turn(t
     vision_messages = vision.calls[0]["messages"]
     assert len(vision_messages) == 1
     assert vision_messages[0]["role"] == "user"
+    assert [block["type"] for block in vision_messages[0]["content"]] == ["text", "image_url"]
+    assert vision_messages[0]["content"][0]["text"].startswith("Describe the main visible subject")
+    assert "very long system prompt" not in vision_messages[0]["content"][0]["text"]
+    assert "첨부 이미지를 보고 한 단어로만 묘사해줘." not in vision_messages[0]["content"][0]["text"]
+
+    writer_messages = local.calls[0]["messages"]
+    assert len(writer_messages) == 1
+    assert writer_messages[0]["role"] == "user"
+    assert "very long system prompt" not in writer_messages[0]["content"]
+    assert "previous text-only question" not in writer_messages[0]["content"]
+    assert "첨부 이미지를 보고 한 단어로만 묘사해줘." in writer_messages[0]["content"]
+
+
+def test_smart_router_downscales_large_hybrid_vision_image_to_temp_path(tmp_path: Path) -> None:
+    source_image = _write_test_image(tmp_path / "large-vision.png", size=(1365, 2048))
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Describe this image."},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": str(source_image)},
+                    "_meta": {"path": str(source_image)},
+                },
+            ],
+        }
+    ]
+
+    vision_messages = SmartRouterProvider._build_hybrid_vision_messages(messages)
+
+    image_block = vision_messages[0]["content"][1]
+    resized_path = image_block["image_url"]["url"]
+    assert resized_path != str(source_image)
+    assert image_block["_meta"]["path"] == resized_path
+    assert image_block["_meta"]["original_path"] == str(source_image)
+    with Image.open(resized_path) as resized_image:
+        assert max(resized_image.size) <= 1280
+        assert resized_image.width * resized_image.height <= 1280 * 28 * 28
+        assert resized_image.width % 28 == 0
+        assert resized_image.height % 28 == 0
+
+
+def test_smart_router_keeps_small_hybrid_vision_image_path(tmp_path: Path) -> None:
+    source_image = _write_test_image(tmp_path / "small-vision.png", size=(683, 1024))
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Describe this image."},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": str(source_image)},
+                    "_meta": {"path": str(source_image)},
+                },
+            ],
+        }
+    ]
+
+    vision_messages = SmartRouterProvider._build_hybrid_vision_messages(messages)
+
+    image_block = vision_messages[0]["content"][1]
+    assert image_block["image_url"]["url"] == str(source_image)
+    assert image_block["_meta"]["path"] == str(source_image)
+    assert "original_path" not in image_block["_meta"]
+
+
+@pytest.mark.asyncio
+async def test_smart_router_hybrid_writer_uses_non_stream_writer_call(tmp_path: Path) -> None:
+    config = RouterConfig(
+        enabled=True,
+        allow_local_tools=False,
+        local=TierTarget(tier="local", provider="vllm", model="local-model"),
+        mini=TierTarget(tier="mini", provider="openrouter", model="mini-model"),
+        full=TierTarget(tier="full", provider="openrouter", model="full-model"),
+        local_hybrid=_enabled_local_hybrid_settings(),
+        policy=PolicySettings(
+            local_score_max=2,
+            full_score_min=6,
+            short_prompt_chars=120,
+            medium_prompt_chars=800,
+            long_prompt_chars=2000,
+            tool_bonus=2,
+            code_bonus=3,
+            reasoning_bonus=3,
+            history_bonus=2,
+            attachment_bonus=2,
+            full_keywords=["architecture"],
+            code_keywords=["python"],
+            tool_keywords=["docker"],
+        ),
+        health=HealthSettings(failure_threshold=1, cooldown_seconds=999),
+        logging=LoggingSettings(enabled=False, path=str(tmp_path / "smart-router.jsonl")),
+    )
+    local = _FailOnStreamProvider("local", [LLMResponse(content="안녕")])
+    mini = _StubProvider("mini", [LLMResponse(content="mini ok")])
+    full = _StubProvider("full", [LLMResponse(content="full ok")])
+    vision = _StubProvider("vision", [LLMResponse(content="사진")])
+    router = SmartRouterProvider(
+        router_config=config,
+        tier_providers={"local": local, "mini": mini, "full": full},
+        default_model="router",
+        hybrid_vision_provider=vision,
+    )
+
+    chunks: list[str] = []
+
+    response = await router.chat_stream(
+        messages=_image_request_messages("첨부 이미지를 보고 한글로 한 단어만 답해줘."),
+        on_content_delta=chunks.append,
+    )
+
+    assert response.content == "안녕"
+    assert chunks == []
+    assert len(local.calls) == 1
+    assert len(vision.calls) == 1
+    assert local.calls[0]["max_tokens"] == 16
+    assert local.calls[0]["temperature"] == 0.0
+
+    vision_messages = vision.calls[0]["messages"]
+    assert len(vision_messages) == 1
+    assert vision_messages[0]["role"] == "user"
     blocks = vision_messages[0]["content"]
-    assert [block["type"] for block in blocks] == ["text", "image_url", "text"]
-    assert blocks[1]["_meta"] == {"path": "/tmp/example.png"}
+    assert [block["type"] for block in blocks] == ["text", "image_url"]
 
 
 @pytest.mark.asyncio

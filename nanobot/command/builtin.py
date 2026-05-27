@@ -479,17 +479,40 @@ async def cmd_local_llm(ctx: CommandContext) -> OutboundMessage:
             markers.append("endpoint ok" if row.get("endpoint_ok") else "endpoint unavailable")
             if row.get("supports_vision"):
                 markers.append(_t("local_llm.status.vision_supported"))
+            elif row.get("hybrid_vision_target"):
+                markers.append(
+                    _t("local_llm.status.hybrid_ready")
+                    if row.get("hybrid_vision_ready")
+                    else _t("local_llm.status.hybrid_unavailable")
+                )
             elif row.get("vision_check_ok"):
                 markers.append(_t("local_llm.status.vision_unsupported"))
             else:
                 markers.append(_t("local_llm.status.vision_unavailable"))
+            if row.get("management_mode") == "broker":
+                holders = int(row.get("holder_count") or 0)
+                markers.append(_t("local_llm.status.broker"))
+                markers.append(_t("local_llm.status.holders", count=holders))
+            elif row.get("management_mode") == "on_demand":
+                markers.append(_t("local_llm.status.on_demand"))
+            if row.get("runtime_warming_up"):
+                markers.append(_t("local_llm.status.warming_up"))
             if row.get("is_default"):
                 markers.append("default")
             prefix = "*" if row.get("is_default") else "-"
             lines.append(f"{prefix} `{row.get('name')}` — {', '.join(markers)}")
+            holders = row.get("holders")
+            if isinstance(holders, list) and holders:
+                lines.append(f"  holders: {', '.join(str(holder) for holder in holders)}")
+            hybrid_message = str(row.get("hybrid_vision_check_message") or "").strip()
             vision_message = str(row.get("vision_check_message") or "").strip()
-            if vision_message:
+            if row.get("hybrid_vision_target") and hybrid_message:
+                lines.append(f"  hybrid: {hybrid_message}")
+            elif vision_message:
                 lines.append(f"  vision: {vision_message}")
+        smart_router_local_message = str(payload.get("smart_router_local_image_message") or "").strip()
+        if smart_router_local_message:
+            lines.extend(["", f"smart-router-local: {smart_router_local_message}"])
         lines.extend([
             "",
             "Use `/local-llm use qwen36` to change the default local LLM.",

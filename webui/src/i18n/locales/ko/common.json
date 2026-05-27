@@ -723,6 +723,8 @@
       "endpointUnavailable": "Endpoint 응답 없음",
       "vision": {
         "supported": "Vision 지원",
+        "hybrid": "하이브리드 vision 준비됨",
+        "hybrid_unavailable": "하이브리드 vision 사용 불가",
         "unsupported": "Vision 미지원",
         "unknown": "Vision 확인 불가"
       },
@@ -733,7 +735,15 @@
         "runtime": "Runtime",
         "endpoint": "Endpoint",
         "launchd": "Launchd",
-        "activeModel": "Model"
+        "activeModel": "Model",
+        "management": "운영 방식",
+        "holders": "홀더"
+      },
+      "management": {
+        "manual": "수동",
+        "on_demand": "온디맨드",
+        "broker": "Broker",
+        "brokerSummary": "{{count}}개 holder"
       },
       "actions": {
         "start": "시작",

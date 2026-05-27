@@ -741,6 +741,8 @@
       "endpointUnavailable": "Endpoint unavailable",
       "vision": {
         "supported": "Vision supported",
+        "hybrid": "Hybrid vision ready",
+        "hybrid_unavailable": "Hybrid vision unavailable",
         "unsupported": "Vision unsupported",
         "unknown": "Vision check unavailable"
       },
@@ -751,7 +753,15 @@
         "runtime": "Runtime",
         "endpoint": "Endpoint",
         "launchd": "Launchd",
-        "activeModel": "Model"
+        "activeModel": "Model",
+        "management": "Management",
+        "holders": "Holders"
+      },
+      "management": {
+        "manual": "Manual",
+        "on_demand": "On-demand",
+        "broker": "Broker",
+        "brokerSummary": "{{count}} holders"
       },
       "actions": {
         "start": "Start",

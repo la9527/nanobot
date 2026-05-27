@@ -50,6 +50,7 @@ describe("SettingsView local LLM settings", () => {
           supports_vision: false,
           vision_check_ok: true,
           vision_check_message: "Only 'text' content type is supported.",
+          management_mode: "manual",
           is_default: true,
         },
         {
@@ -65,6 +66,23 @@ describe("SettingsView local LLM settings", () => {
           supports_vision: false,
           vision_check_ok: false,
           vision_check_message: "endpoint unavailable",
+          management_mode: "manual",
+          is_default: false,
+        },
+        {
+          name: "qwen3-vl-4b",
+          label: "Qwen3-VL 4B",
+          provider: "rapid-mlx",
+          runtime: "rapid-mlx",
+          model: "mlx-community/Qwen3-VL-4B-Instruct-4bit",
+          api_base: "http://127.0.0.1:1252/v1",
+          launchd_label: "com.nanobot.local-model-qwen3-vl-4b",
+          running: false,
+          endpoint_ok: false,
+          supports_vision: true,
+          vision_check_ok: true,
+          vision_check_message: "vision probe passed",
+          management_mode: "on_demand",
           is_default: false,
         },
       ],
@@ -103,6 +121,8 @@ describe("SettingsView local LLM settings", () => {
     expect(screen.getByLabelText("Endpoint OK")).toBeInTheDocument();
     expect(screen.getByLabelText("Vision unsupported")).toBeInTheDocument();
     expect(screen.getByText("Only 'text' content type is supported.")).toBeInTheDocument();
+    expect(screen.getByText("Management")).toBeInTheDocument();
+    expect(screen.getByText("Manual")).toBeInTheDocument();
     expect(screen.getByText("Current default")).toBeDisabled();
     expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Check response" })).toBeInTheDocument();
@@ -132,6 +152,163 @@ describe("SettingsView local LLM settings", () => {
     expect(screen.getByLabelText("Endpoint unavailable")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Use as default" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Start" })).toBeInTheDocument();
+  });
+
+  it("shows on-demand management for dedicated vision targets", async () => {
+    const user = userEvent.setup();
+    render(
+      <SettingsView
+        theme="light"
+        onToggleTheme={vi.fn()}
+        onBackToChat={vi.fn()}
+        reasoningVisibility="off"
+        onReasoningVisibilityChange={vi.fn()}
+        onModelNameChange={vi.fn()}
+        chatFontSize="md"
+        chatFontValue={15}
+        onDecreaseChatFont={vi.fn()}
+        onIncreaseChatFont={vi.fn()}
+      />,
+    );
+
+    await user.selectOptions(await screen.findByLabelText("Select local LLM model"), "qwen3-vl-4b");
+
+    expect(screen.getByText("Qwen3-VL 4B")).toBeInTheDocument();
+    expect(screen.getByText("On-demand")).toBeInTheDocument();
+  });
+
+  it("shows broker holders for shared vision runtime", async () => {
+    vi.mocked(fetchLocalLlmStatus).mockResolvedValueOnce({
+      default_target: "lfm2",
+      default_model: "LiquidAI/LFM2-24B-A2B-MLX-4bit",
+      default_api_base: "http://127.0.0.1:1242/v1",
+      targets: [
+        {
+          name: "lfm2",
+          label: "LFM2",
+          provider: "rapid-mlx",
+          runtime: "rapid-mlx",
+          model: "LiquidAI/LFM2-24B-A2B-MLX-4bit",
+          api_base: "http://127.0.0.1:1242/v1",
+          launchd_label: "com.nanobot.local-model-lfm2",
+          running: true,
+          endpoint_ok: true,
+          supports_vision: false,
+          vision_check_ok: false,
+          vision_check_message: "endpoint unavailable",
+          management_mode: "manual",
+          is_default: true,
+        },
+        {
+          name: "qwen3-vl-4b",
+          label: "Qwen3-VL 4B",
+          provider: "rapid-mlx",
+          runtime: "rapid-mlx",
+          model: "mlx-community/Qwen3-VL-4B-Instruct-4bit",
+          api_base: "http://127.0.0.1:1252/v1",
+          launchd_label: "com.nanobot.local-model-qwen3-vl-4b",
+          running: true,
+          endpoint_ok: true,
+          supports_vision: true,
+          vision_check_ok: true,
+          vision_check_message: "vision probe passed",
+          management_mode: "broker",
+          holder_count: 2,
+          holders: ["smart-router-local", "photo-ranker:pid-42"],
+          is_default: false,
+        },
+      ],
+    });
+
+    const user = userEvent.setup();
+    render(
+      <SettingsView
+        theme="light"
+        onToggleTheme={vi.fn()}
+        onBackToChat={vi.fn()}
+        reasoningVisibility="off"
+        onReasoningVisibilityChange={vi.fn()}
+        onModelNameChange={vi.fn()}
+        chatFontSize="md"
+        chatFontValue={15}
+        onDecreaseChatFont={vi.fn()}
+        onIncreaseChatFont={vi.fn()}
+      />,
+    );
+
+    await user.selectOptions(await screen.findByLabelText("Select local LLM model"), "qwen3-vl-4b");
+
+    expect(screen.getByText("Broker")).toBeInTheDocument();
+    expect(screen.getByText("2 holders")).toBeInTheDocument();
+    expect(screen.getByText("smart-router-local, photo-ranker:pid-42")).toBeInTheDocument();
+  });
+
+  it("shows hybrid vision ready for the configured text lane", async () => {
+    vi.mocked(fetchLocalLlmStatus).mockResolvedValueOnce({
+      default_target: "lfm2",
+      default_model: "LiquidAI/LFM2-24B-A2B-MLX-4bit",
+      default_api_base: "http://127.0.0.1:1242/v1",
+      smart_router_local_text_target: "lfm2",
+      smart_router_local_vision_target: "qwen3-vl-4b",
+      smart_router_local_image_ready: true,
+      smart_router_local_image_mode: "hybrid",
+      smart_router_local_image_message: "smart-router-local hybrid vision ready via `qwen3-vl-4b`",
+      targets: [
+        {
+          name: "lfm2",
+          label: "LFM2",
+          provider: "rapid-mlx",
+          runtime: "rapid-mlx",
+          model: "LiquidAI/LFM2-24B-A2B-MLX-4bit",
+          api_base: "http://127.0.0.1:1242/v1",
+          launchd_label: "com.nanobot.local-model-lfm2",
+          running: true,
+          endpoint_ok: true,
+          supports_vision: false,
+          vision_check_ok: false,
+          vision_check_message: "endpoint unavailable",
+          hybrid_vision_target: "qwen3-vl-4b",
+          hybrid_vision_ready: true,
+          hybrid_vision_check_message: "smart-router-local hybrid vision ready via `qwen3-vl-4b`",
+          management_mode: "manual",
+          is_default: true,
+        },
+        {
+          name: "qwen3-vl-4b",
+          label: "Qwen3-VL 4B",
+          provider: "rapid-mlx",
+          runtime: "rapid-mlx",
+          model: "mlx-community/Qwen3-VL-4B-Instruct-4bit",
+          api_base: "http://127.0.0.1:1252/v1",
+          launchd_label: "com.nanobot.local-model-qwen3-vl-4b",
+          running: true,
+          endpoint_ok: true,
+          supports_vision: true,
+          vision_check_ok: true,
+          vision_check_message: "vision probe passed",
+          management_mode: "on_demand",
+          is_default: false,
+        },
+      ],
+    });
+
+    render(
+      <SettingsView
+        theme="light"
+        onToggleTheme={vi.fn()}
+        onBackToChat={vi.fn()}
+        reasoningVisibility="off"
+        onReasoningVisibilityChange={vi.fn()}
+        onModelNameChange={vi.fn()}
+        chatFontSize="md"
+        chatFontValue={15}
+        onDecreaseChatFont={vi.fn()}
+        onIncreaseChatFont={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByLabelText("Hybrid vision ready")).toBeInTheDocument();
+    expect(screen.getByText("smart-router-local hybrid vision ready via `qwen3-vl-4b`")).toBeInTheDocument();
   });
 
   it("shows a yellow starting state while a model start action is pending", async () => {

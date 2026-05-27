@@ -531,6 +531,9 @@ function LocalLlmTargetPanel({
   const stateLabel = t(`settings.localLlm.state.${state}`);
   const visionState = getLocalLlmVisionState(target);
   const visionLabel = t(`settings.localLlm.vision.${visionState}`);
+  const visionMessage = target.hybrid_vision_target
+    ? (target.hybrid_vision_check_message || "")
+    : (target.vision_check_message || "");
   const toggleAction = target.running ? "stop" : "start";
   const toggleBusy = targetBusy("start") || targetBusy("stop");
   const toggleTone = state === "starting" ? "starting" : target.running ? "stopped" : "running";
@@ -564,7 +567,7 @@ function LocalLlmTargetPanel({
             />
             <StatusIcon
               label={visionLabel}
-              tone={visionState === "supported" ? "running" : visionState === "unknown" ? "checking" : "stopped"}
+              tone={visionState === "supported" || visionState === "hybrid" ? "running" : visionState === "unknown" ? "checking" : "stopped"}
               icon={<Activity className="size-3.5" />}
             />
           </div>
@@ -575,10 +578,21 @@ function LocalLlmTargetPanel({
           <LocalLlmDetail label={t("settings.localLlm.details.endpoint")} value={target.api_base} />
           <LocalLlmDetail label={t("settings.localLlm.details.launchd")} value={target.launchd_label} />
           <LocalLlmDetail label={t("settings.localLlm.details.activeModel")} value={target.is_default ? defaultModel : target.model} />
+          <LocalLlmDetail
+            label={t("settings.localLlm.details.management")}
+            value={t(`settings.localLlm.management.${target.management_mode === "broker" ? "broker" : target.management_mode === "on_demand" ? "on_demand" : "manual"}`)}
+          />
+          {target.management_mode === "broker" ? (
+            <LocalLlmDetail
+              label={t("settings.localLlm.details.holders")}
+              value={t("settings.localLlm.management.brokerSummary", { count: target.holder_count ?? 0 })}
+              helper={(target.holders ?? []).join(", ")}
+            />
+          ) : null}
         </div>
 
-        {target.vision_check_message ? (
-          <p className="mt-3 text-xs text-muted-foreground">{target.vision_check_message}</p>
+        {visionMessage ? (
+          <p className="mt-3 text-xs text-muted-foreground">{visionMessage}</p>
         ) : null}
 
         <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
@@ -616,8 +630,9 @@ function getLocalLlmState(target: LocalLlmTargetStatus, busy: string | null): "r
   return target.running ? "running" : "stopped";
 }
 
-function getLocalLlmVisionState(target: LocalLlmTargetStatus): "supported" | "unsupported" | "unknown" {
+function getLocalLlmVisionState(target: LocalLlmTargetStatus): "supported" | "unsupported" | "unknown" | "hybrid" | "hybrid_unavailable" {
   if (target.supports_vision) return "supported";
+  if (target.hybrid_vision_target) return target.hybrid_vision_ready ? "hybrid" : "hybrid_unavailable";
   if (target.vision_check_ok) return "unsupported";
   return "unknown";
 }
@@ -653,11 +668,12 @@ function StatusIcon({
   );
 }
 
-function LocalLlmDetail({ label, value }: { label: string; value: string }) {
+function LocalLlmDetail({ label, value, helper }: { label: string; value: string; helper?: string }) {
   return (
     <div className="min-w-0 rounded-md border border-border/40 bg-card/40 px-2.5 py-2">
       <div className="text-[11px] font-medium uppercase text-muted-foreground/75">{label}</div>
       <div className="mt-1 truncate font-mono text-[12px] text-foreground/80" title={value}>{value}</div>
+      {helper ? <div className="mt-1 break-words text-[11px] text-muted-foreground/80">{helper}</div> : null}
     </div>
   );
 }
