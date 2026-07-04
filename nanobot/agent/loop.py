@@ -68,6 +68,7 @@ from nanobot.session.goal_state import (
 )
 from nanobot.session.keys import UNIFIED_SESSION_KEY, session_key_for_channel
 from nanobot.session.manager import Session, SessionManager
+from nanobot.session.webui_turns import mark_webui_session
 from nanobot.utils.document import extract_documents, reference_non_image_attachments
 from nanobot.utils.helpers import image_placeholder_text
 from nanobot.utils.helpers import truncate_text as truncate_text_fn
@@ -997,9 +998,48 @@ class AgentLoop:
         ctx = CommandContext(msg=msg, session=None, key=key, raw=raw, loop=self)
         result = await dispatch_fn(ctx)
         if result:
+            result = self._persist_command_result(msg=msg, key=key, result=result)
             await self.bus.publish_outbound(result)
         else:
             logger.warning("Command '{}' matched but dispatch returned None", raw)
+
+    def _persist_command_result(
+        self,
+        *,
+        msg: InboundMessage,
+        key: str,
+        result: OutboundMessage,
+    ) -> OutboundMessage:
+        """Persist an inline (priority-tier) slash-command turn into session history.
+
+        Priority commands (e.g. /stop, /status, /clear) are dispatched directly
+        from run(), bypassing the normal BUILD/SAVE states entirely, so this is
+        the only place that persists them for WebUI history hydration. Commands
+        can opt out via metadata ``_session_log_mode="skip"`` (e.g. /clear, which
+        already dropped the session's history and shouldn't re-log itself).
+        """
+        metadata = dict(result.metadata or {})
+        session_log_mode = metadata.pop("_session_log_mode", None)
+        if metadata != (result.metadata or {}):
+            result = dataclasses.replace(result, metadata=metadata)
+        if session_log_mode == "skip":
+            return result
+
+        session = self.sessions.get_or_create(key)
+        mark_webui_session(session, msg.metadata)
+        media_paths = [p for p in (msg.media or []) if isinstance(p, str) and p]
+        user_extra: dict[str, Any] = {"media": list(media_paths)} if media_paths else {}
+        session.add_message("user", msg.content if isinstance(msg.content, str) else "", _command=True, **user_extra)
+        assistant_extra: dict[str, Any] = {"_command": True}
+        if result.buttons:
+            assistant_extra["buttons"] = result.buttons
+        if result.metadata:
+            assistant_extra["metadata"] = dict(result.metadata)
+        session.add_message("assistant", result.content, **assistant_extra)
+        self._clear_pending_user_turn(session)
+        self._update_context_window_summary(session)
+        self.sessions.save(session)
+        return result
 
     async def _cancel_active_tasks(self, key: str) -> int:
         """Cancel and await all active tasks and subagents for *key*.
@@ -2044,19 +2084,26 @@ class AgentLoop:
         )
         result = await self.commands.dispatch(cmd_ctx)
         if result is not None:
+            metadata = dict(result.metadata or {})
+            session_log_mode = metadata.pop("_session_log_mode", None)
+            if metadata != (result.metadata or {}):
+                result = dataclasses.replace(result, metadata=metadata)
             ctx.outbound = result
             # Shortcut commands skip BUILD and SAVE, so we must persist the
             # turn here so WebUI history hydration after _turn_end sees the
             # message.  Mark messages with _command so get_history can filter
             # them out of LLM context.  /new is excluded because it
-            # intentionally clears the session.
-            if raw.lower() != "/new":
+            # intentionally clears the session; commands can also opt out
+            # explicitly via _session_log_mode="skip" (e.g. /clear, which
+            # already dropped the session's history and shouldn't re-log itself).
+            if raw.lower() != "/new" and session_log_mode != "skip":
                 ctx.user_persisted_early = self._persist_user_message_early(
                     ctx.msg, ctx.session, _command=True
                 )
                 ctx.session.add_message(
                     "assistant", result.content, _command=True
                 )
+                self._update_context_window_summary(ctx.session)
                 self.sessions.save(ctx.session)
                 self._clear_pending_user_turn(ctx.session)
             return "shortcut"

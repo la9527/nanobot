@@ -12,6 +12,7 @@ from nanobot.bus.events import InboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.command import CommandContext
 from nanobot.config.schema import AgentDefaults
+from nanobot.i18n import translate as _t
 from nanobot.providers.base import LLMResponse
 
 
@@ -524,7 +525,7 @@ class TestAutoCompactIdleDetection:
         response = await loop._process_message(msg)
 
         assert response is not None
-        assert "new session started" in response.content.lower()
+        assert _t("builtin.new_session.started", locale="ko") == response.content
 
         session_after = loop.sessions.get_or_create("cli:test")
         # Session is empty (auto-new archived and cleared, /new cleared again)

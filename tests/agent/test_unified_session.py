@@ -25,6 +25,7 @@ from nanobot.bus.queue import MessageBus
 from nanobot.command.builtin import cmd_new, register_builtin_commands
 from nanobot.command.router import CommandContext, CommandRouter
 from nanobot.config.schema import AgentDefaults, Config
+from nanobot.i18n import translate as _t
 from nanobot.session.keys import UNIFIED_SESSION_KEY
 from nanobot.session.manager import Session, SessionManager
 
@@ -252,7 +253,7 @@ class TestCmdNewUnifiedSession:
 
         result = await cmd_new(ctx)
 
-        assert "New session started" in result.content
+        assert _t("builtin.new_session.started", locale="ko") == result.content
         # Invalidate cache and reload from disk to confirm persistence
         sessions.invalidate("unified:default")
         reloaded = sessions.get_or_create("unified:default")

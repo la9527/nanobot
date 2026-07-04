@@ -8,12 +8,57 @@ import sys
 import time
 from contextlib import suppress
 from dataclasses import dataclass
+from typing import Any
 
 from nanobot import __version__
 from nanobot.bus.events import OutboundMessage
 from nanobot.command.router import CommandContext, CommandRouter
+from nanobot.i18n import translate as _t
+from nanobot.response_status import (
+    RESPONSE_FOOTER_MODES,
+    build_response_footer,
+    normalize_response_footer_mode,
+)
 from nanobot.utils.helpers import build_status_content
 from nanobot.utils.restart import set_restart_notice_to_env
+
+CALENDAR_CREATE_INPUT_METADATA_KEY = "calendar_create_input"
+CALENDAR_CONFLICT_REVIEW_METADATA_KEY = "calendar_conflict_review"
+CALENDAR_PENDING_INTERACTION_METADATA_KEY = "calendar_pending_interaction"
+SESSION_LOG_MODE_METADATA_KEY = "_session_log_mode"
+SESSION_LOG_MODE_SKIP = "skip"
+# Inlined literal values (rather than importing from nanobot.automation.calendar/mail
+# or nanobot.session.continuity) to avoid pulling those modules into
+# command/builtin.py's module-level import chain. command/builtin.py is imported
+# very early by many test modules, and nanobot.session.__init__ eagerly imports
+# nanobot.session.manager, which can trip a pydantic ToolsConfig/Config
+# forward-ref rebuild ordering issue depending on which module happens to
+# import nanobot.config.schema first (nanobot.agent.tools.web needs to run its
+# WebToolsConfig registration before ToolsConfig.model_rebuild() is called).
+ACTION_RESULT_METADATA_KEY = "action_result"
+TASK_SUMMARY_METADATA_KEY = "task_summary"
+CALENDAR_CREATE_APPROVAL_METADATA_KEY = "calendar_create_approval"
+CALENDAR_UPDATE_APPROVAL_METADATA_KEY = "calendar_update_approval"
+CALENDAR_DELETE_APPROVAL_METADATA_KEY = "calendar_delete_approval"
+MAIL_LAST_DRAFT_REQUEST_METADATA_KEY = "mail_last_draft_request"
+MAIL_SEND_APPROVAL_METADATA_KEY = "mail_send_approval"
+CONTEXT_CLEAR_METADATA_KEYS = (
+    ACTION_RESULT_METADATA_KEY,
+    TASK_SUMMARY_METADATA_KEY,
+    "approval_summary",
+    "proactive_summary",
+    "runtime_checkpoint",
+    "pending_user_turn",
+    "_last_summary",
+    CALENDAR_CREATE_INPUT_METADATA_KEY,
+    CALENDAR_CONFLICT_REVIEW_METADATA_KEY,
+    CALENDAR_PENDING_INTERACTION_METADATA_KEY,
+    CALENDAR_CREATE_APPROVAL_METADATA_KEY,
+    CALENDAR_UPDATE_APPROVAL_METADATA_KEY,
+    CALENDAR_DELETE_APPROVAL_METADATA_KEY,
+    MAIL_LAST_DRAFT_REQUEST_METADATA_KEY,
+    MAIL_SEND_APPROVAL_METADATA_KEY,
+)
 
 
 @dataclass(frozen=True)
@@ -61,10 +106,24 @@ BUILTIN_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
     ),
     BuiltinCommandSpec(
         "/model",
-        "Switch model preset",
-        "Show or switch the active model preset.",
-        "brain",
-        "[preset]",
+        "Select model target",
+        "Switch model target, list available targets, or clear the override.",
+        "bot",
+        "[name|list|clear]",
+    ),
+    BuiltinCommandSpec(
+        "/local-llm",
+        "Manage local LLM",
+        "Show or control local LLM runtime.",
+        "bot",
+        "[status|start|stop|restart|smoke|use|confirm] [lfm2|lfm25-8b-a1b|qwen35-base-mlx-4bit|qwen36|qwen3-vl-4b|qwen3-vl-8b|lfm25-vl-1.6b]",
+    ),
+    BuiltinCommandSpec(
+        "/usage",
+        "Set usage details",
+        "Show or change the token usage detail level.",
+        "gauge",
+        "[off|tokens|full]",
     ),
     BuiltinCommandSpec(
         "/history",
@@ -161,6 +220,8 @@ async def cmd_status(ctx: CommandContext) -> OutboundMessage:
     """Build an outbound status message for a session."""
     loop = ctx.loop
     session = ctx.session or loop.sessions.get_or_create(ctx.key)
+    status_snapshot = loop.build_response_status(session)
+
     ctx_est = 0
     with suppress(Exception):
         ctx_est, _ = loop.consolidator.estimate_session_prompt_tokens(session)
@@ -183,21 +244,106 @@ async def cmd_status(ctx: CommandContext) -> OutboundMessage:
     task_count = sum(1 for t in active_tasks if not t.done())
     with suppress(Exception):
         task_count += loop.subagents.get_running_count_by_session(ctx.key)
+    content = build_status_content(
+        version=__version__, model=status_snapshot["model"],
+        start_time=loop._start_time, last_usage=status_snapshot["usage"],
+        context_window_tokens=status_snapshot["context_window_tokens"],
+        session_msg_count=len(session.get_history(max_messages=0)),
+        context_tokens_estimate=ctx_est,
+        search_usage_text=search_usage_text,
+        active_task_count=task_count,
+        max_completion_tokens=getattr(
+            getattr(loop.provider, "generation", None), "max_tokens", 8192
+        ),
+    )
+    content += (
+        f"\nTarget: {status_snapshot['active_target']}"
+        f"\nReply footer: {status_snapshot['footer_mode']}"
+    )
+    route_tier = status_snapshot.get("smart_router_tier")
+    route_model = status_snapshot.get("smart_router_model")
+    if isinstance(route_tier, str) and route_tier:
+        content += f"\nSmart-router route: {route_tier}"
+        if isinstance(route_model, str) and route_model:
+            content += f" ({route_model})"
     return OutboundMessage(
         channel=ctx.msg.channel,
         chat_id=ctx.msg.chat_id,
-        content=build_status_content(
-            version=__version__, model=loop.model,
-            start_time=loop._start_time, last_usage=loop._last_usage,
-            context_window_tokens=loop.context_window_tokens,
-            session_msg_count=len(session.get_history(max_messages=0)),
-            context_tokens_estimate=ctx_est,
-            search_usage_text=search_usage_text,
-            active_task_count=task_count,
-            max_completion_tokens=getattr(
-                getattr(loop.provider, "generation", None), "max_tokens", 8192
-            ),
-        ),
+        content=content,
+        metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+    )
+
+
+async def cmd_usage(ctx: CommandContext) -> OutboundMessage:
+    """Show or change per-session response footer mode."""
+    loop = ctx.loop
+    session = ctx.session or loop.sessions.get_or_create(ctx.key)
+    args = ctx.args.strip().lower()
+    current_mode = loop.get_response_footer_mode(session)
+    status_snapshot = loop.build_response_status(session)
+
+    if not args:
+        preview = build_response_footer(
+            mode=current_mode,
+            model=status_snapshot["model"],
+            active_target=status_snapshot["active_target"],
+            usage=status_snapshot["usage"],
+            context_window_tokens=status_snapshot["context_window_tokens"],
+            context_tokens_estimate=status_snapshot["context_tokens_estimate"],
+            route_tier=status_snapshot.get("smart_router_tier"),
+            route_model=status_snapshot.get("smart_router_model"),
+        )
+        lines = [
+            "## Usage Footer",
+            "",
+            f"Current mode: `{current_mode}`",
+        ]
+        if preview:
+            lines.extend(["", f"Preview:{preview}"])
+        lines.extend([
+            "",
+            "Use `/usage off`, `/usage tokens`, or `/usage full`.",
+        ])
+    else:
+        mode = normalize_response_footer_mode(args.split()[0])
+        if mode not in RESPONSE_FOOTER_MODES or mode != args.split()[0]:
+            lines = [
+                "## Usage Footer",
+                "",
+                f"Unknown mode: `{args.split()[0]}`",
+                "",
+                "Valid modes: `off`, `tokens`, `full`.",
+            ]
+        else:
+            loop.set_response_footer_mode(session, mode)
+            status_snapshot = loop.build_response_status(session)
+            lines = [
+                "## Usage Footer",
+                "",
+                f"Selected `{mode}` for this session.",
+            ]
+            preview = build_response_footer(
+                mode=mode,
+                model=status_snapshot["model"],
+                active_target=status_snapshot["active_target"],
+                usage=status_snapshot["usage"],
+                context_window_tokens=status_snapshot["context_window_tokens"],
+                context_tokens_estimate=status_snapshot["context_tokens_estimate"],
+                route_tier=status_snapshot.get("smart_router_tier"),
+                route_model=status_snapshot.get("smart_router_model"),
+            )
+            if preview:
+                lines.extend(["", f"Preview:{preview}"])
+            else:
+                lines.extend([
+                    "",
+                    "Future replies in this session will not include a status footer.",
+                ])
+
+    return OutboundMessage(
+        channel=ctx.msg.channel,
+        chat_id=ctx.msg.chat_id,
+        content="\n".join(lines),
         metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
     )
 
@@ -207,6 +353,10 @@ async def cmd_new(ctx: CommandContext) -> OutboundMessage:
     loop = ctx.loop
     await loop._cancel_active_tasks(ctx.key)
     session = ctx.session or loop.sessions.get_or_create(ctx.key)
+    owner_profile = session.metadata.get("owner_profile") if isinstance(session.metadata, dict) else None
+    locale = owner_profile.get("preferred_language") if isinstance(owner_profile, dict) else None
+    if not isinstance(locale, str) or not locale.strip():
+        locale = None
     snapshot = session.messages[session.last_consolidated:]
     session.clear()
     loop.sessions.save(session)
@@ -215,8 +365,61 @@ async def cmd_new(ctx: CommandContext) -> OutboundMessage:
         loop._schedule_background(loop.consolidator.archive(snapshot, session_key=ctx.key))
     return OutboundMessage(
         channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
-        content="New session started.",
+        content=_t("builtin.new_session.started", locale=locale),
         metadata=dict(ctx.msg.metadata or {})
+    )
+
+
+async def cmd_context(ctx: CommandContext) -> OutboundMessage:
+    """Show or clear the current chat session context."""
+    loop = ctx.loop
+    session = ctx.session or loop.sessions.get_or_create(ctx.key)
+    raw_command = ctx.raw.strip().split(maxsplit=1)[0].split("@", 1)[0].lower()
+    args = ctx.args.strip().lower()
+    wants_clear = raw_command == "/clear" or args.split(maxsplit=1)[0:1] == ["clear"]
+
+    if not wants_clear:
+        message_count = len(session.messages)
+        content = (
+            "Context keeps this chat's recent messages for future replies.\n"
+            f"Current stored message count: {message_count}.\n\n"
+            "Use `/context clear` or `/clear` to drop this chat's stored conversation context."
+        )
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content=content,
+            metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+        )
+
+    cancelled = await loop._cancel_active_tasks(ctx.key)
+    message_count = len(session.messages)
+    removed_metadata = [key for key in CONTEXT_CLEAR_METADATA_KEYS if key in session.metadata]
+    session.clear()
+    for key in CONTEXT_CLEAR_METADATA_KEYS:
+        session.metadata.pop(key, None)
+    summaries = getattr(getattr(loop, "auto_compact", None), "_summaries", None)
+    if isinstance(summaries, dict):
+        summaries.pop(session.key, None)
+    loop.sessions.save(session)
+
+    details = [
+        f"Cleared {message_count} stored message(s) from this chat context.",
+    ]
+    if removed_metadata:
+        details.append(f"Removed {len(removed_metadata)} pending context marker(s).")
+    if cancelled:
+        details.append(f"Stopped {cancelled} active task(s) for this chat.")
+    details.append("Long-term memory and global preferences were left unchanged.")
+    return OutboundMessage(
+        channel=ctx.msg.channel,
+        chat_id=ctx.msg.chat_id,
+        content="\n".join(details),
+        metadata={
+            **dict(ctx.msg.metadata or {}),
+            "render_as": "text",
+            SESSION_LOG_MODE_METADATA_KEY: SESSION_LOG_MODE_SKIP,
+        },
     )
 
 
@@ -250,8 +453,94 @@ def _model_command_status(loop) -> str:
 
 
 async def cmd_model(ctx: CommandContext) -> OutboundMessage:
-    """Show or switch model presets."""
+    """Show or switch the active model.
+
+    When ``runtime_config`` model targets are configured (smart-router or
+    other named targets), this becomes a per-session target switcher.
+    Otherwise it falls back to the original global model-preset switcher.
+    """
     loop = ctx.loop
+    session = ctx.session or loop.sessions.get_or_create(ctx.key)
+    targets = loop.get_available_model_targets()
+    if targets:
+        return await _cmd_model_target(ctx, loop, session, targets)
+    return await _cmd_model_preset(ctx, loop)
+
+
+async def _cmd_model_target(
+    ctx: CommandContext, loop: Any, session: Session, targets: dict[str, Any]
+) -> OutboundMessage:
+    from nanobot.model_targets import DEFAULT_MODEL_TARGET_NAME, describe_model_target
+
+    active_name = loop.get_active_model_target_name(session)
+    args = ctx.args.strip().lower()
+
+    def _render_targets() -> list[str]:
+        lines: list[str] = []
+        for name, target in targets.items():
+            prefix = "*" if name == active_name else "-"
+            lines.append(f"{prefix} `{name}` — {describe_model_target(target)}")
+        return lines
+
+    if not args or args == "current":
+        current = targets.get(active_name)
+        lines = [
+            "## Model Target",
+            "",
+            f"Current target: `{active_name}`",
+        ]
+        if current is not None:
+            lines.append(f"Detail: {describe_model_target(current)}")
+        lines.extend([
+            "",
+            "Available targets:",
+            *_render_targets(),
+            "",
+            "Use `/model list` to see targets, `/model <name>` to switch, or `/model clear` to return to the startup default.",
+        ])
+    elif args == "list":
+        lines = ["## Model Targets", "", *_render_targets()]
+    elif args == "clear":
+        loop.clear_session_model_target(session)
+        active_name = loop.get_active_model_target_name(session)
+        lines = [
+            "## Model Target",
+            "",
+            f"Cleared the session override. Active target is now `{active_name}`.",
+        ]
+    else:
+        target_name = args.split()[0]
+        if target_name not in targets:
+            lines = [
+                "## Model Target",
+                "",
+                f"Unknown target: `{target_name}`",
+                "",
+                "Available targets:",
+                *_render_targets(),
+            ]
+        else:
+            loop.set_session_model_target(session, target_name)
+            selected = targets[target_name]
+            lines = [
+                "## Model Target",
+                "",
+                f"Selected `{target_name}` for this session.",
+                f"Detail: {describe_model_target(selected)}",
+            ]
+            if target_name == DEFAULT_MODEL_TARGET_NAME:
+                lines.append("This target follows the startup default configuration.")
+
+    return OutboundMessage(
+        channel=ctx.msg.channel,
+        chat_id=ctx.msg.chat_id,
+        content="\n".join(lines),
+        metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+    )
+
+
+async def _cmd_model_preset(ctx: CommandContext, loop: Any) -> OutboundMessage:
+    """Show or switch model presets."""
     args = ctx.args.strip()
     metadata = {**dict(ctx.msg.metadata or {}), "render_as": "text"}
 
@@ -300,6 +589,113 @@ async def cmd_model(ctx: CommandContext) -> OutboundMessage:
         chat_id=ctx.msg.chat_id,
         content="\n".join(lines),
         metadata=metadata,
+    )
+
+
+async def cmd_local_llm(ctx: CommandContext) -> OutboundMessage:
+    """Show or control the local LLM runtime and default local route."""
+    from nanobot.local_llm_control import LocalLlmError, default_controller
+
+    args = ctx.args.strip().lower()
+    parts = args.split()
+    action = parts[0] if parts else "status"
+    target = parts[1] if len(parts) > 1 else "qwen36"
+    controller = default_controller()
+    confirm_actions = {"restart", "stop", "use"}
+
+    def _render_status(payload: dict[str, Any]) -> str:
+        lines = [
+            "## Local LLM",
+            "",
+            f"Default: `{payload.get('default_target')}` -> {payload.get('default_model')}",
+            f"Endpoint: {payload.get('default_api_base')}",
+            "",
+        ]
+        for row in payload.get("targets", []):
+            if not isinstance(row, dict):
+                continue
+            markers: list[str] = []
+            markers.append("running" if row.get("running") else "stopped")
+            markers.append("endpoint ok" if row.get("endpoint_ok") else "endpoint unavailable")
+            if row.get("supports_vision"):
+                markers.append(_t("local_llm.status.vision_supported"))
+            elif row.get("hybrid_vision_target"):
+                markers.append(
+                    _t("local_llm.status.hybrid_ready")
+                    if row.get("hybrid_vision_ready")
+                    else _t("local_llm.status.hybrid_unavailable")
+                )
+            elif row.get("vision_check_ok"):
+                markers.append(_t("local_llm.status.vision_unsupported"))
+            else:
+                markers.append(_t("local_llm.status.vision_unavailable"))
+            if row.get("management_mode") == "broker":
+                holders = int(row.get("holder_count") or 0)
+                markers.append(_t("local_llm.status.broker"))
+                markers.append(_t("local_llm.status.holders", count=holders))
+            elif row.get("management_mode") == "on_demand":
+                markers.append(_t("local_llm.status.on_demand"))
+            if row.get("runtime_warming_up"):
+                markers.append(_t("local_llm.status.warming_up"))
+            if row.get("is_default"):
+                markers.append("default")
+            prefix = "*" if row.get("is_default") else "-"
+            lines.append(f"{prefix} `{row.get('name')}` — {', '.join(markers)}")
+            holders = row.get("holders")
+            if isinstance(holders, list) and holders:
+                lines.append(f"  holders: {', '.join(str(holder) for holder in holders)}")
+            hybrid_message = str(row.get("hybrid_vision_check_message") or "").strip()
+            vision_message = str(row.get("vision_check_message") or "").strip()
+            if row.get("hybrid_vision_target") and hybrid_message:
+                lines.append(f"  hybrid: {hybrid_message}")
+            elif vision_message:
+                lines.append(f"  vision: {vision_message}")
+        smart_router_local_message = str(payload.get("smart_router_local_image_message") or "").strip()
+        if smart_router_local_message:
+            lines.extend(["", f"smart-router-local: {smart_router_local_message}"])
+        lines.extend([
+            "",
+            "Use `/local-llm use qwen36` to change the default local LLM.",
+            "Use `/model smart-router-local` to force the local tier for this chat.",
+        ])
+        return "\n".join(lines)
+
+    try:
+        if action in ("", "status", "list"):
+            content = _render_status(controller.status())
+        else:
+            if action == "confirm":
+                action = parts[1] if len(parts) > 1 else ""
+                target = parts[2] if len(parts) > 2 else "qwen36"
+            elif action in confirm_actions:
+                content = _t("local_llm.confirm.required", action=action, target=target)
+                return OutboundMessage(
+                    channel=ctx.msg.channel,
+                    chat_id=ctx.msg.chat_id,
+                    content=content,
+                    metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+                )
+            result = controller.run_action(action, target)
+            lines = [
+                "## Local LLM",
+                "",
+                result.get("message") or f"{action} {target} completed.",
+            ]
+            if result.get("requires_restart"):
+                lines.extend([
+                    "",
+                    "Restart Nanobot to apply this to new runtime config.",
+                    "Use `/restart` when ready.",
+                ])
+            content = "\n".join(lines)
+    except LocalLlmError as exc:
+        content = "\n".join(["## Local LLM", "", str(exc)])
+
+    return OutboundMessage(
+        channel=ctx.msg.channel,
+        chat_id=ctx.msg.chat_id,
+        content=content,
+        metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
     )
 
 
@@ -722,10 +1118,18 @@ def register_builtin_commands(router: CommandRouter) -> None:
     router.priority("/stop", cmd_stop)
     router.priority("/restart", cmd_restart)
     router.priority("/status", cmd_status)
+    router.priority("/clear", cmd_context)
     router.exact("/new", cmd_new)
+    router.exact("/clear", cmd_context)
+    router.exact("/context", cmd_context)
+    router.prefix("/context ", cmd_context)
     router.exact("/status", cmd_status)
     router.exact("/model", cmd_model)
     router.prefix("/model ", cmd_model)
+    router.exact("/local-llm", cmd_local_llm)
+    router.prefix("/local-llm ", cmd_local_llm)
+    router.exact("/usage", cmd_usage)
+    router.prefix("/usage ", cmd_usage)
     router.exact("/history", cmd_history)
     router.prefix("/history ", cmd_history)
     router.exact("/goal", cmd_goal)

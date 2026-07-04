@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from nanobot.i18n import translate as _t
 from nanobot.session.manager import Session, SessionManager
 
 # Test constants
@@ -531,7 +532,7 @@ class TestNewCommandArchival:
         response = await loop._process_message(new_msg)
 
         assert response is not None
-        assert "new session started" in response.content.lower()
+        assert _t("builtin.new_session.started", locale="ko") == response.content
 
         session_after = loop.sessions.get_or_create("cli:test")
         assert len(session_after.messages) == 0
@@ -566,7 +567,7 @@ class TestNewCommandArchival:
         response = await loop._process_message(new_msg)
 
         assert response is not None
-        assert "new session started" in response.content.lower()
+        assert _t("builtin.new_session.started", locale="ko") == response.content
 
         await loop.close_mcp()
         assert archived_count == 3
@@ -593,7 +594,7 @@ class TestNewCommandArchival:
         response = await loop._process_message(new_msg)
 
         assert response is not None
-        assert "new session started" in response.content.lower()
+        assert _t("builtin.new_session.started", locale="ko") == response.content
         assert loop.sessions.get_or_create("cli:test").messages == []
 
     @pytest.mark.asyncio

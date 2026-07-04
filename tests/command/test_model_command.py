@@ -149,8 +149,8 @@ async def test_model_command_registered_as_exact_and_prefix(tmp_path) -> None:
 def test_model_command_in_help_and_palette() -> None:
     palette = builtin_command_palette()
 
-    assert any(item["command"] == "/model" and item["arg_hint"] == "[preset]" for item in palette)
-    assert "/model [preset]" in build_help_text()
+    assert any(item["command"] == "/model" and item["arg_hint"] == "[name|list|clear]" for item in palette)
+    assert "/model [name|list|clear]" in build_help_text()
 
 
 @pytest.mark.asyncio
