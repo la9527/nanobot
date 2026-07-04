@@ -430,3 +430,54 @@ Clients connect with `?token=my-shared-secret&client_id=alice`.
 ```
 
 Clients connect to `ws://127.0.0.1:8765/chat/ws?client_id=...`. Trailing slashes are normalized, so `/chat/ws/` works the same.
+
+## Tailscale-only External Access
+
+The WebUI HTTP routes and the WebSocket upgrade handshake are restricted to
+localhost and Tailscale address space (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`)
+at the application layer, regardless of host binding. If you also want to
+expose the service on a non-loopback interface for Tailscale peers while
+keeping general external access blocked at the OS firewall level, use this
+pattern:
+
+1. Bind the websocket channel to all interfaces in `~/.nanobot/config.json`:
+
+```json
+{
+  "channels": {
+    "websocket": {
+      "enabled": true,
+      "host": "0.0.0.0",
+      "port": 8765
+    }
+  }
+}
+```
+
+2. Apply host firewall rules (macOS `pf`) to allow only localhost + Tailscale ranges, run from the repo root:
+
+```bash
+sudo scripts/apply-webui-tailscale-pf.sh
+```
+
+3. Verify:
+
+```bash
+curl -i http://127.0.0.1:8765/webui/bootstrap
+TS_IP=$(tailscale ip -4 | head -n 1)
+curl -i "http://${TS_IP}:8765/webui/bootstrap"
+```
+
+Rollback:
+
+```bash
+sudo scripts/remove-webui-tailscale-pf.sh
+```
+
+Notes:
+- WebUI HTTP routes and the WebSocket handshake are restricted to
+  localhost/Tailscale clients in current runtime code, independent of the pf
+  rules above; the pf anchor is an additional OS-level layer, not a
+  replacement for the application-layer check.
+- `host: "127.0.0.1"` keeps the service local-only.
+- `host: "0.0.0.0"` is required for remote Tailscale clients to reach the port at all.
