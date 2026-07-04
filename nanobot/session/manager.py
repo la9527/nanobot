@@ -9,11 +9,17 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from loguru import logger
 
+from nanobot.automation_results import ActionResult
 from nanobot.config.paths import get_legacy_sessions_dir
+from nanobot.heartbeat.proactive import (
+    PROACTIVE_DEDUPE_BASELINE_METADATA_KEY,
+    proactive_dedupe_baseline_from_summary,
+)
+from nanobot.session.continuity import ACTION_RESULT_METADATA_KEY, normalized_session_metadata
 from nanobot.utils.helpers import (
     ensure_dir,
     estimate_message_tokens,
@@ -148,6 +154,36 @@ class Session:
         self.messages.append(msg)
         self.updated_at = datetime.now()
 
+    @staticmethod
+    def _filter_channel_deliveries(
+        messages: list[dict[str, Any]],
+        *,
+        channel_delivery_mode: Literal["all", "tail-only"],
+    ) -> list[dict[str, Any]]:
+        """Control which proactive channel deliveries are replayed to the LLM.
+
+        Proactive pushes are persisted into the channel session so a user can
+        reply directly to the latest delivery. For normal turns, however, older
+        briefings or reminders should not keep re-entering the prompt as if they
+        were part of the ongoing conversation.
+        """
+        if channel_delivery_mode == "all" or not messages:
+            return messages
+
+        keep_tail_delivery = bool(
+            messages[-1].get("role") == "assistant"
+            and messages[-1].get("_channel_delivery")
+        )
+        tail_index = len(messages) - 1 if keep_tail_delivery else -1
+
+        filtered: list[dict[str, Any]] = []
+        for idx, message in enumerate(messages):
+            if message.get("role") == "assistant" and message.get("_channel_delivery"):
+                if idx != tail_index:
+                    continue
+            filtered.append(message)
+        return filtered
+
     def get_history(
         self,
         max_messages: int = 120,
@@ -155,6 +191,7 @@ class Session:
         max_tokens: int = 0,
         include_timestamps: bool = False,
         extend_to_user: bool = False,
+        channel_delivery_mode: Literal["all", "tail-only"] = "all",
     ) -> list[dict[str, Any]]:
         """Return unconsolidated messages for LLM input.
 
@@ -184,6 +221,11 @@ class Session:
         start = find_legal_message_start(sliced)
         if start:
             sliced = sliced[start:]
+
+        sliced = self._filter_channel_deliveries(
+            sliced,
+            channel_delivery_mode=channel_delivery_mode,
+        )
 
         out: list[dict[str, Any]] = []
         for message in sliced:
@@ -415,9 +457,12 @@ class SessionManager:
     """
 
     def __init__(self, workspace: Path):
+        from nanobot.agent.memory import MemoryStore
+
         self.workspace = workspace
         self.sessions_dir = ensure_dir(self.workspace / "sessions")
         self.legacy_sessions_dir = get_legacy_sessions_dir()
+        self._memory_store = MemoryStore(workspace)
         self._cache: dict[str, Session] = {}
 
     @staticmethod
@@ -449,6 +494,12 @@ class SessionManager:
         session = self._load(key)
         if session is None:
             session = Session(key=key)
+        session.metadata = normalized_session_metadata(
+            session.key,
+            session.metadata,
+            last_confirmed_at=session.updated_at.isoformat(),
+            user_profile_source=self._memory_store.read_user(),
+        )
 
         self._cache[key] = session
         return session
@@ -491,7 +542,7 @@ class SessionManager:
                     else:
                         messages.append(data)
 
-            return Session(
+            session = Session(
                 key=key,
                 messages=messages,
                 created_at=created_at or datetime.now(),
@@ -499,6 +550,13 @@ class SessionManager:
                 metadata=metadata,
                 last_consolidated=last_consolidated
             )
+            session.metadata = normalized_session_metadata(
+                session.key,
+                session.metadata,
+                last_confirmed_at=session.updated_at.isoformat(),
+                user_profile_source=self._memory_store.read_user(),
+            )
+            return session
         except Exception as e:
             logger.warning("Failed to load session {}: {}", key, e)
             repaired = self._repair(key)
@@ -549,7 +607,7 @@ class SessionManager:
             if not messages and not metadata:
                 return None
 
-            return Session(
+            session = Session(
                 key=key,
                 messages=messages,
                 created_at=created_at or datetime.now(),
@@ -557,17 +615,28 @@ class SessionManager:
                 metadata=metadata,
                 last_consolidated=last_consolidated
             )
+            session.metadata = normalized_session_metadata(
+                session.key,
+                session.metadata,
+                last_confirmed_at=session.updated_at.isoformat(),
+                user_profile_source=self._memory_store.read_user(),
+            )
+            return session
         except Exception as e:
             logger.warning("Repair failed for session {}: {}", key, e)
             return None
 
-    @staticmethod
-    def _session_payload(session: Session) -> dict[str, Any]:
+    def _session_payload(self, session: Session) -> dict[str, Any]:
         return {
             "key": session.key,
             "created_at": session.created_at.isoformat(),
             "updated_at": session.updated_at.isoformat(),
-            "metadata": session.metadata,
+            "metadata": normalized_session_metadata(
+                session.key,
+                session.metadata,
+                last_confirmed_at=session.updated_at.isoformat(),
+                user_profile_source=self._memory_store.read_user(),
+            ),
             "messages": session.messages,
         }
 
@@ -583,6 +652,12 @@ class SessionManager:
         """
         path = self._get_session_path(session.key)
         tmp_path = path.with_suffix(".jsonl.tmp")
+        session.metadata = normalized_session_metadata(
+            session.key,
+            session.metadata,
+            last_confirmed_at=session.updated_at.isoformat(),
+            user_profile_source=self._memory_store.read_user(),
+        )
 
         try:
             with open(tmp_path, "w", encoding="utf-8") as f:
@@ -619,6 +694,43 @@ class SessionManager:
             raise
 
         self._cache[session.key] = session
+
+    def set_action_result(self, session: Session, action_result: "ActionResult | dict[str, Any]") -> None:
+        """Persist the latest normalized action result on session metadata."""
+        if isinstance(action_result, ActionResult):
+            payload = action_result.model_dump(mode="json")
+        else:
+            payload = dict(action_result)
+        session.metadata[ACTION_RESULT_METADATA_KEY] = payload
+        session.updated_at = datetime.now()
+
+    def clear_action_result(self, session: Session) -> None:
+        """Remove the latest action result from session metadata."""
+        if session.metadata.pop(ACTION_RESULT_METADATA_KEY, None) is not None:
+            session.updated_at = datetime.now()
+
+    def set_approval_summary(self, session: Session, approval_summary: dict[str, Any]) -> None:
+        """Persist the latest approval summary on session metadata."""
+        session.metadata["approval_summary"] = dict(approval_summary)
+        session.updated_at = datetime.now()
+
+    def clear_approval_summary(self, session: Session) -> None:
+        """Remove the latest approval summary from session metadata."""
+        if session.metadata.pop("approval_summary", None) is not None:
+            session.updated_at = datetime.now()
+
+    def set_proactive_summary(self, session: Session, proactive_summary: dict[str, Any]) -> None:
+        """Persist the latest proactive delivery or suppression summary on session metadata."""
+        session.metadata["proactive_summary"] = dict(proactive_summary)
+        baseline = proactive_dedupe_baseline_from_summary(proactive_summary)
+        if baseline is not None:
+            session.metadata[PROACTIVE_DEDUPE_BASELINE_METADATA_KEY] = baseline
+        session.updated_at = datetime.now()
+
+    def clear_proactive_summary(self, session: Session) -> None:
+        """Remove the latest proactive summary from session metadata."""
+        if session.metadata.pop("proactive_summary", None) is not None:
+            session.updated_at = datetime.now()
 
     def flush_all(self) -> int:
         """Re-save every cached session with fsync for durable shutdown.

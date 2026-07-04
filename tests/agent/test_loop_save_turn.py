@@ -951,7 +951,12 @@ async def test_process_message_uses_explicit_session_metadata_for_goal_context(
     assert result.content == "ok"
     kwargs = loop.context.build_messages.call_args.kwargs
     assert kwargs["chat_id"] == "chat-with-goal"
-    assert kwargs["session_metadata"] is system_session.metadata
+    # Session metadata is normalized (deep-copied, with a fresh timestamp) on
+    # every save, so the snapshot passed to build_messages will not be
+    # byte-identical to the session's later state. What matters here is that
+    # the "system" session's own metadata was used, not the unrelated
+    # "chat-with-goal" session's goal state.
+    assert kwargs["session_metadata"]["continuity"]["channel_kind"] == "system"
     assert GOAL_STATE_KEY not in kwargs["session_metadata"]
 
 

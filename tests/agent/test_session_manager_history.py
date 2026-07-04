@@ -1,3 +1,14 @@
+from pathlib import Path
+
+from nanobot.automation_results import (
+    ActionFailure,
+    CalendarCreateEventDetails,
+    CalendarCreateEventResult,
+    CalendarEventPreview,
+    MailCreateDraftDetails,
+    MailCreateDraftResult,
+    MailDraftPreview,
+)
 from nanobot.session.manager import Session, SessionManager
 
 
@@ -266,6 +277,95 @@ def test_get_history_preserves_reasoning_content():
     ]
 
 
+def test_session_manager_persists_minimal_continuity_metadata(tmp_path: Path):
+    manager = SessionManager(tmp_path)
+    session = manager.get_or_create("telegram:-1001:topic:42")
+
+    manager.save(session)
+    restored = manager.read_session_file("telegram:-1001:topic:42")
+
+    assert restored is not None
+    continuity = restored["metadata"]["continuity"]
+    assert continuity == {
+        "canonical_owner_id": "primary-user",
+        "channel_kind": "telegram",
+        "external_identity": "-1001",
+        "trust_level": "linked",
+        "last_confirmed_at": session.updated_at.isoformat(),
+    }
+
+
+def test_session_manager_persists_action_result_metadata(tmp_path: Path):
+    manager = SessionManager(tmp_path)
+    session = manager.get_or_create("websocket:mail-demo")
+
+    manager.set_action_result(
+        session,
+        MailCreateDraftResult(
+            action_id="mail-draft-1",
+            status="completed",
+            title="Draft ready",
+            summary="Draft created for alice@example.com.",
+            next_step="Review the draft before requesting send approval.",
+            details=MailCreateDraftDetails(
+                draft_id="draft-1",
+                preview=MailDraftPreview(
+                    subject="Budget follow-up",
+                    body_preview="Sharing the revised budget.",
+                    to_recipients=["alice@example.com"],
+                ),
+            ),
+        ),
+    )
+
+    manager.save(session)
+    restored = manager.read_session_file("websocket:mail-demo")
+
+    assert restored is not None
+    action_result = restored["metadata"]["action_result"]
+    assert action_result["title"] == "Draft ready"
+    assert action_result["details"]["draft_id"] == "draft-1"
+    task_summary = restored["metadata"]["task_summary"]
+    assert task_summary["title"] == "Draft ready"
+    assert task_summary["status"] == "completed"
+    assert task_summary["next_step_hint"] == "Review the draft before requesting send approval."
+
+
+def test_rejected_approval_action_does_not_become_blocked_task(tmp_path: Path) -> None:
+    manager = SessionManager(tmp_path)
+    session = manager.get_or_create("telegram:calendar-demo")
+
+    manager.set_action_result(
+        session,
+        CalendarCreateEventResult(
+            action_id="calendar-create-denied-1",
+            status="rejected",
+            title="Calendar create cancelled",
+            summary="The pending calendar create request was cancelled.",
+            next_step="Review the proposed event and request approval again when ready.",
+            details=CalendarCreateEventDetails(
+                preview=CalendarEventPreview(
+                    title="Nanobot webui calendar validation",
+                    start_at="2026-05-04T14:00:00+09:00",
+                    end_at="2026-05-04T14:30:00+09:00",
+                ),
+            ),
+            error=ActionFailure(
+                code="approval_rejected",
+                message="The pending calendar create request was cancelled.",
+            ),
+        ),
+    )
+
+    manager.save(session)
+    restored = manager.read_session_file("telegram:calendar-demo")
+
+    assert restored is not None
+    task_summary = restored["metadata"]["task_summary"]
+    assert task_summary["title"] == "Calendar create cancelled"
+    assert task_summary["status"] == "completed"
+
+
 def test_get_history_annotates_user_turns_but_not_assistant_turns():
     """Only user turns carry the timestamp prefix.
 
@@ -325,6 +425,55 @@ def test_get_history_does_not_annotate_proactive_assistant_deliveries_with_times
             "role": "user",
             "content": "[Message Time: 2026-04-26T18:00:00]\n好",
         },
+    ]
+
+
+def test_get_history_tail_only_drops_stale_channel_deliveries():
+    session = Session(key="test:stale-proactive")
+    session.messages.extend(
+        [
+            {"role": "user", "content": "Earlier question"},
+            {"role": "assistant", "content": "Earlier answer"},
+            {
+                "role": "assistant",
+                "content": "오늘 점심 뉴스 브리핑입니다.",
+                "_channel_delivery": True,
+            },
+            {"role": "user", "content": "What's the weather?"},
+            {"role": "assistant", "content": "It's sunny."},
+        ]
+    )
+
+    history = session.get_history(max_messages=500, channel_delivery_mode="tail-only")
+
+    assert history == [
+        {"role": "user", "content": "Earlier question"},
+        {"role": "assistant", "content": "Earlier answer"},
+        {"role": "user", "content": "What's the weather?"},
+        {"role": "assistant", "content": "It's sunny."},
+    ]
+
+
+def test_get_history_tail_only_keeps_latest_channel_delivery_for_reply_context():
+    session = Session(key="test:tail-proactive")
+    session.messages.extend(
+        [
+            {"role": "user", "content": "Earlier question"},
+            {"role": "assistant", "content": "Earlier answer"},
+            {
+                "role": "assistant",
+                "content": "오늘 저녁 뉴스 브리핑입니다.",
+                "_channel_delivery": True,
+            },
+        ]
+    )
+
+    history = session.get_history(max_messages=500, channel_delivery_mode="tail-only")
+
+    assert history == [
+        {"role": "user", "content": "Earlier question"},
+        {"role": "assistant", "content": "Earlier answer"},
+        {"role": "assistant", "content": "오늘 저녁 뉴스 브리핑입니다."},
     ]
 
 

@@ -229,7 +229,7 @@ class TestRepairCorruptFile:
         payload = mgr.read_session_file("test:read-repair")
         assert payload is not None
         assert payload["key"] == "test:read-repair"
-        assert payload["metadata"] == {"source": "repair"}
+        assert payload["metadata"]["source"] == "repair"
         assert payload["messages"] == [{"role": "user", "content": "survived"}]
 
     def test_list_sessions_keeps_repaired_corrupt_file(self, tmp_path: Path):
