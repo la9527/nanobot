@@ -28,6 +28,10 @@ from nanobot.security.workspace_access import (
     WorkspaceScopeError,
 )
 from nanobot.session.goal_state import goal_state_ws_blob
+from nanobot.session.memory_corrections import (
+    apply_memory_correction,
+    parse_memory_correction_message,
+)
 from nanobot.session.webui_turns import websocket_turn_wall_started_at
 from nanobot.utils.media_decode import (
     FileSizeExceeded,
@@ -351,6 +355,48 @@ class WebSocketChannel(BaseChannel):
         await self._maybe_push_active_goal_state(chat_id)
         await self._maybe_push_turn_run_wall_clock(chat_id)
 
+    async def _maybe_apply_memory_correction(
+        self,
+        *,
+        chat_id: str,
+        content: str,
+        session_key: str,
+    ) -> bool:
+        """Intercept an explicit memory-correction message before it reaches the agent.
+
+        Returns True when *content* was a recognized memory-correction command
+        (handled directly, with a reply sent back over this channel) so the
+        caller should skip the normal ``_handle_message`` turn.
+        """
+        session_manager = self.gateway.session_manager
+        if session_manager is None:
+            return False
+
+        request = parse_memory_correction_message(content)
+        if request is None:
+            return False
+
+        session = session_manager.get_or_create(session_key)
+        owner_profile = session.metadata.get("owner_profile") if isinstance(session.metadata, dict) else None
+        locale = None
+        if isinstance(owner_profile, dict):
+            preferred_language = owner_profile.get("preferred_language")
+            if isinstance(preferred_language, str) and preferred_language.strip():
+                locale = preferred_language.strip()
+        result = apply_memory_correction(session_manager.workspace, request, locale=locale or "ko-KR")
+        session.add_message("user", content)
+        session.add_message("assistant", result.reply)
+        session_manager.save(session)
+
+        await self.send(
+            OutboundMessage(
+                channel="websocket",
+                chat_id=chat_id,
+                content=result.reply,
+            )
+        )
+        return True
+
     async def _send_event(self, connection: Any, event: str, **fields: Any) -> None:
         """Send a control event (attached, error, ...) to a single connection."""
         payload: dict[str, Any] = {"event": event}
@@ -558,6 +604,12 @@ class WebSocketChannel(BaseChannel):
                 content = _parse_inbound_payload(raw)
                 if content is None:
                     continue
+                if await self._maybe_apply_memory_correction(
+                    chat_id=default_chat_id,
+                    content=content,
+                    session_key=f"websocket:{default_chat_id}",
+                ):
+                    continue
                 # WebSocket already authenticates at handshake time (token),
                 # so pairing is not applicable. Treat as non-DM to avoid
                 # sending pairing codes to an already-authenticated client.
@@ -747,6 +799,14 @@ class WebSocketChannel(BaseChannel):
             if not content.strip() and not media_paths:
                 await self._send_event(connection, "error", detail="missing content")
                 return
+
+            if not media_paths and await self._maybe_apply_memory_correction(
+                chat_id=cid,
+                content=content,
+                session_key=f"websocket:{cid}",
+            ):
+                return
+
             scope = await self._workspace_scope_or_error(
                 connection,
                 lambda: self._workspaces.scope_for_message(

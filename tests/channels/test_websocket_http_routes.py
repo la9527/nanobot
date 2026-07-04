@@ -14,6 +14,7 @@ from urllib.parse import quote, urlencode
 
 import httpx
 import pytest
+import websockets
 
 from nanobot.channels.websocket import WebSocketChannel, WebSocketConfig
 from nanobot.config.schema import Config
@@ -1833,6 +1834,68 @@ async def test_session_model_target_routes_reject_unknown_session(
             "http://127.0.0.1:29946/api/sessions/websocket:missing/model-target", token
         )
         assert resp.status_code == 404
+    finally:
+        await channel.stop()
+        await server_task
+
+
+@pytest.mark.asyncio
+async def test_memory_correction_message_is_intercepted_before_agent_turn(
+    bus: MagicMock, tmp_path: Path
+) -> None:
+    sm = SessionManager(tmp_path)
+    channel = _ch(bus, session_manager=sm, port=29947)
+    server_task = asyncio.create_task(channel.start())
+    await asyncio.sleep(0.3)
+    try:
+        async with websockets.connect(
+            f"ws://127.0.0.1:29947/?client_id=memtest"
+        ) as client:
+            ready = json.loads(await client.recv())
+            chat_id = ready["chat_id"]
+
+            await client.send(json.dumps({
+                "type": "message",
+                "chat_id": chat_id,
+                "content": "기억해\n내용: Telegram 채널을 우선 사용한다",
+            }))
+            reply = json.loads(await client.recv())
+            assert reply["event"] == "message"
+            assert "Telegram" in reply["text"]
+
+        # The correction short-circuited before reaching the agent loop.
+        bus.publish_inbound.assert_not_awaited()
+
+        session = sm.get_or_create(f"websocket:{chat_id}")
+        assert [m["role"] for m in session.messages] == ["user", "assistant"]
+    finally:
+        await channel.stop()
+        await server_task
+
+
+@pytest.mark.asyncio
+async def test_ordinary_message_still_reaches_agent_turn(
+    bus: MagicMock, tmp_path: Path
+) -> None:
+    sm = SessionManager(tmp_path)
+    channel = _ch(bus, session_manager=sm, port=29948)
+    server_task = asyncio.create_task(channel.start())
+    await asyncio.sleep(0.3)
+    try:
+        async with websockets.connect(
+            f"ws://127.0.0.1:29948/?client_id=memtest2"
+        ) as client:
+            ready = json.loads(await client.recv())
+            chat_id = ready["chat_id"]
+
+            await client.send(json.dumps({
+                "type": "message",
+                "chat_id": chat_id,
+                "content": "오늘 날씨 어때?",
+            }))
+            await asyncio.sleep(0.1)
+
+        bus.publish_inbound.assert_awaited()
     finally:
         await channel.stop()
         await server_task
