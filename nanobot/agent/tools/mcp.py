@@ -1012,7 +1012,12 @@ def runtime_lines(
     return lines
 
 
-async def connect_missing_servers(state: Any, registry: ToolRegistry) -> None:
+async def connect_missing_servers(
+    state: Any,
+    registry: ToolRegistry,
+    *,
+    followup_callback: Callable[..., Awaitable[None]] | None = None,
+) -> None:
     """Connect configured MCP servers that are not currently live."""
     missing_servers = {
         name: cfg for name, cfg in state._mcp_servers.items() if name not in state._mcp_stacks
@@ -1021,7 +1026,7 @@ async def connect_missing_servers(state: Any, registry: ToolRegistry) -> None:
         return
     state._mcp_connecting = True
     try:
-        connected = await connect_mcp_servers(missing_servers, registry)
+        connected = await connect_mcp_servers(missing_servers, registry, followup_callback=followup_callback)
         state._mcp_stacks.update(connected)
         _attach_reconnect_handlers(state, registry, connected)
         state._mcp_connected = bool(state._mcp_stacks)

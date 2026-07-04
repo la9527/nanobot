@@ -40,8 +40,13 @@ def runtime_lines(state: Any, msg: Any, workspace: Path, *, skip: bool = False) 
     ]
 
 
-async def connect_mcp(state: Any, tools: ToolRegistry) -> None:
-    await mcp_tools.connect_missing_servers(state, tools)
+async def connect_mcp(
+    state: Any,
+    tools: ToolRegistry,
+    *,
+    followup_callback: Any | None = None,
+) -> None:
+    await mcp_tools.connect_missing_servers(state, tools, followup_callback=followup_callback)
 
 
 async def handle_runtime_control(state: Any, msg: InboundMessage, tools: ToolRegistry) -> bool:

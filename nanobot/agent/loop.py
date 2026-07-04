@@ -42,6 +42,7 @@ from nanobot.bus.runtime_events import (
 )
 from nanobot.command import CommandContext, CommandRouter, register_builtin_commands
 from nanobot.config.schema import AgentDefaults, ModelPresetConfig
+from nanobot.i18n import translate as _t
 from nanobot.cron.session_turns import (
     cron_history_overrides,
 )
@@ -305,6 +306,7 @@ class AgentLoop:
         self._mcp_connecting = False
         self._active_tasks: dict[str, list[asyncio.Task]] = {}  # session_key -> tasks
         self._background_tasks: list[asyncio.Task] = []
+        self._mcp_followup_tasks: dict[str, asyncio.Task] = {}
         self._session_locks: dict[str, asyncio.Lock] = {}
         # Per-session pending queues for mid-turn message injection.
         # When a session has an active task, new messages for that session
@@ -609,7 +611,7 @@ class AgentLoop:
 
     async def _connect_mcp(self) -> None:
         """Connect configured MCP servers."""
-        await agent_context.connect_mcp(self, self.tools)
+        await agent_context.connect_mcp(self, self.tools, followup_callback=self._handle_mcp_tool_followup)
 
     def _set_tool_context(
         self, channel: str, chat_id: str,
@@ -1227,11 +1229,154 @@ class AgentLoop:
                 logger.debug("MCP server '{}' cleanup error (can be ignored)", name)
         self._mcp_stacks.clear()
 
-    def _schedule_background(self, coro) -> None:
+    def _schedule_background(self, coro) -> asyncio.Task:
         """Schedule a coroutine as a tracked background task (drained on shutdown)."""
         task = asyncio.create_task(coro)
         self._background_tasks.append(task)
         task.add_done_callback(self._background_tasks.remove)
+        return task
+
+    _PHOTOS_FOLLOWUP_POLL_INTERVAL_SECONDS = 3.0
+    _PHOTOS_FOLLOWUP_MAX_POLLS = 120
+
+    @staticmethod
+    def _parse_mcp_text_payload(result: Any) -> dict[str, Any] | None:
+        content = getattr(result, "content", None)
+        if not isinstance(content, list):
+            return None
+        parts: list[str] = []
+        for block in content:
+            text = getattr(block, "text", None)
+            if isinstance(text, str):
+                parts.append(text)
+            else:
+                parts.append(str(block))
+        if not parts:
+            return None
+        import json
+
+        try:
+            parsed = json.loads("\n".join(parts))
+        except json.JSONDecodeError:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
+    def _session_locale(self, session_key: str) -> str | None:
+        session = self.sessions.get_or_create(session_key)
+        metadata = session.metadata if isinstance(session.metadata, dict) else None
+        owner_profile = metadata.get("owner_profile") if isinstance(metadata, dict) else None
+        if isinstance(owner_profile, dict):
+            preferred_language = owner_profile.get("preferred_language")
+            if isinstance(preferred_language, str) and preferred_language.strip():
+                return preferred_language.strip()
+        return None
+
+    def _render_photos_followup_content(
+        self,
+        *,
+        locale: str | None,
+        run_id: str,
+        summary: dict[str, Any],
+    ) -> str:
+        import json
+
+        compact_summary = json.dumps(summary, ensure_ascii=False, sort_keys=True)
+        return _t(
+            "photos.followup.job_ready",
+            locale=locale,
+            job_id=run_id,
+            status=str(summary.get("status") or ""),
+            action=str(summary.get("action") or "summary"),
+            target_album_name=str(summary.get("target_album_name") or ""),
+            summary_json=compact_summary,
+        )
+
+    @staticmethod
+    def _subagent_outbound_metadata(key: str, metadata: dict[str, Any] | None) -> dict[str, Any]:
+        outbound_metadata: dict[str, Any] = {}
+        if key.startswith("slack:") and key.count(":") >= 2:
+            outbound_metadata["slack"] = {"thread_ts": key.split(":", 2)[2]}
+        if isinstance(metadata, dict) and (origin_message_id := metadata.get("origin_message_id")):
+            outbound_metadata["origin_message_id"] = origin_message_id
+        return outbound_metadata
+
+    async def _poll_mcp_photo_followup(
+        self,
+        *,
+        run_id: str,
+        channel: str,
+        chat_id: str,
+        session_key: str,
+        message_id: str | None,
+        mcp_session: Any,
+    ) -> None:
+        locale = self._session_locale(session_key)
+        try:
+            for _ in range(self._PHOTOS_FOLLOWUP_MAX_POLLS):
+                result = await mcp_session.call_tool(
+                    "photos_query",
+                    arguments={"action": "result_summary", "options": {"run_id": run_id}},
+                )
+                summary = self._parse_mcp_text_payload(result)
+                if isinstance(summary, dict):
+                    status = str(summary.get("status") or "")
+                    terminal = bool(summary.get("terminal")) or status in {"completed", "failed", "cancelled"}
+                    if terminal:
+                        metadata: dict[str, Any] = {
+                            "injected_event": "subagent_result",
+                            "subagent_task_id": f"photos-{run_id}",
+                            "subagent_delivery_mode": "direct",
+                        }
+                        if message_id:
+                            metadata["origin_message_id"] = message_id
+                        await self.bus.publish_inbound(
+                            InboundMessage(
+                                channel="system",
+                                sender_id="subagent",
+                                chat_id=f"{channel}:{chat_id}",
+                                content=self._render_photos_followup_content(
+                                    locale=locale,
+                                    run_id=run_id,
+                                    summary=summary,
+                                ),
+                                session_key_override=session_key,
+                                metadata=metadata,
+                            )
+                        )
+                        return
+                await asyncio.sleep(self._PHOTOS_FOLLOWUP_POLL_INTERVAL_SECONDS)
+        except Exception:
+            logger.exception("Photo MCP follow-up polling failed for {}", run_id)
+        finally:
+            self._mcp_followup_tasks.pop(run_id, None)
+
+    async def _handle_mcp_tool_followup(
+        self,
+        *,
+        tool_name: str,
+        payload: dict[str, Any],
+        channel: str,
+        chat_id: str,
+        session_key: str,
+        message_id: str | None,
+        metadata: dict[str, Any] | None,
+        mcp_session: Any,
+    ) -> None:
+        del tool_name, metadata
+        run_id = str(payload.get("run_id") or payload.get("job_id") or "")
+        if not run_id or run_id in self._mcp_followup_tasks:
+            return
+        task = self._schedule_background(
+            self._poll_mcp_photo_followup(
+                run_id=run_id,
+                channel=channel,
+                chat_id=chat_id,
+                session_key=session_key,
+                message_id=message_id,
+                mcp_session=mcp_session,
+            )
+        )
+        self._mcp_followup_tasks[run_id] = task
 
     def stop(self) -> None:
         """Stop the agent loop."""
