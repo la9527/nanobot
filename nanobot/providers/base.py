@@ -151,6 +151,7 @@ class LLMResponse:
     error_code: str | None = None  # Provider/code semantic, e.g. rate_limit_exceeded.
     error_retry_after_s: float | None = None
     error_should_retry: bool | None = None
+    provider_metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
     def has_tool_calls(self) -> bool:
@@ -507,6 +508,9 @@ class LLMProvider(ABC):
                 if role == "assistant":
                     prev_has_tools = bool(prev.get("tool_calls"))
                     curr_has_tools = bool(msg.get("tool_calls"))
+                    if prev_has_tools and curr_has_tools:
+                        merged.append(dict(msg))
+                        continue
                     if curr_has_tools:
                         merged[-1] = dict(msg)
                         continue

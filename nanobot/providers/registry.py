@@ -127,6 +127,14 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         backend="openai_compat",
         is_direct=True,
     ),
+    ProviderSpec(
+        name="rapid_mlx",
+        keywords=("rapid-mlx", "rapid_mlx", "rapidmlx"),
+        env_key="",
+        display_name="Rapid-MLX",
+        backend="openai_compat",
+        is_local=True,
+    ),
 
     # === Azure OpenAI (direct API calls with API version 2024-10-21) =====
     ProviderSpec(
