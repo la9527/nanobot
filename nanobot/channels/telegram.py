@@ -403,13 +403,17 @@ class TelegramChannel(BaseChannel):
     BOT_COMMANDS = [
         BotCommand("start", "Start the bot"),
         BotCommand("new", "Start a new conversation"),
+        BotCommand("clear", "Clear this chat's stored context"),
+        BotCommand("context", "Show or clear stored chat context"),
         BotCommand("stop", "Stop the current task"),
         BotCommand("restart", "Restart the bot"),
         BotCommand("status", "Show bot status"),
+        BotCommand("usage", "Show or change the reply footer mode"),
         BotCommand("history", "Show recent conversation messages"),
         BotCommand("goal", "Start a sustained objective (long-running task)"),
         BotCommand("pairing", "Manage DM pairing (approve/deny/list)"),
         BotCommand("model", "Switch runtime model preset"),
+        BotCommand("local_llm", "Manage local LLM runtime"),
         BotCommand("skill", "List enabled skills"),
         BotCommand("dream", "Run Dream memory consolidation now"),
         BotCommand("dream_log", "Show the latest Dream memory change"),
@@ -420,7 +424,7 @@ class TelegramChannel(BaseChannel):
     # Regex for slash commands routed to AgentLoop via ``_forward_command``.
     # Hyphenated ``dream-*`` commands stay on a separate handler (below).
     TELEGRAM_BUS_SLASH_COMMAND_RE = re.compile(
-        r"^/(?:new|stop|restart|status|dream|history|goal|pairing|model|skill)(?:@\w+)?(?:\s+.*)?$"
+        r"^/(?:new|clear|context|stop|restart|status|usage|dream|history|goal|pairing|model|local-llm|local_llm|skill)(?:@\w+)?(?:\s+.*)?$"
     )
 
     @classmethod
@@ -473,7 +477,21 @@ class TelegramChannel(BaseChannel):
             return content.replace("/dream_log", "/dream-log", 1)
         if content == "/dream_restore" or content.startswith("/dream_restore "):
             return content.replace("/dream_restore", "/dream-restore", 1)
+        if content == "/local_llm" or content.startswith("/local_llm "):
+            return content.replace("/local_llm", "/local-llm", 1)
         return content
+
+    @staticmethod
+    def _normalize_visible_button_reply(content: str) -> str:
+        """Accept Telegram's text fallback button labels as direct replies."""
+        stripped = content.strip()
+        match = re.fullmatch(r"\[([^\[\]]+)\]", stripped)
+        if not match:
+            return content
+        label = match.group(1).strip()
+        if not label or ":" in label:
+            return content
+        return label
 
     async def start(self) -> None:
         """Start the Telegram bot."""
@@ -610,9 +628,30 @@ class TelegramChannel(BaseChannel):
 
         if self._app:
             self.logger.info("Stopping bot...")
-            await self._app.updater.stop()
-            await self._app.stop()
-            await self._app.shutdown()
+            updater = getattr(self._app, "updater", None)
+            if updater is not None:
+                try:
+                    if getattr(updater, "running", None) is not False:
+                        await updater.stop()
+                except RuntimeError as e:
+                    if "not running" in str(e).lower():
+                        self.logger.debug("Telegram updater already stopped")
+                    else:
+                        raise
+            try:
+                await self._app.stop()
+            except RuntimeError as e:
+                if "not running" in str(e).lower():
+                    self.logger.debug("Telegram application already stopped")
+                else:
+                    raise
+            try:
+                await self._app.shutdown()
+            except RuntimeError as e:
+                if "not running" in str(e).lower():
+                    self.logger.debug("Telegram application already shut down")
+                else:
+                    raise
             self._app = None
 
     @staticmethod
@@ -1416,7 +1455,7 @@ class TelegramChannel(BaseChannel):
 
         # Text content
         if message.text:
-            content_parts.append(message.text)
+            content_parts.append(self._normalize_visible_button_reply(message.text))
         if message.caption:
             content_parts.append(message.caption)
 

@@ -918,6 +918,75 @@ async def test_slash_model_forwards_optional_preset() -> None:
 
 
 @pytest.mark.asyncio
+async def test_slash_usage_forwards_optional_mode() -> None:
+    channel = DiscordChannel(DiscordConfig(enabled=True, allow_from=["*"]), MessageBus())
+    handled: list[dict] = []
+
+    async def capture_handle(**kwargs) -> None:
+        handled.append(kwargs)
+
+    channel._handle_message = capture_handle  # type: ignore[method-assign]
+    client = DiscordBotClient(channel, intents=discord.Intents.none())
+    interaction = _make_interaction()
+    interaction.command.qualified_name = "usage"
+
+    usage_cmd = client.tree.get_command("usage")
+    assert usage_cmd is not None
+    await usage_cmd.callback(interaction, mode="tokens")
+
+    assert interaction.response.messages == [
+        {"content": "Processing /usage tokens...", "ephemeral": True}
+    ]
+    assert len(handled) == 1
+    assert handled[0]["content"] == "/usage tokens"
+    assert handled[0]["metadata"]["is_slash_command"] is True
+
+
+@pytest.mark.asyncio
+async def test_slash_usage_without_mode_forwards_bare_command() -> None:
+    channel = DiscordChannel(DiscordConfig(enabled=True, allow_from=["*"]), MessageBus())
+    handled: list[dict] = []
+
+    async def capture_handle(**kwargs) -> None:
+        handled.append(kwargs)
+
+    channel._handle_message = capture_handle  # type: ignore[method-assign]
+    client = DiscordBotClient(channel, intents=discord.Intents.none())
+    interaction = _make_interaction()
+    interaction.command.qualified_name = "usage"
+
+    usage_cmd = client.tree.get_command("usage")
+    assert usage_cmd is not None
+    await usage_cmd.callback(interaction, mode=None)
+
+    assert len(handled) == 1
+    assert handled[0]["content"] == "/usage"
+
+
+@pytest.mark.asyncio
+async def test_slash_usage_denies_disallowed_sender() -> None:
+    channel = DiscordChannel(DiscordConfig(enabled=True, allow_from=["999"]), MessageBus())
+    handled: list[dict] = []
+
+    async def capture_handle(**kwargs) -> None:
+        handled.append(kwargs)
+
+    channel._handle_message = capture_handle  # type: ignore[method-assign]
+    client = DiscordBotClient(channel, intents=discord.Intents.none())
+    interaction = _make_interaction()
+    interaction.command.qualified_name = "usage"
+
+    usage_cmd = client.tree.get_command("usage")
+    assert usage_cmd is not None
+    await usage_cmd.callback(interaction, mode=None)
+
+    assert handled == []
+    assert interaction.response.messages == [
+        {"content": "You are not allowed to use this bot.", "ephemeral": True}
+    ]
+
+
+@pytest.mark.asyncio
 async def test_slash_help_returns_ephemeral_help_text() -> None:
     channel = DiscordChannel(DiscordConfig(enabled=True, allow_from=["*"]), MessageBus())
     handled: list[dict] = []

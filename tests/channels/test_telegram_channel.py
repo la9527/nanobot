@@ -1563,8 +1563,47 @@ def test_telegram_bus_slash_command_regex_matches_agent_loop_commands() -> None:
     assert pat.fullmatch("/skill@nanobot_bot")
     assert pat.fullmatch("/new@nanobot_bot")
     assert pat.fullmatch("/goal@nanobot_bot refine objective")
+    assert pat.fullmatch("/clear")
+    assert pat.fullmatch("/context")
+    assert pat.fullmatch("/usage tokens")
+    assert pat.fullmatch("/local-llm status")
+    assert pat.fullmatch("/local_llm status")
     assert pat.fullmatch("/dream-log deadbeef") is None
     assert pat.fullmatch("/dream-restore deadbeef") is None
+
+
+@pytest.mark.asyncio
+async def test_forward_command_normalizes_local_llm_underscore_alias() -> None:
+    channel = TelegramChannel(
+        TelegramConfig(enabled=True, token="123:abc", allow_from=["*"], group_policy="open"),
+        MessageBus(),
+    )
+    channel._app = _FakeApp(lambda: None)
+    handled = []
+
+    async def capture_handle(**kwargs) -> None:
+        handled.append(kwargs)
+
+    channel._handle_message = capture_handle
+    update = _make_telegram_update(text="/local_llm@nanobot_test status", reply_to_message=None)
+
+    await channel._forward_command(update, None)
+
+    assert len(handled) == 1
+    assert handled[0]["content"] == "/local-llm status"
+
+
+def test_normalize_visible_button_reply_unwraps_bracket_label() -> None:
+    assert TelegramChannel._normalize_visible_button_reply("[Approve]") == "Approve"
+    assert TelegramChannel._normalize_visible_button_reply("  [Approve]  ") == "Approve"
+
+
+def test_normalize_visible_button_reply_leaves_ordinary_text_untouched() -> None:
+    assert TelegramChannel._normalize_visible_button_reply("hello there") == "hello there"
+    # Multiple brackets or colon-bearing content are not treated as a button label.
+    assert TelegramChannel._normalize_visible_button_reply("[a] [b]") == "[a] [b]"
+    assert TelegramChannel._normalize_visible_button_reply("[key: value]") == "[key: value]"
+    assert TelegramChannel._normalize_visible_button_reply("[]") == "[]"
 
 
 @pytest.mark.asyncio
