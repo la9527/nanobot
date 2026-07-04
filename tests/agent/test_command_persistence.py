@@ -60,7 +60,6 @@ async def test_context_clear_drops_history_without_relogging_command(tmp_path: P
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="/calendar command not yet ported (Task 11 mail/calendar command wiring, tracked in upgrade plan)")
 async def test_slash_command_turn_is_persisted_for_webui_history(tmp_path: Path) -> None:
     loop = _make_loop(tmp_path)
     msg = InboundMessage(

@@ -27,17 +27,19 @@ class CommandContext:
 class CommandRouter:
     """Pure dict-based command dispatch.
 
-    Three tiers checked in order:
+    Four tiers checked in order:
       1. *priority* — exact-match commands handled before the dispatch lock
          (e.g. /stop, /restart).
       2. *exact* — exact-match commands handled inside the dispatch lock.
       3. *prefix* — longest-prefix-first match (e.g. "/team ").
+      4. *interceptors* — fallback predicates (e.g. natural-language mutation detection).
     """
 
     def __init__(self) -> None:
         self._priority: dict[str, Handler] = {}
         self._exact: dict[str, Handler] = {}
         self._prefix: list[tuple[str, Handler]] = []
+        self._interceptors: list[Handler] = []
 
     def priority(self, cmd: str, handler: Handler) -> None:
         self._priority[cmd] = handler
@@ -48,6 +50,16 @@ class CommandRouter:
     def prefix(self, pfx: str, handler: Handler) -> None:
         self._prefix.append((pfx, handler))
         self._prefix.sort(key=lambda p: len(p[0]), reverse=True)
+
+    def intercept(self, handler: Handler) -> None:
+        """Register a fallback handler tried after exact/prefix match fails.
+
+        Interceptors run in registration order; the first one that returns a
+        non-None result wins. Used for content-based routing that can't be
+        expressed as a fixed command string (e.g. natural-language calendar
+        mutation detection).
+        """
+        self._interceptors.append(handler)
 
     def is_priority(self, text: str) -> bool:
         return self._normalize(text) in self._priority
@@ -79,7 +91,7 @@ class CommandRouter:
     def is_dispatchable_command(self, text: str) -> bool:
         """Check whether *text* matches any non-priority command tier (exact or prefix).
 
-        Does NOT check priority tier.
+        Does NOT check priority or interceptor tiers.
         If this returns True, ``dispatch()`` is guaranteed to match a handler.
         """
         cmd = text.strip().lower()
@@ -98,7 +110,7 @@ class CommandRouter:
         return None
 
     async def dispatch(self, ctx: CommandContext) -> OutboundMessage | None:
-        """Try exact, then prefix handlers. Returns None if unhandled."""
+        """Try exact, prefix, then interceptors. Returns None if unhandled."""
         stripped = self._strip_mention(ctx.raw)
         cmd = stripped.lower()
 
@@ -109,5 +121,10 @@ class CommandRouter:
             if cmd.startswith(pfx):
                 ctx.args = stripped[len(pfx):]
                 return await handler(ctx)
+
+        for interceptor in self._interceptors:
+            result = await interceptor(ctx)
+            if result is not None:
+                return result
 
         return None
