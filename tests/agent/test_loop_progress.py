@@ -60,7 +60,7 @@ class TestToolEventProgress:
         ) -> None:
             progress.append((content, tool_hint, tool_events))
 
-        final_content, _, _, _, _ = await loop._run_agent_loop([], on_progress=on_progress)
+        final_content, _, _, _, _, _ = await loop._run_agent_loop([], on_progress=on_progress)
 
         assert final_content == "Done"
         assert progress == [
@@ -134,7 +134,7 @@ class TestToolEventProgress:
             if file_edit_events:
                 file_events.extend(file_edit_events)
 
-        final_content, _, _, _, _ = await loop._run_agent_loop([], on_progress=on_progress)
+        final_content, _, _, _, _, _ = await loop._run_agent_loop([], on_progress=on_progress)
 
         assert final_content == "Done"
         assert [event["phase"] for event in file_events] == ["start", "end"]
@@ -194,7 +194,7 @@ class TestToolEventProgress:
         ) -> None:
             pass
 
-        final_content, _, _, _, _ = await loop._run_agent_loop([], on_progress=on_progress)
+        final_content, _, _, _, _, _ = await loop._run_agent_loop([], on_progress=on_progress)
 
         assert final_content == "Done"
         assert target.read_text(encoding="utf-8") == "new\n"
@@ -588,7 +588,7 @@ class TestToolEventProgress:
         ) -> None:
             progress.append((content, tool_hint, tool_events))
 
-        final_content, _, _, _, _ = await loop._run_agent_loop(
+        final_content, _, _, _, _, _ = await loop._run_agent_loop(
             [],
             on_progress=on_progress,
             on_stream=on_stream,

@@ -48,6 +48,13 @@ from nanobot.cron.session_turns import (
 )
 from nanobot.providers.base import LLMProvider
 from nanobot.providers.factory import ProviderSnapshot
+from nanobot.response_status import (
+    DEFAULT_RESPONSE_FOOTER_MODE,
+    SESSION_RESPONSE_FOOTER_MODE_KEY,
+    build_response_footer,
+    normalize_response_footer_mode,
+    normalize_usage_snapshot,
+)
 from nanobot.security.workspace_access import (
     WorkspaceScopeResolver,
     bind_workspace_scope,
@@ -114,6 +121,8 @@ class TurnContext:
     all_messages: list[dict[str, Any]] = field(default_factory=list)
     stop_reason: str = ""
     had_injections: bool = False
+    response_metadata: dict[str, Any] = field(default_factory=dict)
+    active_target: str | None = None
 
     user_persisted_early: bool = False
     save_skip: int = 0
@@ -172,6 +181,7 @@ class AgentLoop:
     _SMART_ROUTER_MODEL_KEY = "smart_router_last_model"
     _TURN_ID_KEY = "turn_id"
     _APPROVAL_SUMMARY_KEY = "approval_summary"
+    _CONTEXT_WINDOW_KEY = "context_window"
     _APPROVAL_YES = frozenset({"y", "yes", "ok", "approve", "approved", "run", "continue", "예", "네", "승인", "허용"})
     _APPROVAL_NO = frozenset({"n", "no", "deny", "denied", "block", "cancel", "stop", "아니오", "아니", "거부", "취소"})
 
@@ -1014,13 +1024,116 @@ class AgentLoop:
         """Derive a token budget for session history replay from the context window."""
         if self.context_window_tokens <= 0:
             return 0
+        reserved_output = self._reserved_output_tokens()
+        budget = self.context_window_tokens - max(1, reserved_output) - 1024
+        return budget if budget > 0 else max(128, self.context_window_tokens // 2)
+
+    def _reserved_output_tokens(self) -> int:
         max_output = getattr(getattr(self.provider, "generation", None), "max_tokens", 4096)
         try:
             reserved_output = int(max_output)
         except (TypeError, ValueError):
             reserved_output = 4096
-        budget = self.context_window_tokens - max(1, reserved_output) - 1024
-        return budget if budget > 0 else max(128, self.context_window_tokens // 2)
+        return max(1, reserved_output)
+
+    def get_response_footer_mode(self, session: Session | None) -> str:
+        """Return the active per-session response footer mode."""
+        if session is None:
+            return DEFAULT_RESPONSE_FOOTER_MODE
+        return normalize_response_footer_mode(
+            session.metadata.get(SESSION_RESPONSE_FOOTER_MODE_KEY)
+        )
+
+    def set_response_footer_mode(self, session: Session, mode: str) -> None:
+        """Persist a per-session response footer mode override."""
+        normalized = normalize_response_footer_mode(mode)
+        if normalized == DEFAULT_RESPONSE_FOOTER_MODE:
+            session.metadata.pop(SESSION_RESPONSE_FOOTER_MODE_KEY, None)
+        else:
+            session.metadata[SESSION_RESPONSE_FOOTER_MODE_KEY] = normalized
+        self.sessions.save(session)
+
+    def build_response_status(self, session: Session | None) -> dict[str, Any]:
+        """Build a normalized status snapshot for the current session.
+
+        ``context_tokens_estimate`` is derived from the just-completed LLM
+        call's real usage (already in memory). We deliberately avoid falling
+        back to ``Consolidator.estimate_session_prompt_tokens`` here since that
+        re-reads session history from disk on every turn's footer/context-window
+        update; callers that need an estimate without a recent turn (e.g. a
+        future ``/status`` command) can compute one explicitly.
+        """
+        status_model = self.model
+        active_target = None
+        _provider, status_model, active_target = self._resolve_execution_runtime(session)
+        if active_target == "smart-router":
+            status_model = "smart-router"
+
+        usage = normalize_usage_snapshot(self._last_usage)
+        ctx_est = usage.get("prompt_tokens", 0)
+
+        return {
+            "model": status_model,
+            "active_target": active_target or self.get_active_model_target_name(session),
+            "usage": usage,
+            "context_tokens_estimate": ctx_est,
+            "context_window_tokens": self.context_window_tokens,
+            "footer_mode": self.get_response_footer_mode(session),
+            "smart_router_tier": (
+                session.metadata.get(self._SMART_ROUTER_TIER_KEY)
+                if session is not None
+                else None
+            ),
+            "smart_router_model": (
+                session.metadata.get(self._SMART_ROUTER_MODEL_KEY)
+                if session is not None
+                else None
+            ),
+        }
+
+    @staticmethod
+    def _context_window_status(occupied_ratio: float) -> str:
+        if occupied_ratio >= 0.85:
+            return "critical"
+        if occupied_ratio >= 0.70:
+            return "warning"
+        return "healthy"
+
+    def _build_context_window_summary(self, session: Session) -> dict[str, Any] | None:
+        from datetime import datetime
+
+        status_snapshot = self.build_response_status(session)
+        max_tokens = int(status_snapshot.get("context_window_tokens") or 0)
+        if max_tokens <= 0:
+            return None
+
+        usage = status_snapshot.get("usage") or {}
+        estimated_prompt = int(status_snapshot.get("context_tokens_estimate") or 0)
+        used_input_tokens = max(estimated_prompt, int(usage.get("prompt_tokens", 0) or 0), 0)
+        reserved_output_tokens = self._reserved_output_tokens()
+        occupied_tokens = min(max_tokens, used_input_tokens + reserved_output_tokens)
+        available_tokens = max(max_tokens - occupied_tokens, 0)
+        occupied_ratio = occupied_tokens / max_tokens if max_tokens > 0 else 0.0
+
+        return {
+            "max_tokens": max_tokens,
+            "used_input_tokens": used_input_tokens,
+            "reserved_output_tokens": reserved_output_tokens,
+            "available_tokens": available_tokens,
+            "usage_ratio": occupied_ratio,
+            "status": self._context_window_status(occupied_ratio),
+            "source": "estimated",
+            "active_target": status_snapshot.get("active_target"),
+            "resolved_model": status_snapshot.get("model"),
+            "updated_at": datetime.now().isoformat(),
+        }
+
+    def _update_context_window_summary(self, session: Session) -> None:
+        summary = self._build_context_window_summary(session)
+        if summary is None:
+            session.metadata.pop(self._CONTEXT_WINDOW_KEY, None)
+            return
+        session.metadata[self._CONTEXT_WINDOW_KEY] = summary
 
     async def _run_agent_loop(
         self,
@@ -1041,7 +1154,9 @@ class AgentLoop:
         run_extra_hooks_for_ephemeral: bool = False,
         hooks: list[AgentHook] | None = None,
         tools: ToolRegistry | None = None,
-    ) -> tuple[str | None, list[str], list[dict], str, bool]:
+        provider: LLMProvider | None = None,
+        model: str | None = None,
+    ) -> tuple[str | None, list[str], list[dict], str, bool, dict[str, Any]]:
         """Run the agent iteration loop.
 
         *on_stream*: called with each content delta during streaming.
@@ -1049,9 +1164,12 @@ class AgentLoop:
         ``resuming=True`` means tool calls follow (spinner should restart);
         ``resuming=False`` means this is the final response.
 
-        Returns (final_content, tools_used, messages, stop_reason, had_injections).
+        Returns (final_content, tools_used, messages, stop_reason, had_injections, response_metadata).
         """
         self._sync_subagent_runtime_limits()
+        active_provider = provider or self.provider
+        active_model = model or self.model
+        runner = self.runner if active_provider is self.provider else AgentRunner(active_provider)
 
         loop_hook = AgentProgressHook(
             on_progress=on_progress,
@@ -1157,10 +1275,10 @@ class AgentLoop:
 
         session_metadata = session.metadata if session is not None else None
         try:
-            result = await self.runner.run(AgentRunSpec(
+            result = await runner.run(AgentRunSpec(
                 initial_messages=initial_messages,
                 tools=tools or self._build_effective_tools(channel),
-                model=self.model,
+                model=active_model,
                 max_iterations=self.max_iterations,
                 max_tool_result_chars=self.max_tool_result_chars,
                 hook=hook,
@@ -1223,7 +1341,14 @@ class AgentLoop:
                 await on_stream_end(resuming=False)
         elif result.stop_reason == "error":
             logger.error("LLM returned error: {}", (result.final_content or "")[:200])
-        return result.final_content, result.tools_used, result.messages, result.stop_reason, result.had_injections
+        return (
+            result.final_content,
+            result.tools_used,
+            result.messages,
+            result.stop_reason,
+            result.had_injections,
+            getattr(result, "response_metadata", {}) or {},
+        )
 
     async def run(self) -> None:
         """Run the agent loop, dispatching messages as tasks to stay responsive to /stop."""
@@ -1701,7 +1826,7 @@ class AgentLoop:
             unified_session=self._unified_session,
         )
         t_wall = time.time()
-        final_content, _, all_msgs, stop_reason, _ = await self._run_agent_loop(
+        final_content, _, all_msgs, stop_reason, _, _ = await self._run_agent_loop(
             messages, session=session, channel=channel, chat_id=chat_id,
             message_id=msg.metadata.get("message_id"),
             metadata=msg.metadata,
@@ -1938,6 +2063,11 @@ class AgentLoop:
         return "dispatch"
 
     async def _state_build(self, ctx: TurnContext) -> str:
+        # Stamp a turn id now (not at RESTORE) so shortcut commands, which skip
+        # BUILD entirely, never see this key leak into their response metadata.
+        turn_id = ctx.msg.metadata.get(self._TURN_ID_KEY)
+        if not isinstance(turn_id, str) or not turn_id.strip():
+            ctx.msg.metadata[self._TURN_ID_KEY] = self._new_turn_id()
         if not ctx.ephemeral:
             await self.consolidator.maybe_consolidate_by_tokens(
                 ctx.session,
@@ -1993,6 +2123,8 @@ class AgentLoop:
             "running",
             started_at=ctx.visible_run_started_at,
         )
+        exec_provider, exec_model, active_target = self._resolve_execution_runtime(ctx.session)
+        ctx.active_target = active_target
         result = await self._run_agent_loop(
             ctx.initial_messages,
             on_progress=ctx.on_progress,
@@ -2010,13 +2142,16 @@ class AgentLoop:
             run_extra_hooks_for_ephemeral=ctx.run_extra_hooks_for_ephemeral,
             hooks=ctx.hooks,
             tools=ctx.tools,
+            provider=exec_provider,
+            model=exec_model,
         )
-        final_content, tools_used, all_msgs, stop_reason, had_injections = result
+        final_content, tools_used, all_msgs, stop_reason, had_injections, response_metadata = result
         ctx.final_content = final_content
         ctx.tools_used = tools_used
         ctx.all_messages = all_msgs
         ctx.stop_reason = stop_reason
         ctx.had_injections = had_injections
+        ctx.response_metadata = response_metadata
         await turn_continuation.maybe_continue_turn(ctx)
         return "ok"
 
@@ -2039,6 +2174,7 @@ class AgentLoop:
         self._save_turn(
             ctx.session, ctx.all_messages, ctx.save_skip,
             turn_latency_ms=ctx.turn_latency_ms,
+            assistant_turn_id=ctx.msg.metadata.get(self._TURN_ID_KEY),
         )
         self._runtime_events().record_turn_latency(
             ctx.session_key,
@@ -2056,8 +2192,33 @@ class AgentLoop:
             )
         self._clear_pending_user_turn(ctx.session)
         self._clear_runtime_checkpoint(ctx.session)
+        self._update_smart_router_session_metadata(ctx.session, ctx.response_metadata)
+        self._update_context_window_summary(ctx.session)
         self.sessions.save(ctx.session)
         return "ok"
+
+    def _update_smart_router_session_metadata(
+        self, session: Session, response_metadata: dict[str, Any] | None
+    ) -> None:
+        """Record the smart-router tier/model actually used for the last turn."""
+        route_tier = None
+        route_model = None
+        if isinstance(response_metadata, dict):
+            tier = response_metadata.get("smart_router_final_tier")
+            model_name = response_metadata.get("smart_router_final_model")
+            if isinstance(tier, str) and tier:
+                route_tier = tier
+            if isinstance(model_name, str) and model_name:
+                route_model = model_name
+
+        if route_tier is not None:
+            session.metadata[self._SMART_ROUTER_TIER_KEY] = route_tier
+        elif session.metadata.get(self._SMART_ROUTER_TIER_KEY):
+            session.metadata.pop(self._SMART_ROUTER_TIER_KEY, None)
+        if route_model is not None:
+            session.metadata[self._SMART_ROUTER_MODEL_KEY] = route_model
+        elif session.metadata.get(self._SMART_ROUTER_MODEL_KEY):
+            session.metadata.pop(self._SMART_ROUTER_MODEL_KEY, None)
 
     async def _state_respond(self, ctx: TurnContext) -> str:
         if ctx.suppress_response:
@@ -2074,7 +2235,34 @@ class AgentLoop:
         )
         if ctx.ephemeral and ctx.outbound is not None:
             ctx.outbound.metadata["_stop_reason"] = ctx.stop_reason
+        await self._attach_response_footer(ctx)
         return "ok"
+
+    async def _attach_response_footer(self, ctx: TurnContext) -> None:
+        """Append the token-usage/model status footer to the outbound response."""
+        if (
+            ctx.outbound is None
+            or ctx.msg.channel == "api"
+            or ctx.final_content == EMPTY_FINAL_RESPONSE_MESSAGE
+        ):
+            return
+        status_snapshot = self.build_response_status(ctx.session)
+        footer = build_response_footer(
+            mode=status_snapshot["footer_mode"],
+            model=status_snapshot["model"],
+            active_target=status_snapshot["active_target"],
+            usage=status_snapshot["usage"],
+            context_window_tokens=status_snapshot["context_window_tokens"],
+            context_tokens_estimate=status_snapshot["context_tokens_estimate"],
+            route_tier=status_snapshot["smart_router_tier"],
+            route_model=status_snapshot["smart_router_model"],
+        )
+        if not footer:
+            return
+        if ctx.on_stream is None:
+            ctx.outbound.content = ctx.outbound.content.rstrip() + footer
+        else:
+            await ctx.on_stream(footer)
 
     def _sanitize_persisted_blocks(
         self,
@@ -2123,9 +2311,23 @@ class AgentLoop:
         skip: int,
         *,
         turn_latency_ms: int | None = None,
+        assistant_turn_id: str | None = None,
     ) -> None:
         """Save new-turn messages into session, truncating large tool results."""
         from datetime import datetime
+
+        visible_assistant_turn_index: int | None = None
+        if isinstance(assistant_turn_id, str) and assistant_turn_id.strip():
+            for index in range(len(messages) - 1, skip - 1, -1):
+                candidate = messages[index]
+                if not isinstance(candidate, dict):
+                    continue
+                if candidate.get("role") != "assistant" or candidate.get("tool_calls"):
+                    continue
+                content = candidate.get("content")
+                if isinstance(content, str) and content.strip():
+                    visible_assistant_turn_index = index
+                    break
 
         declared_tool_call_ids = {
             str(tc["id"])
@@ -2135,7 +2337,7 @@ class AgentLoop:
             if isinstance(tc, dict) and tc.get("id")
         }
         last_assistant_idx: int | None = None
-        for m in messages[skip:]:
+        for index, m in enumerate(messages[skip:], start=skip):
             entry = dict(m)
             role, content = entry.get("role"), entry.get("content")
             if role == "assistant" and not content and not entry.get("tool_calls"):
@@ -2174,6 +2376,11 @@ class AgentLoop:
                     if not filtered:
                         continue
                     entry["content"] = filtered
+            visible_reasoning = self._assistant_visible_reasoning(session, entry)
+            if visible_reasoning:
+                entry.setdefault("visible_reasoning", visible_reasoning)
+            if index == visible_assistant_turn_index and isinstance(assistant_turn_id, str):
+                entry.setdefault(self._TURN_ID_KEY, assistant_turn_id)
             entry.setdefault("timestamp", datetime.now().isoformat())
             session.messages.append(entry)
             if role == "assistant":
@@ -2186,6 +2393,33 @@ class AgentLoop:
         if turn_latency_ms is not None and last_assistant_idx is not None:
             session.messages[last_assistant_idx]["latency_ms"] = int(turn_latency_ms)
         session.updated_at = datetime.now()
+
+    @staticmethod
+    def _assistant_visible_reasoning(session: Session, entry: dict[str, Any]) -> str | None:
+        if entry.get("role") != "assistant":
+            return None
+        if entry.get("tool_calls"):
+            return None
+        if entry.get("injected_event") == "subagent_result":
+            return None
+
+        content = entry.get("content")
+        if not isinstance(content, str):
+            return None
+
+        normalized = content.strip()
+        if not normalized or normalized == EMPTY_FINAL_RESPONSE_MESSAGE or normalized.startswith("Error:"):
+            return None
+
+        locale: str | None = None
+        metadata = session.metadata if isinstance(session.metadata, dict) else None
+        owner_profile = metadata.get("owner_profile") if isinstance(metadata, dict) else None
+        if isinstance(owner_profile, dict):
+            preferred_language = owner_profile.get("preferred_language")
+            if isinstance(preferred_language, str) and preferred_language.strip():
+                locale = preferred_language.strip()
+
+        return _t("assistant.visible_reasoning.reply_ready", locale=locale)
 
     def _persist_subagent_followup(self, session: Session, msg: InboundMessage) -> bool:
         """Persist subagent follow-ups before prompt assembly so history stays durable.

@@ -39,7 +39,7 @@ async def test_loop_max_iterations_message_stays_stable(tmp_path):
     loop.tools.execute = AsyncMock(return_value="ok")
     loop.max_iterations = 2
 
-    final_content, _, _, _, _ = await loop._run_agent_loop([])
+    final_content, _, _, _, _, _ = await loop._run_agent_loop([])
 
     assert final_content == (
         "I reached the maximum number of tool call iterations (2) "
@@ -58,7 +58,7 @@ async def test_loop_goal_turn_uses_standard_iteration_budget(tmp_path):
     loop.tools.execute = AsyncMock(return_value="ok")
     loop.max_iterations = 2
 
-    final_content, _, _, stop_reason, _ = await loop._run_agent_loop(
+    final_content, _, _, stop_reason, _, _ = await loop._run_agent_loop(
         [],
         metadata={"original_command": "/goal"},
     )
@@ -91,7 +91,7 @@ async def test_loop_stream_filter_handles_think_only_prefix_without_crashing(tmp
     async def on_stream_end(*, resuming: bool = False) -> None:
         endings.append(resuming)
 
-    final_content, _, _, _, _ = await loop._run_agent_loop(
+    final_content, _, _, _, _, _ = await loop._run_agent_loop(
         [],
         on_stream=on_stream,
         on_stream_end=on_stream_end,
@@ -117,7 +117,7 @@ async def test_loop_stream_filter_hides_partial_trailing_think_prefix(tmp_path):
     async def on_stream(delta: str) -> None:
         deltas.append(delta)
 
-    final_content, _, _, _, _ = await loop._run_agent_loop([], on_stream=on_stream)
+    final_content, _, _, _, _, _ = await loop._run_agent_loop([], on_stream=on_stream)
 
     assert final_content == "Hello World"
     assert deltas == ["Hello", " World"]
@@ -138,7 +138,7 @@ async def test_loop_stream_filter_hides_complete_trailing_think_tag(tmp_path):
     async def on_stream(delta: str) -> None:
         deltas.append(delta)
 
-    final_content, _, _, _, _ = await loop._run_agent_loop([], on_stream=on_stream)
+    final_content, _, _, _, _, _ = await loop._run_agent_loop([], on_stream=on_stream)
 
     assert final_content == "Hello World"
     assert deltas == ["Hello", " World"]
@@ -157,7 +157,7 @@ async def test_loop_retries_think_only_final_response(tmp_path):
 
     loop.provider.chat_with_retry = chat_with_retry
 
-    final_content, _, _, _, _ = await loop._run_agent_loop([])
+    final_content, _, _, _, _, _ = await loop._run_agent_loop([])
 
     assert final_content == "Recovered answer"
     assert call_count["n"] == 2
