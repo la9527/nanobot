@@ -62,6 +62,8 @@ class _StubProvider(LLMProvider):
         reasoning_effort=None,
         tool_choice=None,
         on_content_delta=None,
+        on_thinking_delta=None,
+        on_tool_call_delta=None,
     ) -> LLMResponse:
         return await self.chat(
             messages,
@@ -279,6 +281,52 @@ async def test_smart_router_routes_complex_prompt_to_full(tmp_path: Path) -> Non
 
     assert response.content == "full ok"
     assert router._tiers["full"].calls[0]["model"] == "full-model"
+
+
+@pytest.mark.asyncio
+async def test_smart_router_chat_stream_with_retry_accepts_full_runner_kwargs(tmp_path: Path) -> None:
+    """Regression test: AgentRunner._request_model calls chat_stream_with_retry
+    with on_thinking_delta/on_tool_call_delta/on_stream_recover in addition to
+    on_content_delta. SmartRouterProvider must accept and forward all of them
+    without raising TypeError (previously only on_content_delta was accepted).
+    """
+    router = _router(tmp_path)
+
+    content_deltas: list[str] = []
+    thinking_deltas: list[str] = []
+    tool_call_deltas: list[dict[str, object]] = []
+    recovered = False
+
+    async def _on_content_delta(delta: str) -> None:
+        content_deltas.append(delta)
+
+    async def _on_thinking_delta(delta: str) -> None:
+        thinking_deltas.append(delta)
+
+    async def _on_tool_call_delta(delta: dict[str, object]) -> None:
+        tool_call_deltas.append(delta)
+
+    async def _on_stream_recover() -> None:
+        nonlocal recovered
+        recovered = True
+
+    response = await router.chat_stream_with_retry(
+        messages=[{"role": "user", "content": "hello"}],
+        tools=None,
+        on_content_delta=_on_content_delta,
+        on_thinking_delta=_on_thinking_delta,
+        on_tool_call_delta=_on_tool_call_delta,
+        on_stream_recover=_on_stream_recover,
+    )
+
+    assert response.content == "local ok"
+    # The stub tier providers pass streamed calls straight through to chat()
+    # without invoking delta callbacks; the point of this test is that
+    # SmartRouterProvider accepts and forwards these kwargs without raising
+    # TypeError (previously only on_content_delta was accepted).
+    assert thinking_deltas == []
+    assert tool_call_deltas == []
+    assert recovered is False
 
 
 @pytest.mark.asyncio

@@ -393,6 +393,9 @@ class SmartRouterProvider(LLMProvider):
         on_content_delta: Callable[[str], Awaitable[None]] | None,
         retry_mode: str,
         on_retry_wait: Callable[[str], Awaitable[None]] | None,
+        on_thinking_delta: Callable[[str], Awaitable[None]] | None = None,
+        on_tool_call_delta: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+        on_stream_recover: Callable[[], Awaitable[None]] | None = None,
     ) -> LLMResponse:
         if use_retry:
             if on_content_delta is not None:
@@ -405,6 +408,9 @@ class SmartRouterProvider(LLMProvider):
                     reasoning_effort=reasoning_effort,
                     tool_choice=tool_choice,
                     on_content_delta=on_content_delta,
+                    on_thinking_delta=on_thinking_delta,
+                    on_tool_call_delta=on_tool_call_delta,
+                    on_stream_recover=on_stream_recover,
                     retry_mode=retry_mode,
                     on_retry_wait=on_retry_wait,
                 )
@@ -430,6 +436,8 @@ class SmartRouterProvider(LLMProvider):
                 reasoning_effort=reasoning_effort,
                 tool_choice=tool_choice,
                 on_content_delta=on_content_delta,
+                on_thinking_delta=on_thinking_delta,
+                on_tool_call_delta=on_tool_call_delta,
             )
         return await provider.chat(
             messages=messages,
@@ -641,6 +649,8 @@ class SmartRouterProvider(LLMProvider):
         reasoning_effort: str | None = None,
         tool_choice: str | dict[str, Any] | None = None,
         on_content_delta: Callable[[str], Awaitable[None]] | None = None,
+        on_thinking_delta: Callable[[str], Awaitable[None]] | None = None,
+        on_tool_call_delta: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> LLMResponse:
         return await self._dispatch(
             messages=messages,
@@ -652,6 +662,8 @@ class SmartRouterProvider(LLMProvider):
             tool_choice=tool_choice,
             use_retry=False,
             on_content_delta=on_content_delta,
+            on_thinking_delta=on_thinking_delta,
+            on_tool_call_delta=on_tool_call_delta,
         )
 
     async def chat_with_retry(
@@ -696,6 +708,9 @@ class SmartRouterProvider(LLMProvider):
         reasoning_effort: object = LLMProvider._SENTINEL,
         tool_choice: str | dict[str, Any] | None = None,
         on_content_delta: Callable[[str], Awaitable[None]] | None = None,
+        on_thinking_delta: Callable[[str], Awaitable[None]] | None = None,
+        on_tool_call_delta: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+        on_stream_recover: Callable[[], Awaitable[None]] | None = None,
         retry_mode: str = "standard",
         on_retry_wait: Callable[[str], Awaitable[None]] | None = None,
     ) -> LLMResponse:
@@ -715,6 +730,9 @@ class SmartRouterProvider(LLMProvider):
             tool_choice=tool_choice,
             use_retry=True,
             on_content_delta=on_content_delta,
+            on_thinking_delta=on_thinking_delta,
+            on_tool_call_delta=on_tool_call_delta,
+            on_stream_recover=on_stream_recover,
             retry_mode=retry_mode,
             on_retry_wait=on_retry_wait,
         )
@@ -753,6 +771,9 @@ class SmartRouterProvider(LLMProvider):
         on_content_delta: Callable[[str], Awaitable[None]] | None,
         retry_mode: str = "standard",
         on_retry_wait: Callable[[str], Awaitable[None]] | None = None,
+        on_thinking_delta: Callable[[str], Awaitable[None]] | None = None,
+        on_tool_call_delta: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+        on_stream_recover: Callable[[], Awaitable[None]] | None = None,
     ) -> LLMResponse:
         decision = self._route(messages, tools, model=model)
         target_tier = decision.requested_tier
@@ -831,6 +852,9 @@ class SmartRouterProvider(LLMProvider):
                             tool_choice=tool_choice,
                             use_retry=should_retry_tier,
                             on_content_delta=on_content_delta,
+                            on_thinking_delta=on_thinking_delta,
+                            on_tool_call_delta=on_tool_call_delta,
+                            on_stream_recover=on_stream_recover,
                             retry_mode=retry_mode,
                             on_retry_wait=on_retry_wait,
                         )
@@ -846,6 +870,9 @@ class SmartRouterProvider(LLMProvider):
                         tool_choice=tool_choice,
                         use_retry=should_retry_tier,
                         on_content_delta=on_content_delta,
+                        on_thinking_delta=on_thinking_delta,
+                        on_tool_call_delta=on_tool_call_delta,
+                        on_stream_recover=on_stream_recover,
                         retry_mode=retry_mode,
                         on_retry_wait=on_retry_wait,
                     )
