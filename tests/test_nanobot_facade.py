@@ -111,6 +111,19 @@ def test_from_config_rejects_multiple_model_selectors(tmp_path):
         )
 
 
+def test_from_config_initializes_runtime_plugins(tmp_path):
+    config_path = _write_config(tmp_path)
+
+    with patch(
+        "nanobot.agent.model_target_providers.initialize_runtime_plugins"
+    ) as mock_init:
+        bot = Nanobot.from_config(config_path, workspace=tmp_path)
+
+    mock_init.assert_called_once()
+    _config, kwargs = mock_init.call_args
+    assert kwargs["loop"] is bot._loop
+
+
 def test_from_config_default_path():
     from nanobot.config.schema import Config
 

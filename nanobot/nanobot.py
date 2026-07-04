@@ -121,6 +121,9 @@ class Nanobot:
             config,
             image_generation_provider_configs=image_gen_provider_configs(config),
         )
+        from nanobot.agent.model_target_providers import initialize_runtime_plugins
+
+        initialize_runtime_plugins(config, loop=loop)
         return cls(loop, config=config)
 
     async def run(
