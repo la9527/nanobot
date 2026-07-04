@@ -48,6 +48,9 @@ from nanobot.webui.http_utils import (
     is_localhost as _is_localhost,
 )
 from nanobot.webui.http_utils import (
+    is_trusted_webui_client as _is_trusted_webui_client,
+)
+from nanobot.webui.http_utils import (
     issue_route_secret_matches as _issue_route_secret_matches,
 )
 from nanobot.webui.http_utils import (
@@ -224,6 +227,13 @@ class GatewayHTTPHandler:
         if got == "/webui/bootstrap":
             return self._handle_bootstrap(connection, request)
 
+        # All /api/ routes and static SPA serving are restricted to trusted
+        # clients (loopback or Tailscale address space), even with a valid
+        # token, as an outer perimeter layer.
+        trusted_client = _is_trusted_webui_client(connection)
+        if got.startswith("/api/") and not trusted_client:
+            return _http_error(403, "webui api is restricted to localhost/tailscale")
+
         # Settings routes (delegated)
         response = await self.settings_routes.dispatch(request, got)
         if response is not None:
@@ -255,6 +265,8 @@ class GatewayHTTPHandler:
 
         # Static SPA serving
         if self.static_dist_path is not None:
+            if not trusted_client:
+                return _http_error(403, "webui static is restricted to localhost/tailscale")
             response = self._serve_static(got)
             if response is not None:
                 return response
@@ -303,8 +315,8 @@ class GatewayHTTPHandler:
         if secret:
             if not _issue_route_secret_matches(request.headers, secret):
                 return _http_error(401, "Unauthorized")
-        elif not _is_localhost(connection):
-            return _http_error(403, "bootstrap is localhost-only")
+        elif not _is_trusted_webui_client(connection):
+            return _http_error(403, "bootstrap is restricted to localhost/tailscale")
 
         if not self.tokens.can_issue(include_api_token=True):
             return _http_response(

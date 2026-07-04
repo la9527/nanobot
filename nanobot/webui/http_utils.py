@@ -5,6 +5,7 @@ from __future__ import annotations
 import email.utils
 import hmac
 import http
+import ipaddress
 import json
 import re
 from typing import Any
@@ -119,16 +120,50 @@ def query_first(query: QueryParams, key: str) -> str | None:
     return values[0] if values else None
 
 
+_TRUSTED_TAILSCALE_NETWORKS: tuple[
+    ipaddress.IPv4Network | ipaddress.IPv6Network,
+    ...,
+] = (
+    ipaddress.ip_network("100.64.0.0/10"),
+    ipaddress.ip_network("fd7a:115c:a1e0::/48"),
+)
+
+
 def is_localhost(connection: Any) -> bool:
+    ip = remote_ip_address(connection)
+    return ip is not None and ip.is_loopback
+
+
+def remote_ip_address(connection: Any) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    """Extract and normalize remote peer IP from a websocket connection object."""
     addr = getattr(connection, "remote_address", None)
     if not addr:
-        return False
+        return None
     host = addr[0] if isinstance(addr, tuple) else addr
     if not isinstance(host, str):
-        return False
+        return None
+    # ``::ffff:127.0.0.1`` is loopback in IPv6-mapped form.
     if host.startswith("::ffff:"):
         host = host[7:]
-    return host in {"127.0.0.1", "::1", "localhost"}
+    # Strip IPv6 zone identifier (e.g. ``fe80::1%lo0``).
+    if "%" in host:
+        host = host.split("%", 1)[0]
+    if host == "localhost":
+        host = "127.0.0.1"
+    try:
+        return ipaddress.ip_address(host)
+    except ValueError:
+        return None
+
+
+def is_trusted_webui_client(connection: Any) -> bool:
+    """Allow WebUI/WS access only from loopback or Tailscale address space."""
+    ip = remote_ip_address(connection)
+    if ip is None:
+        return False
+    if ip.is_loopback:
+        return True
+    return any(ip in net for net in _TRUSTED_TAILSCALE_NETWORKS)
 
 
 def bearer_token(headers: Any) -> str | None:

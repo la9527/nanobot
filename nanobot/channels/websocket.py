@@ -45,6 +45,9 @@ from nanobot.webui.http_utils import (
 from nanobot.webui.http_utils import (
     query_first as _query_first,
 )
+from nanobot.webui.http_utils import (
+    is_trusted_webui_client as _is_trusted_webui_client,
+)
 from nanobot.webui.mcp_presets_api import normalize_mcp_preset_mentions
 from nanobot.webui.transcription_ws import webui_transcription_event
 from nanobot.webui.websocket_logging import websockets_server_logger
@@ -390,6 +393,8 @@ class WebSocketChannel(BaseChannel):
         # WebSocket upgrade — channel handles this itself
         expected_ws = self._expected_path()
         if got == expected_ws and _is_websocket_upgrade(request):
+            if not _is_trusted_webui_client(connection):
+                return connection.respond(403, "Forbidden")
             client_id = _query_first(query, "client_id") or ""
             if len(client_id) > 128:
                 client_id = client_id[:128]
