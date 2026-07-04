@@ -50,7 +50,31 @@ class CommandRouter:
         self._prefix.sort(key=lambda p: len(p[0]), reverse=True)
 
     def is_priority(self, text: str) -> bool:
-        return text.strip().lower() in self._priority
+        return self._normalize(text) in self._priority
+
+    @staticmethod
+    def _strip_mention(text: str) -> str:
+        """Strip a Telegram '@botname' mention from a slash command, preserving case.
+
+        Telegram group commands can arrive as '/status@mybot' or
+        '/model@mybot smart-router'. We strip the bot mention so exact/prefix
+        routing still matches, without touching the case of any following args.
+        """
+        raw = text.strip()
+        if not raw.startswith("/"):
+            return raw
+
+        first, sep, rest = raw.partition(" ")
+        if "@" in first:
+            base, at, mention = first.partition("@")
+            if at and mention and base.startswith("/"):
+                first = base
+        return first if not sep else f"{first}{sep}{rest}"
+
+    @classmethod
+    def _normalize(cls, text: str) -> str:
+        """Mention-stripped, lowercased form used for case-insensitive command matching."""
+        return cls._strip_mention(text).lower()
 
     def is_dispatchable_command(self, text: str) -> bool:
         """Check whether *text* matches any non-priority command tier (exact or prefix).
@@ -68,21 +92,22 @@ class CommandRouter:
 
     async def dispatch_priority(self, ctx: CommandContext) -> OutboundMessage | None:
         """Dispatch a priority command. Called from run() without the lock."""
-        handler = self._priority.get(ctx.raw.lower())
+        handler = self._priority.get(self._normalize(ctx.raw))
         if handler:
             return await handler(ctx)
         return None
 
     async def dispatch(self, ctx: CommandContext) -> OutboundMessage | None:
         """Try exact, then prefix handlers. Returns None if unhandled."""
-        cmd = ctx.raw.lower()
+        stripped = self._strip_mention(ctx.raw)
+        cmd = stripped.lower()
 
         if handler := self._exact.get(cmd):
             return await handler(ctx)
 
         for pfx, handler in self._prefix:
             if cmd.startswith(pfx):
-                ctx.args = ctx.raw[len(pfx):]
+                ctx.args = stripped[len(pfx):]
                 return await handler(ctx)
 
         return None
