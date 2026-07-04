@@ -59,8 +59,14 @@ class ExecToolConfig(Base):
     path_append: str = ""
     sandbox: str = ""
     allowed_env_keys: list[str] = Field(default_factory=list)
+    allowed_dirs: list[str] = Field(default_factory=list)  # Restrict exec working dir and absolute paths to these directories
     allow_patterns: list[str] = Field(default_factory=list)
     deny_patterns: list[str] = Field(default_factory=list)
+    approval_patterns: list[str] = Field(default_factory=lambda: [
+        r"(^|[;&|]\s*)rm\b",
+        r"(^|[;&|]\s*)(?:sudo|su)\b",
+        r"(^|[;&|]\s*)(?:kill|pkill|killall)\b",
+    ])  # Commands that require explicit user approval before exec runs
 
 
 @dataclass(slots=True)

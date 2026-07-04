@@ -93,6 +93,26 @@ class InlineFallbackConfig(Base):
 FallbackCandidate = str | InlineFallbackConfig
 
 
+class ModelTargetConfig(Base):
+    """Named target that can resolve to a direct model or smart-router."""
+
+    kind: Literal["provider_model", "smart_router"] = "provider_model"
+    provider: str | None = None
+    model: str | None = None
+    description: str = ""
+
+
+class ModelSelectionConfig(Base):
+    """Configurable model target selection defaults."""
+
+    active_target: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("activeTarget", "active_target"),
+        serialization_alias="activeTarget",
+    )
+    targets: dict[str, ModelTargetConfig] = Field(default_factory=dict)
+
+
 class ModelPresetConfig(Base):
     """A named set of model + generation parameters for quick switching."""
 
@@ -144,6 +164,11 @@ class AgentDefaults(Base):
     bot_icon: str = "🐈"  # Short icon (emoji or text) shown next to the bot name in CLI; "" to omit
     unified_session: bool = False  # Share one session across all channels (single-user multi-device)
     disabled_skills: list[str] = Field(default_factory=list)  # Skill names to exclude from loading (e.g. ["summarize", "skill-creator"])
+    model_selection: ModelSelectionConfig = Field(
+        default_factory=ModelSelectionConfig,
+        validation_alias=AliasChoices("modelSelection", "model_selection"),
+        serialization_alias="modelSelection",
+    )
     session_ttl_minutes: int = Field(
         default=15,
         ge=0,
@@ -168,6 +193,133 @@ class AgentsConfig(Base):
     """Agent configuration."""
 
     defaults: AgentDefaults = Field(default_factory=AgentDefaults)
+
+
+class SmartRouterTierConfig(Base):
+    """Per-tier provider/model selection."""
+
+    provider: str | None = None
+    model: str | None = None
+
+
+class SmartRouterLocalHybridConfig(Base):
+    """Optional local hybrid routing settings."""
+
+    enabled: bool = False
+    mode: Literal["vision_first_text_writer", "vision_only_direct"] = "vision_first_text_writer"
+    vision: SmartRouterTierConfig = Field(default_factory=SmartRouterTierConfig)
+    on_vision_unavailable: Literal["error", "mini", "full"] = Field(
+        default="error",
+        validation_alias=AliasChoices("onVisionUnavailable", "on_vision_unavailable"),
+        serialization_alias="onVisionUnavailable",
+    )
+
+
+class SmartRouterPolicyConfig(Base):
+    """Rule-based routing thresholds and keyword groups."""
+
+    local_score_max: int = Field(default=2, ge=0)
+    full_score_min: int = Field(default=6, ge=1)
+    short_prompt_chars: int = Field(default=120, ge=1)
+    medium_prompt_chars: int = Field(default=800, ge=1)
+    long_prompt_chars: int = Field(default=2000, ge=1)
+    tool_bonus: int = Field(default=2, ge=0)
+    code_bonus: int = Field(default=3, ge=0)
+    reasoning_bonus: int = Field(default=3, ge=0)
+    history_bonus: int = Field(default=2, ge=0)
+    attachment_bonus: int = Field(default=2, ge=0)
+    full_keywords: list[str] = Field(
+        default_factory=lambda: [
+            "architecture",
+            "benchmark",
+            "compare",
+            "debug",
+            "design",
+            "investigate",
+            "migration",
+            "optimize",
+            "plan",
+            "refactor",
+            "strategy",
+            "tradeoff",
+        ]
+    )
+    code_keywords: list[str] = Field(
+        default_factory=lambda: [
+            "bash",
+            "class",
+            "code",
+            "def",
+            "function",
+            "javascript",
+            "python",
+            "regex",
+            "sql",
+            "traceback",
+            "typescript",
+        ]
+    )
+    tool_keywords: list[str] = Field(
+        default_factory=lambda: [
+            "command",
+            "docker",
+            "git",
+            "install",
+            "log",
+            "pytest",
+            "run",
+            "script",
+            "terminal",
+            "test",
+        ]
+    )
+
+
+class SmartRouterHealthConfig(Base):
+    """Failure tracking and cooldown settings."""
+
+    failure_threshold: int = Field(default=2, ge=1)
+    cooldown_seconds: int = Field(default=180, ge=1)
+
+
+class SmartRouterLoggingConfig(Base):
+    """JSONL routing log settings."""
+
+    enabled: bool = True
+    path: str = "~/.nanobot/logs/smart-router.jsonl"
+
+
+class SmartRouterConfig(Base):
+    """Optional local/mini/full smart-router configuration."""
+
+    enabled: bool = False
+    allow_local_tools: bool = False
+    local: SmartRouterTierConfig = Field(default_factory=SmartRouterTierConfig)
+    mini: SmartRouterTierConfig = Field(default_factory=SmartRouterTierConfig)
+    full: SmartRouterTierConfig = Field(default_factory=SmartRouterTierConfig)
+    local_hybrid: SmartRouterLocalHybridConfig = Field(
+        default_factory=SmartRouterLocalHybridConfig,
+        validation_alias=AliasChoices("localHybrid", "local_hybrid"),
+        serialization_alias="localHybrid",
+    )
+    policy: SmartRouterPolicyConfig = Field(default_factory=SmartRouterPolicyConfig)
+    health: SmartRouterHealthConfig = Field(default_factory=SmartRouterHealthConfig)
+    logging: SmartRouterLoggingConfig = Field(default_factory=SmartRouterLoggingConfig)
+
+
+class PluginsConfig(Base):
+    """Configuration for general runtime plugins.
+
+    Plugin-specific settings are stored as extra dict fields keyed by plugin name.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    smartrouter: SmartRouterConfig = Field(
+        default_factory=SmartRouterConfig,
+        validation_alias=AliasChoices("smartrouter", "smartRouter"),
+        serialization_alias="smartrouter",
+    )
 
 
 class ProviderConfig(Base):
@@ -198,6 +350,7 @@ class ProvidersConfig(Base):
     model_config = ConfigDict(extra="allow")
 
     custom: ProviderConfig = Field(default_factory=ProviderConfig)  # Any OpenAI-compatible endpoint
+    rapid_mlx: ProviderConfig = Field(default_factory=ProviderConfig)  # Rapid-MLX local OpenAI-compatible runtime
     azure_openai: ProviderConfig = Field(default_factory=ProviderConfig)  # Azure OpenAI (model = deployment name)
     bedrock: BedrockProviderConfig = Field(default_factory=BedrockProviderConfig)  # AWS Bedrock Converse
     anthropic: ProviderConfig = Field(default_factory=ProviderConfig)
@@ -272,6 +425,14 @@ class HeartbeatConfig(Base):
     enabled: bool = True
     interval_s: int = 30 * 60  # 30 minutes
     keep_recent_messages: int = 8
+    webui_first: bool = True
+    max_digest_items: int = Field(default=3, ge=1, le=10)
+    quiet_hours_enabled: bool = False
+    quiet_hours_start_local_time: str = Field(default="22:30", pattern=r"^\d{2}:\d{2}$")
+    quiet_hours_end_local_time: str = Field(default="07:30", pattern=r"^\d{2}:\d{2}$")
+    quiet_hours_timezone: str | None = None
+    quiet_hours_allow_critical: bool = False
+    quiet_hours_allowed_channels: list[str] = Field(default_factory=lambda: ["websocket"])
 
 
 class ApiConfig(Base):
@@ -304,6 +465,35 @@ class MCPServerConfig(Base):
     enabled_tools: list[str] = Field(default_factory=lambda: ["*"])  # Only register these tools; accepts raw MCP names or wrapped mcp_<server>_<tool> names; ["*"] = all tools; [] = no tools
 
 
+class FilesystemToolsConfig(Base):
+    """File tool access configuration."""
+
+    allowed_dirs: list[str] = Field(default_factory=list)  # Empty = unrestricted unless restrictToWorkspace is true
+
+
+class ChannelFilesystemToolsOverride(Base):
+    """Per-channel filesystem tool overrides."""
+
+    allowed_dirs: list[str] | None = None
+
+
+class ChannelExecToolOverride(Base):
+    """Per-channel exec tool overrides."""
+
+    allowed_dirs: list[str] | None = None
+    allow_patterns: list[str] | None = None
+    deny_patterns: list[str] | None = None
+    approval_patterns: list[str] | None = None
+
+
+class ChannelToolsOverride(Base):
+    """Per-channel tool access overrides."""
+
+    restrict_to_workspace: bool | None = None
+    filesystem: ChannelFilesystemToolsOverride = Field(default_factory=ChannelFilesystemToolsOverride)
+    exec: ChannelExecToolOverride = Field(default_factory=ChannelExecToolOverride)
+
+
 def _lazy_default(module_path: str, class_name: str) -> Any:
     """Deferred import helper for ToolsConfig default factories."""
     import importlib
@@ -327,6 +517,7 @@ class ToolsConfig(Base):
     image_generation: ImageGenerationToolConfig = Field(
         default_factory=lambda: _lazy_default("nanobot.agent.tools.image_generation", "ImageGenerationToolConfig"),
     )
+    filesystem: FilesystemToolsConfig = Field(default_factory=FilesystemToolsConfig)
     restrict_to_workspace: bool = False  # policy intent: keep tool access inside workspace when possible
     webui_allow_local_service_access: bool = Field(
         default=True,
@@ -348,6 +539,13 @@ class Config(BaseSettings):
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
     transcription: TranscriptionConfig = Field(default_factory=TranscriptionConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
+    plugins: PluginsConfig = Field(default_factory=PluginsConfig)
+    smart_router: SmartRouterConfig = Field(
+        default_factory=SmartRouterConfig,
+        validation_alias=AliasChoices("smartRouter", "smart_router"),
+        serialization_alias="smartRouter",
+        exclude=True,
+    )
     api: ApiConfig = Field(default_factory=ApiConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
@@ -360,6 +558,25 @@ class Config(BaseSettings):
         if not type(self).__pydantic_complete__:
             _resolve_tool_config_refs()
         super().__init__(**values)
+
+    @staticmethod
+    def _router_has_values(value: SmartRouterConfig | None) -> bool:
+        if value is None:
+            return False
+        return bool(value.model_dump(mode="json", exclude_defaults=True))
+
+    @model_validator(mode="after")
+    def _sync_runtime_plugin_configs(self) -> "Config":
+        plugin_router = self.plugins.smartrouter
+        legacy_router = self.smart_router
+
+        if self._router_has_values(plugin_router):
+            self.smart_router = plugin_router.model_copy(deep=True)
+        elif self._router_has_values(legacy_router):
+            self.plugins.smartrouter = legacy_router.model_copy(deep=True)
+        else:
+            self.smart_router = plugin_router.model_copy(deep=True)
+        return self
 
     @model_validator(mode="after")
     def _validate_model_preset(self) -> "Config":

@@ -246,3 +246,48 @@ def test_load_config_accepts_legacy_local_preview_access(tmp_path) -> None:
     config = load_config(config_path)
 
     assert config.tools.webui_allow_local_service_access is False
+
+
+def test_load_config_migrates_legacy_smart_router_to_plugins_section(tmp_path) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "smartRouter": {
+                    "enabled": True,
+                    "mini": {"provider": "openrouter", "model": "openai/gpt-5.4-mini"},
+                    "full": {"provider": "openrouter", "model": "openai/gpt-5.4"},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.plugins.smartrouter.enabled is True
+    assert config.smart_router.enabled is True
+
+
+def test_save_config_writes_smart_router_under_plugins_section(tmp_path) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "smartRouter": {
+                    "enabled": True,
+                    "mini": {"provider": "openrouter", "model": "openai/gpt-5.4-mini"},
+                    "full": {"provider": "openrouter", "model": "openai/gpt-5.4"},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+    save_config(config, config_path)
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+
+    assert "smartRouter" not in saved
+    assert saved["plugins"]["smartrouter"]["enabled"] is True
+
