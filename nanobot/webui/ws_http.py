@@ -128,6 +128,60 @@ def _resolve_bootstrap_model_name(
     return _default_model_name_from_config() or ""
 
 
+def _load_webui_config() -> Any:
+    """Load config for WebUI metadata, preferring env-resolved values."""
+    from nanobot.config.loader import load_config, resolve_config_env_vars
+
+    config = load_config()
+    try:
+        return resolve_config_env_vars(config)
+    except ValueError as exc:
+        logger.debug("webui config env resolution fallback: {}", exc)
+        return config
+
+
+def _read_webui_active_target() -> str | None:
+    """Return the active model target name for WebUI bootstrap hints."""
+    try:
+        from nanobot.model_targets import get_active_model_target_name
+
+        config = _load_webui_config()
+        active_target = get_active_model_target_name(config, None)
+        if isinstance(active_target, str):
+            target = active_target.strip()
+            return target or None
+        return None
+    except Exception as e:
+        logger.debug("webui bootstrap could not load active target: {}", e)
+        return None
+
+
+def _model_target_payload(target: Any) -> dict[str, Any]:
+    return {
+        "name": target.name,
+        "kind": target.kind,
+        "provider": target.provider,
+        "model": target.model,
+        "description": target.description,
+        "display_name": target.display_name,
+        "group": target.group,
+        "smart_router_mode": target.smart_router_mode,
+    }
+
+
+def _read_webui_model_targets() -> list[dict[str, Any]]:
+    """Return configured model targets in a UI-friendly shape for the WebUI."""
+    try:
+        from nanobot.model_targets import build_model_targets
+
+        config = _load_webui_config()
+        targets = build_model_targets(config)
+        return [_model_target_payload(target) for target in targets.values()]
+    except Exception as e:
+        logger.debug("webui bootstrap could not load model targets: {}", e)
+        return []
+
+
 # ---------------------------------------------------------------------------
 # GatewayHTTPHandler
 # ---------------------------------------------------------------------------
@@ -239,6 +293,11 @@ class GatewayHTTPHandler:
         if response is not None:
             return response
 
+        # Local LLM control routes
+        response = await self._dispatch_local_llm_routes(request, got)
+        if response is not None:
+            return response
+
         # Session routes
         response = await self._dispatch_session_routes(request, got)
         if response is not None:
@@ -335,6 +394,8 @@ class GatewayHTTPHandler:
                 "ws_url": ws_url,
                 "expires_in": self.config.token_ttl_s,
                 "model_name": _resolve_bootstrap_model_name(self.runtime_model_name),
+                "active_target": _read_webui_active_target(),
+                "model_targets": _read_webui_model_targets(),
                 "runtime_surface": self._runtime_surface,
                 "runtime_capabilities": self._capabilities,
             }
@@ -375,7 +436,198 @@ class GatewayHTTPHandler:
         if m:
             return self._handle_session_delete(request, m.group(1))
 
+        m = re.match(r"^/api/sessions/([^/]+)/action-result/clear$", got)
+        if m:
+            return self._handle_session_action_result_clear(request, m.group(1))
+
+        m = re.match(r"^/api/sessions/([^/]+)/proactive-summary/clear$", got)
+        if m:
+            return self._handle_session_proactive_summary_clear(request, m.group(1))
+
+        m = re.match(r"^/api/sessions/([^/]+)/model-target$", got)
+        if m:
+            return self._handle_session_model_target(request, m.group(1))
+
+        m = re.match(r"^/api/sessions/([^/]+)/model-target/clear$", got)
+        if m:
+            return self._handle_session_model_target_clear(request, m.group(1))
+
+        m = re.match(r"^/api/sessions/([^/]+)/model-target/([^/]+)/select$", got)
+        if m:
+            return self._handle_session_model_target_select(request, m.group(1), m.group(2))
+
         return None
+
+    async def _dispatch_local_llm_routes(self, request: WsRequest, got: str) -> Response | None:
+        if got == "/api/local-llm/status":
+            return await self._handle_local_llm_status(request)
+        m = re.match(r"^/api/local-llm/([^/]+)/([^/]+)$", got)
+        if m:
+            return await self._handle_local_llm_action(request, m.group(1), m.group(2))
+        return None
+
+    async def _handle_local_llm_status(self, request: WsRequest) -> Response:
+        if not self.check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        try:
+            from nanobot.local_llm_control import default_controller
+
+            payload = await asyncio.to_thread(default_controller().status)
+            return _http_json_response(payload)
+        except Exception as exc:
+            logger.warning("local LLM status unavailable: {}", exc)
+            return _http_error(500, "local LLM status unavailable")
+
+    async def _handle_local_llm_action(self, request: WsRequest, action: str, target: str) -> Response:
+        if not self.check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        try:
+            from nanobot.local_llm_control import LocalLlmError, default_controller
+
+            payload = await asyncio.to_thread(default_controller().run_action, action, target)
+            return _http_json_response(payload)
+        except LocalLlmError as exc:
+            return _http_error(exc.status, str(exc))
+        except Exception as exc:
+            logger.warning("local LLM action failed: {}", exc)
+            return _http_error(500, "local LLM action failed")
+
+    def _decode_webui_session_key(self, key: str) -> str | None:
+        decoded_key = _decode_api_key(key)
+        if decoded_key is None:
+            return None
+        if not _is_websocket_channel_session_key(decoded_key):
+            return None
+        return decoded_key
+
+    def _handle_session_action_result_clear(self, request: WsRequest, key: str) -> Response:
+        if not self.check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        if self.session_manager is None:
+            return _http_error(503, "session manager unavailable")
+        decoded_key = self._decode_webui_session_key(key)
+        if decoded_key is None:
+            return _http_error(404, "session not found")
+        if self.session_manager.read_session_file(decoded_key) is None:
+            return _http_error(404, "session not found")
+
+        session = self.session_manager.get_or_create(decoded_key)
+        had_action_result = "action_result" in session.metadata
+        self.session_manager.clear_action_result(session)
+        self.session_manager.save(session)
+        return _http_json_response({"key": decoded_key, "cleared": had_action_result})
+
+    def _handle_session_proactive_summary_clear(self, request: WsRequest, key: str) -> Response:
+        if not self.check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        if self.session_manager is None:
+            return _http_error(503, "session manager unavailable")
+        decoded_key = self._decode_webui_session_key(key)
+        if decoded_key is None:
+            return _http_error(404, "session not found")
+        if self.session_manager.read_session_file(decoded_key) is None:
+            return _http_error(404, "session not found")
+
+        session = self.session_manager.get_or_create(decoded_key)
+        had_proactive_summary = "proactive_summary" in session.metadata
+        self.session_manager.clear_proactive_summary(session)
+        self.session_manager.save(session)
+        return _http_json_response({"key": decoded_key, "cleared": had_proactive_summary})
+
+    def _load_model_target_context(self) -> tuple[Any, dict[str, Any]] | tuple[None, None]:
+        try:
+            from nanobot.model_targets import build_model_targets
+
+            config = _load_webui_config()
+            return config, build_model_targets(config)
+        except Exception as e:
+            logger.warning("webui model target context unavailable: {}", e)
+            return None, None
+
+    def _current_session_model_target_payload(self, decoded_key: str) -> Response:
+        assert self.session_manager is not None
+        config, targets = self._load_model_target_context()
+        if config is None or targets is None:
+            return _http_error(503, "model targets unavailable")
+
+        from nanobot.model_targets import get_active_model_target_name
+
+        session = self.session_manager.get_or_create(decoded_key)
+        active_target = get_active_model_target_name(config, session)
+        target = targets.get(active_target)
+        return _http_json_response({
+            "key": decoded_key,
+            "active_target": active_target,
+            "target": _model_target_payload(target) if target is not None else None,
+        })
+
+    def _handle_session_model_target(self, request: WsRequest, key: str) -> Response:
+        if not self.check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        if self.session_manager is None:
+            return _http_error(503, "session manager unavailable")
+        decoded_key = self._decode_webui_session_key(key)
+        if decoded_key is None:
+            return _http_error(404, "session not found")
+        if self.session_manager.read_session_file(decoded_key) is None:
+            return _http_error(404, "session not found")
+        return self._current_session_model_target_payload(decoded_key)
+
+    def _handle_session_model_target_clear(self, request: WsRequest, key: str) -> Response:
+        if not self.check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        if self.session_manager is None:
+            return _http_error(503, "session manager unavailable")
+        decoded_key = self._decode_webui_session_key(key)
+        if decoded_key is None:
+            return _http_error(404, "session not found")
+        if self.session_manager.read_session_file(decoded_key) is None:
+            return _http_error(404, "session not found")
+
+        from nanobot.model_targets import SESSION_MODEL_TARGET_KEY
+
+        session = self.session_manager.get_or_create(decoded_key)
+        session.metadata.pop(SESSION_MODEL_TARGET_KEY, None)
+        self.session_manager.save(session)
+        return self._current_session_model_target_payload(decoded_key)
+
+    def _handle_session_model_target_select(
+        self,
+        request: WsRequest,
+        key: str,
+        target_name: str,
+    ) -> Response:
+        if not self.check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        if self.session_manager is None:
+            return _http_error(503, "session manager unavailable")
+        decoded_key = self._decode_webui_session_key(key)
+        if decoded_key is None:
+            return _http_error(404, "session not found")
+        if self.session_manager.read_session_file(decoded_key) is None:
+            return _http_error(404, "session not found")
+
+        decoded_target = _decode_api_key(target_name)
+        if decoded_target is None:
+            return _http_error(400, "invalid model target")
+
+        config, _targets = self._load_model_target_context()
+        if config is None:
+            return _http_error(503, "model targets unavailable")
+
+        from nanobot.model_targets import SESSION_MODEL_TARGET_KEY, resolve_model_target
+
+        try:
+            resolve_model_target(config, decoded_target)
+        except KeyError:
+            return _http_error(404, "unknown model target")
+        except Exception:
+            return _http_error(400, "invalid model target")
+
+        session = self.session_manager.get_or_create(decoded_key)
+        session.metadata[SESSION_MODEL_TARGET_KEY] = decoded_target
+        self.session_manager.save(session)
+        return self._current_session_model_target_payload(decoded_key)
 
     async def _handle_sessions_list(self, request: WsRequest) -> Response:
         if not self.check_api_token(request):

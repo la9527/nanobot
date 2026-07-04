@@ -16,6 +16,7 @@ import httpx
 import pytest
 
 from nanobot.channels.websocket import WebSocketChannel, WebSocketConfig
+from nanobot.config.schema import Config
 from nanobot.cron.service import CronService
 from nanobot.cron.types import CronJob, CronPayload, CronSchedule
 from nanobot.session.keys import UNIFIED_SESSION_KEY
@@ -1619,3 +1620,219 @@ def test_bootstrap_secret_also_enforced_on_localhost(bus: MagicMock) -> None:
     channel = _ch(bus, host="0.0.0.0", tokenIssueSecret="s3cret")
     resp = channel.gateway.http._handle_bootstrap(_LOCAL, _NO_HEADERS)
     assert resp.status_code == 401
+
+
+def test_bootstrap_includes_active_target_and_model_targets(
+    bus: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("nanobot.config.loader.load_config", lambda config_path=None: Config())
+    channel = _ch(bus, host="127.0.0.1")
+    resp = channel.gateway.http._handle_bootstrap(_LOCAL, _NO_HEADERS)
+    assert resp.status_code == 200
+    body = json.loads(resp.body)
+    assert body["active_target"] == "default"
+    names = {t["name"] for t in body["model_targets"]}
+    assert "default" in names
+
+
+async def _http_auth_get(url: str, token: str) -> httpx.Response:
+    return await _http_get(url, headers={"Authorization": f"Bearer {token}"})
+
+
+@pytest.mark.asyncio
+async def test_local_llm_status_route(
+    bus: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nanobot import local_llm_control
+
+    monkeypatch.setattr(
+        local_llm_control.default_controller(),
+        "status",
+        lambda: {"default_target": "mlx", "targets": []},
+    )
+    channel = _ch(bus, session_manager=_seed_session(tmp_path), port=29940)
+    server_task = asyncio.create_task(channel.start())
+    await asyncio.sleep(0.3)
+    try:
+        deny = await _http_get("http://127.0.0.1:29940/api/local-llm/status")
+        assert deny.status_code == 401
+
+        boot = await _http_get("http://127.0.0.1:29940/webui/bootstrap")
+        token = boot.json()["token"]
+        resp = await _http_auth_get("http://127.0.0.1:29940/api/local-llm/status", token)
+        assert resp.status_code == 200
+        assert resp.json()["default_target"] == "mlx"
+    finally:
+        await channel.stop()
+        await server_task
+
+
+@pytest.mark.asyncio
+async def test_local_llm_action_route(
+    bus: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nanobot import local_llm_control
+
+    monkeypatch.setattr(
+        local_llm_control.default_controller(),
+        "run_action",
+        lambda action, target: {"ok": True, "action": action, "target": target},
+    )
+    channel = _ch(bus, session_manager=_seed_session(tmp_path), port=29941)
+    server_task = asyncio.create_task(channel.start())
+    await asyncio.sleep(0.3)
+    try:
+        boot = await _http_get("http://127.0.0.1:29941/webui/bootstrap")
+        token = boot.json()["token"]
+        resp = await _http_auth_get(
+            "http://127.0.0.1:29941/api/local-llm/start/mlx", token
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body == {"ok": True, "action": "start", "target": "mlx"}
+    finally:
+        await channel.stop()
+        await server_task
+
+
+@pytest.mark.asyncio
+async def test_local_llm_action_route_surfaces_local_llm_error(
+    bus: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nanobot import local_llm_control
+
+    def _boom(action: str, target: str) -> dict[str, Any]:
+        raise local_llm_control.LocalLlmError("unknown local LLM target: bogus")
+
+    monkeypatch.setattr(local_llm_control.default_controller(), "run_action", _boom)
+    channel = _ch(bus, session_manager=_seed_session(tmp_path), port=29942)
+    server_task = asyncio.create_task(channel.start())
+    await asyncio.sleep(0.3)
+    try:
+        boot = await _http_get("http://127.0.0.1:29942/webui/bootstrap")
+        token = boot.json()["token"]
+        resp = await _http_auth_get(
+            "http://127.0.0.1:29942/api/local-llm/start/bogus", token
+        )
+        assert resp.status_code == 400
+    finally:
+        await channel.stop()
+        await server_task
+
+
+@pytest.mark.asyncio
+async def test_session_action_result_clear_route(bus: MagicMock, tmp_path: Path) -> None:
+    sm = _seed_session(tmp_path, key="websocket:abc")
+    session = sm.get_or_create("websocket:abc")
+    sm.set_action_result(session, {"kind": "mail_send", "status": "sent"})
+    sm.save(session)
+
+    channel = _ch(bus, session_manager=sm, port=29943)
+    server_task = asyncio.create_task(channel.start())
+    await asyncio.sleep(0.3)
+    try:
+        boot = await _http_get("http://127.0.0.1:29943/webui/bootstrap")
+        token = boot.json()["token"]
+        resp = await _http_auth_get(
+            "http://127.0.0.1:29943/api/sessions/websocket:abc/action-result/clear",
+            token,
+        )
+        assert resp.status_code == 200
+        assert resp.json() == {"key": "websocket:abc", "cleared": True}
+
+        reloaded = sm.get_or_create("websocket:abc")
+        assert "action_result" not in reloaded.metadata
+    finally:
+        await channel.stop()
+        await server_task
+
+
+@pytest.mark.asyncio
+async def test_session_proactive_summary_clear_route(bus: MagicMock, tmp_path: Path) -> None:
+    sm = _seed_session(tmp_path, key="websocket:abc")
+    session = sm.get_or_create("websocket:abc")
+    sm.set_proactive_summary(session, {"delivered": True})
+    sm.save(session)
+
+    channel = _ch(bus, session_manager=sm, port=29944)
+    server_task = asyncio.create_task(channel.start())
+    await asyncio.sleep(0.3)
+    try:
+        boot = await _http_get("http://127.0.0.1:29944/webui/bootstrap")
+        token = boot.json()["token"]
+        resp = await _http_auth_get(
+            "http://127.0.0.1:29944/api/sessions/websocket:abc/proactive-summary/clear",
+            token,
+        )
+        assert resp.status_code == 200
+        assert resp.json() == {"key": "websocket:abc", "cleared": True}
+
+        reloaded = sm.get_or_create("websocket:abc")
+        assert "proactive_summary" not in reloaded.metadata
+    finally:
+        await channel.stop()
+        await server_task
+
+
+@pytest.mark.asyncio
+async def test_session_model_target_select_get_and_clear_routes(
+    bus: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("nanobot.config.loader.load_config", lambda config_path=None: Config())
+    sm = _seed_session(tmp_path, key="websocket:abc")
+    channel = _ch(bus, session_manager=sm, port=29945)
+    server_task = asyncio.create_task(channel.start())
+    await asyncio.sleep(0.3)
+    try:
+        boot = await _http_get("http://127.0.0.1:29945/webui/bootstrap")
+        token = boot.json()["token"]
+        available_names = {t["name"] for t in boot.json()["model_targets"]}
+        assert "default" in available_names
+
+        current = await _http_auth_get(
+            "http://127.0.0.1:29945/api/sessions/websocket:abc/model-target", token
+        )
+        assert current.status_code == 200
+        assert current.json()["active_target"] == "default"
+
+        unknown = await _http_auth_get(
+            "http://127.0.0.1:29945/api/sessions/websocket:abc/model-target/does-not-exist/select",
+            token,
+        )
+        assert unknown.status_code == 404
+
+        selected = await _http_auth_get(
+            "http://127.0.0.1:29945/api/sessions/websocket:abc/model-target/default/select",
+            token,
+        )
+        assert selected.status_code == 200
+        assert selected.json()["active_target"] == "default"
+
+        cleared = await _http_auth_get(
+            "http://127.0.0.1:29945/api/sessions/websocket:abc/model-target/clear", token
+        )
+        assert cleared.status_code == 200
+        assert cleared.json()["active_target"] == "default"
+    finally:
+        await channel.stop()
+        await server_task
+
+
+@pytest.mark.asyncio
+async def test_session_model_target_routes_reject_unknown_session(
+    bus: MagicMock, tmp_path: Path
+) -> None:
+    sm = _seed_session(tmp_path, key="websocket:abc")
+    channel = _ch(bus, session_manager=sm, port=29946)
+    server_task = asyncio.create_task(channel.start())
+    await asyncio.sleep(0.3)
+    try:
+        boot = await _http_get("http://127.0.0.1:29946/webui/bootstrap")
+        token = boot.json()["token"]
+        resp = await _http_auth_get(
+            "http://127.0.0.1:29946/api/sessions/websocket:missing/model-target", token
+        )
+        assert resp.status_code == 404
+    finally:
+        await channel.stop()
+        await server_task
