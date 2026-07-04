@@ -171,6 +171,9 @@ class AgentLoop:
     _SMART_ROUTER_TIER_KEY = "smart_router_last_tier"
     _SMART_ROUTER_MODEL_KEY = "smart_router_last_model"
     _TURN_ID_KEY = "turn_id"
+    _APPROVAL_SUMMARY_KEY = "approval_summary"
+    _APPROVAL_YES = frozenset({"y", "yes", "ok", "approve", "approved", "run", "continue", "예", "네", "승인", "허용"})
+    _APPROVAL_NO = frozenset({"n", "no", "deny", "denied", "block", "cancel", "stop", "아니오", "아니", "거부", "취소"})
 
     # Event-driven state transition table.
     # Handlers return an event string; the driver looks up the next state here.
@@ -740,6 +743,115 @@ class AgentLoop:
                 logger.exception("Failed to build channel-scoped tool: {}", tool_cls.__name__)
         return registry
 
+    @classmethod
+    def _parse_tool_approval_response(cls, content: str | None) -> bool | None:
+        """Parse a free-text reply into an approve/deny decision, or None if unclear."""
+        if not isinstance(content, str):
+            return None
+        normalized = " ".join(content.strip().lower().split())
+        if not normalized:
+            return None
+        token = re.sub(r"^[^\w가-힣]+|[^\w가-힣]+$", "", normalized.split(" ", 1)[0])
+        if token in cls._APPROVAL_YES:
+            return True
+        if token in cls._APPROVAL_NO:
+            return False
+        return None
+
+    @staticmethod
+    def _compact_approval_command(command: Any, *, limit: int = 160) -> str | None:
+        if not isinstance(command, str):
+            return None
+        compact = " ".join(command.strip().split())
+        if not compact:
+            return None
+        if len(compact) > limit:
+            return compact[: limit - 3] + "..."
+        return compact
+
+    def _format_tool_approval_prompt(
+        self,
+        *,
+        channel: str,
+        prompt: str,
+        params: dict[str, Any] | None,
+    ) -> str:
+        """Render a channel-appropriate approval prompt (compact for chat channels)."""
+        command_preview = self._compact_approval_command((params or {}).get("command"))
+        if channel == "telegram":
+            lines = ["Approval required for a high-risk command."]
+            if command_preview:
+                lines.append(f"Command: {command_preview}")
+            lines.append("Reply yes to run or no to block.")
+            return "\n".join(lines)
+        return prompt
+
+    async def _request_tool_approval(
+        self,
+        *,
+        session: Session | None,
+        channel: str,
+        chat_id: str,
+        message_id: str | None,
+        pending_queue: asyncio.Queue | None,
+        tool_name: str,
+        tool_call_id: str,
+        prompt: str,
+        params: dict[str, Any] | None,
+    ) -> tuple[bool, str | None]:
+        """Publish an approval prompt and block until the user replies (or times out)."""
+        approval_text = self._format_tool_approval_prompt(
+            channel=channel,
+            prompt=prompt,
+            params=params,
+        )
+        meta: dict[str, Any] = {
+            "_tool_approval": True,
+            "tool_name": tool_name,
+            "tool_call_id": tool_call_id,
+        }
+        if message_id:
+            meta["message_id"] = message_id
+        self._set_pending_approval_summary(
+            session,
+            channel=channel,
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            prompt=approval_text,
+            message_id=message_id,
+        )
+        await self.bus.publish_outbound(OutboundMessage(
+            channel=channel,
+            chat_id=chat_id,
+            content=approval_text,
+            metadata=meta,
+        ))
+        if pending_queue is None:
+            self._clear_pending_approval_summary(session)
+            return False, "Error: Tool call requires approval but no interactive approval channel is available"
+
+        while True:
+            try:
+                approval_msg = await asyncio.wait_for(pending_queue.get(), timeout=300)
+            except asyncio.TimeoutError:
+                self._clear_pending_approval_summary(session)
+                return False, "Error: Tool approval timed out after 300 seconds"
+
+            decision = self._parse_tool_approval_response(approval_msg.content)
+            if decision is None:
+                await self.bus.publish_outbound(OutboundMessage(
+                    channel=channel,
+                    chat_id=chat_id,
+                    content="Approval is still pending. Reply yes to run the command or no to block it.",
+                    metadata=meta,
+                ))
+                continue
+            if decision:
+                self._clear_pending_approval_summary(session)
+                return True, None
+            self._clear_pending_approval_summary(session)
+            return False, "Error: Command execution was denied by the user"
+
     async def _connect_mcp(self) -> None:
         """Connect configured MCP servers."""
         await agent_context.connect_mcp(self, self.tools, followup_callback=self._handle_mcp_tool_followup)
@@ -1064,6 +1176,17 @@ class AgentLoop:
                 retry_wait_callback=on_retry_wait,
                 checkpoint_callback=_checkpoint,
                 injection_callback=_drain_pending,
+                tool_approval_callback=lambda tool_call, _tool, params, prompt: self._request_tool_approval(
+                    session=session,
+                    channel=channel,
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    pending_queue=pending_queue,
+                    tool_name=tool_call.name,
+                    tool_call_id=tool_call.id,
+                    prompt=prompt,
+                    params=params,
+                ),
                 # Sustained goals may legitimately exceed NANOBOT_LLM_TIMEOUT_S; idle stall
                 # is still capped by NANOBOT_STREAM_IDLE_TIMEOUT_S in streaming providers.
                 llm_timeout_s=runner_wall_llm_timeout_s(
@@ -2098,6 +2221,41 @@ class AgentLoop:
 
     def _clear_pending_user_turn(self, session: Session) -> None:
         session.metadata.pop(self._PENDING_USER_TURN_KEY, None)
+
+    @staticmethod
+    def _approval_summary_preview(prompt: str, *, limit: int = 160) -> str:
+        compact = " ".join(prompt.split())
+        if len(compact) <= limit:
+            return compact
+        return f"{compact[:limit - 3]}..."
+
+    def _set_pending_approval_summary(
+        self,
+        session: Session | None,
+        *,
+        channel: str,
+        tool_name: str,
+        tool_call_id: str,
+        prompt: str,
+        message_id: str | None,
+    ) -> None:
+        if session is None:
+            return
+        session.metadata[self._APPROVAL_SUMMARY_KEY] = {
+            "status": "pending",
+            "channel": channel,
+            "tool_name": tool_name,
+            "tool_call_id": tool_call_id,
+            "message_id": message_id,
+            "prompt_preview": self._approval_summary_preview(prompt),
+        }
+        self.sessions.save(session)
+
+    def _clear_pending_approval_summary(self, session: Session | None) -> None:
+        if session is None:
+            return
+        if session.metadata.pop(self._APPROVAL_SUMMARY_KEY, None) is not None:
+            self.sessions.save(session)
 
     def _clear_runtime_checkpoint(self, session: Session) -> None:
         if self._RUNTIME_CHECKPOINT_KEY in session.metadata:

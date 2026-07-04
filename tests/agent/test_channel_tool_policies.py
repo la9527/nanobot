@@ -1,11 +1,14 @@
-"""Tests for channel-specific tool policy overrides."""
+"""Tests for channel-specific tool policy overrides and the tool approval flow."""
 
+import asyncio
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock
 
 from nanobot.agent.loop import AgentLoop
 from nanobot.agent.tools.filesystem import ReadFileTool
 from nanobot.agent.tools.shell import ExecTool
+from nanobot.bus.events import InboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.config.schema import ChannelsConfig, ToolsConfig
 
@@ -117,3 +120,61 @@ def test_no_channel_override_falls_back_to_global_policy(tmp_path: Path) -> None
     assert isinstance(exec_tool, ExecTool)
     assert isinstance(read_tool, ReadFileTool)
     assert read_tool._allowed_dir == tmp_path.resolve()
+
+
+async def test_tool_approval_prompt_round_trip(tmp_path: Path) -> None:
+    loop = _make_loop(tmp_path)
+    pending: asyncio.Queue[InboundMessage] = asyncio.Queue()
+    await pending.put(InboundMessage(
+        channel="websocket",
+        sender_id="user-1",
+        chat_id="chat-1",
+        content="yes",
+        timestamp=datetime.now(),
+    ))
+
+    approved, reason = await loop._request_tool_approval(
+        session=None,
+        channel="websocket",
+        chat_id="chat-1",
+        message_id=None,
+        pending_queue=pending,
+        tool_name="exec",
+        tool_call_id="call-1",
+        prompt="Approval required before running this command.",
+        params={"command": "rm -rf build"},
+    )
+
+    outbound = await loop.bus.consume_outbound()
+    assert approved is True
+    assert reason is None
+    assert outbound.metadata["_tool_approval"] is True
+    assert outbound.metadata["tool_name"] == "exec"
+
+
+def test_parse_tool_approval_response_supports_yes_and_no(tmp_path: Path) -> None:
+    loop = _make_loop(tmp_path)
+    assert loop._parse_tool_approval_response("yes") is True
+    assert loop._parse_tool_approval_response("승인") is True
+    assert loop._parse_tool_approval_response("no") is False
+    assert loop._parse_tool_approval_response("취소") is False
+    assert loop._parse_tool_approval_response("maybe") is None
+
+
+def test_telegram_tool_approval_prompt_is_compact(tmp_path: Path) -> None:
+    loop = _make_loop(tmp_path)
+    prompt = loop._format_tool_approval_prompt(
+        channel="telegram",
+        prompt=(
+            "Approval required before running this command.\n"
+            "Working directory: /tmp/demo\n"
+            "Command: sudo rm -rf /tmp/demo\n"
+            "Reply yes to run it or no to block it."
+        ),
+        params={"command": "sudo rm -rf /tmp/demo"},
+    )
+
+    assert prompt.startswith("Approval required for a high-risk command.")
+    assert "Working directory" not in prompt
+    assert "sudo rm -rf /tmp/demo" in prompt
+    assert prompt.endswith("Reply yes to run or no to block.")
