@@ -867,6 +867,16 @@ def _run_gateway(
     ).subscribe(runtime_events)
 
     from nanobot.bus.events import OutboundMessage
+    from nanobot.heartbeat.proactive import (
+        HeartbeatProactivePolicy,
+        HeartbeatTargetDecision,
+        build_proactive_context,
+        classify_proactive_task,
+        decide_heartbeat_target,
+        proactive_dedupe_baseline_from_metadata,
+        proactive_title_for_task,
+        should_suppress_repeated_proactive_delivery,
+    )
     from nanobot.session.keys import session_key_for_channel
 
     def _channel_session_key(channel: str, chat_id: str) -> str:
@@ -875,6 +885,35 @@ def _run_gateway(
             chat_id,
             unified_session=config.agents.defaults.unified_session,
         )
+
+    def _record_heartbeat_proactive_summary(
+        *,
+        channel: str,
+        chat_id: str,
+        status: str,
+        summary: str,
+        category: str,
+        title: str,
+        suppressed_reason: str | None = None,
+    ) -> None:
+        if channel == "cli":
+            return
+        from datetime import datetime
+
+        session = session_manager.get_or_create(_channel_session_key(channel, chat_id))
+        session_manager.set_proactive_summary(
+            session,
+            {
+                "status": status,
+                "category": category,
+                "title": title,
+                "summary": summary,
+                "target_channel": channel,
+                "suppressed_reason": suppressed_reason,
+                "updated_at": datetime.now().isoformat(),
+            },
+        )
+        session_manager.save(session)
 
     async def _deliver_to_channel(
         msg: OutboundMessage, *, record: bool = False, session_key: str | None = None,
@@ -983,12 +1022,28 @@ def _run_gateway(
                 logger.debug("Heartbeat: HEARTBEAT.md has no active tasks")
                 return None
 
-            channel, chat_id = _pick_heartbeat_target()
+            target = _pick_heartbeat_target()
+            if target.suppressed:
+                # Nothing viable to deliver to right now (quiet hours with no
+                # webui fallback) -- skip the agent turn entirely rather than
+                # generating a response only to throw it away, matching the
+                # "avoid wasting LLM calls" intent of the cron-based heartbeat.
+                logger.info(
+                    "Heartbeat: suppressing delivery to {}:{} before agent turn ({})",
+                    target.channel, target.chat_id, target.reason,
+                )
+                return None
+            channel, chat_id = target.channel, target.chat_id
             if channel == "cli":
                 return None
 
+            proactive_context = build_proactive_context(
+                session_manager.list_sessions(),
+                max_digest_items=heartbeat_policy.max_digest_items,
+            )
             prompt = (
                 _HEARTBEAT_PREAMBLE
+                + proactive_context
                 + f"Review the following HEARTBEAT.md and report any active tasks:\n\n{content}"
             )
 
@@ -1023,14 +1078,36 @@ def _run_gateway(
                 response, prompt, agent.provider, agent.model,
                 default_notify=False,
             )
-            if should_notify:
-                logger.info("Heartbeat: completed, delivering response")
-                await _deliver_to_channel(
-                    OutboundMessage(channel=channel, chat_id=chat_id, content=response),
-                    record=True,
-                )
-            else:
+            if not should_notify:
                 logger.info("Heartbeat: silenced by post-run evaluation")
+                return response
+
+            category = classify_proactive_task(content)
+            title = proactive_title_for_task(content)
+            target_session = session_manager.get_or_create(_channel_session_key(channel, chat_id))
+            previous_baseline = proactive_dedupe_baseline_from_metadata(
+                target_session.metadata if isinstance(target_session.metadata, dict) else None
+            )
+            if should_suppress_repeated_proactive_delivery(
+                previous_baseline, response=response, category=category,
+            ):
+                logger.info("Heartbeat: suppressed duplicate delivery to {}:{}", channel, chat_id)
+                _record_heartbeat_proactive_summary(
+                    channel=channel, chat_id=chat_id, status="suppressed",
+                    summary=response, category=category, title=title,
+                    suppressed_reason="duplicate",
+                )
+                return response
+
+            logger.info("Heartbeat: completed, delivering response")
+            _record_heartbeat_proactive_summary(
+                channel=channel, chat_id=chat_id, status="delivered",
+                summary=response, category=category, title=title,
+            )
+            await _deliver_to_channel(
+                OutboundMessage(channel=channel, chat_id=chat_id, content=response),
+                record=True,
+            )
             return response
 
         if is_bound_cron_job(job):
@@ -1068,19 +1145,31 @@ def _run_gateway(
         webui_runtime_capabilities=webui_runtime_capabilities,
     )
 
-    def _pick_heartbeat_target() -> tuple[str, str]:
-        """Pick a routable channel/chat target for heartbeat-triggered messages."""
-        enabled = set(channels.enabled_channels)
-        for item in session_manager.list_sessions():
-            key = item.get("key") or ""
-            if ":" not in key:
-                continue
-            channel, chat_id = key.split(":", 1)
-            if channel in {"cli", "system"}:
-                continue
-            if channel in enabled and chat_id:
-                return channel, chat_id
-        return "cli", "direct"
+    hb_cfg = config.gateway.heartbeat
+    heartbeat_policy = HeartbeatProactivePolicy(
+        webui_first=hb_cfg.webui_first,
+        max_digest_items=hb_cfg.max_digest_items,
+        quiet_hours_enabled=hb_cfg.quiet_hours_enabled,
+        quiet_hours_start_local_time=hb_cfg.quiet_hours_start_local_time,
+        quiet_hours_end_local_time=hb_cfg.quiet_hours_end_local_time,
+        quiet_hours_timezone=hb_cfg.quiet_hours_timezone,
+        quiet_hours_allow_critical=hb_cfg.quiet_hours_allow_critical,
+        quiet_hours_allowed_channels=tuple(hb_cfg.quiet_hours_allowed_channels),
+    )
+
+    def _pick_heartbeat_target() -> HeartbeatTargetDecision:
+        """Pick a routable channel/chat target for heartbeat-triggered messages.
+
+        Honors webui-first preference (prefer the browser session, falling back
+        to an external channel unless that channel is in quiet hours) and
+        quiet-hours suppression, via the shared proactive-delivery policy.
+        """
+        return decide_heartbeat_target(
+            session_manager.list_sessions(),
+            set(channels.enabled_channels),
+            policy=heartbeat_policy,
+            fallback_timezone=config.agents.defaults.timezone,
+        )
 
     if channels.enabled_channels:
         console.print(f"[green]✓[/green] Channels enabled: {', '.join(channels.enabled_channels)}")
@@ -1091,7 +1180,6 @@ def _run_gateway(
     if cron_status["jobs"] > 0:
         console.print(f"[green]✓[/green] Cron: {cron_status['jobs']} scheduled jobs")
 
-    hb_cfg = config.gateway.heartbeat
     if hb_cfg.enabled:
         console.print(f"[green]✓[/green] Heartbeat: every {hb_cfg.interval_s}s")
     else:

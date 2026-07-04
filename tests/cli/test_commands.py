@@ -5,6 +5,7 @@ import shutil
 import signal
 from contextlib import suppress
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -21,6 +22,7 @@ from nanobot.cron.webui_metadata import cron_proactive_delivery_metadata
 from nanobot.providers.factory import ProviderSnapshot, make_provider
 from nanobot.providers.openai_codex_provider import _strip_model_prefix
 from nanobot.providers.registry import find_by_name
+from nanobot.session.manager import SessionManager
 from nanobot.webui.metadata import (
     WEBUI_MESSAGE_SOURCE_METADATA_KEY,
     WEBUI_TURN_METADATA_KEY,
@@ -1245,6 +1247,279 @@ def test_heartbeat_skips_bundled_template():
     from nanobot.utils.helpers import load_bundled_template
 
     assert _heartbeat_has_active_tasks(load_bundled_template("HEARTBEAT.md")) is False
+
+
+def _heartbeat_gateway_fakes(
+    *,
+    session_manager: SessionManager,
+    enabled_channels: list[str],
+    process_direct_response: str,
+    captured: dict[str, object],
+):
+    """Build the fakes needed to drive a gateway startup through to cron.on_job
+    without entering the real serve-forever loop, mirroring the existing
+    gateway test harness pattern (see test_gateway_health_endpoint_binds_and_serves_expected_responses).
+    """
+
+    class _FakeAgentLoop:
+        @classmethod
+        def from_config(cls, config, bus=None, **extra):
+            return cls(**extra)
+
+        def __init__(self, **_kwargs) -> None:
+            self.model = "test-model"
+            self.provider = object()
+            self.tools = {}
+            self.sessions = session_manager
+
+        def llm_runtime(self) -> None:
+            return None
+
+        async def run(self) -> None:
+            await asyncio.Event().wait()
+
+        async def process_direct(self, *_args, **_kwargs):
+            captured.setdefault("process_direct_calls", []).append(_kwargs)
+            return SimpleNamespace(content=process_direct_response)
+
+        async def close_mcp(self) -> None:
+            return None
+
+        def stop(self) -> None:
+            return None
+
+        def pending_cron_job_ids_for_session(self, _key: str) -> set[str]:
+            return set()
+
+    class _FakeChannelManager:
+        def __init__(self, _config, _bus, **_kwargs) -> None:
+            self.enabled_channels = enabled_channels
+
+        async def start_all(self) -> None:
+            await asyncio.Event().wait()
+
+        async def stop_all(self) -> None:
+            return None
+
+    class _FakeCronService:
+        def __init__(self, _store_path: Path) -> None:
+            self.on_job = None
+            captured["cron"] = self
+
+        async def start(self) -> None:
+            return None
+
+        def stop(self) -> None:
+            return None
+
+        def status(self) -> dict[str, int]:
+            return {"jobs": 0}
+
+        def register_system_job(self, _job) -> None:
+            return None
+
+    class _FakeServer:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+        async def serve_forever(self) -> None:
+            raise _StopGatewayError("stop")
+
+    async def _fake_start_server(_handler, _host: str, _port: int):
+        return _FakeServer()
+
+    return _FakeAgentLoop, _FakeChannelManager, _FakeCronService, _fake_start_server
+
+
+def test_gateway_heartbeat_delivers_via_proactive_policy(monkeypatch, tmp_path: Path) -> None:
+    config_file = _write_instance_config(tmp_path)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "HEARTBEAT.md").write_text("## Active Tasks\n\n- Check status\n")
+
+    config = Config()
+    config.agents.defaults.workspace = str(workspace)
+
+    session_manager = SessionManager(workspace)
+    seed = session_manager.get_or_create("telegram:user1")
+    seed.add_message("user", "hi")
+    session_manager.save(seed)
+
+    captured: dict[str, object] = {}
+    bus = MagicMock()
+    bus.publish_outbound = AsyncMock()
+
+    fake_agent_loop, fake_channel_manager, fake_cron_service, fake_start_server = _heartbeat_gateway_fakes(
+        session_manager=session_manager,
+        enabled_channels=["telegram"],
+        process_direct_response="All clear from heartbeat.",
+        captured=captured,
+    )
+
+    async def _fake_evaluate_response(*_args, **_kwargs) -> bool:
+        return True
+
+    _patch_cli_command_runtime(
+        monkeypatch,
+        config,
+        message_bus=lambda: bus,
+        session_manager=lambda _workspace: session_manager,
+    )
+    monkeypatch.setattr("nanobot.cli.commands.AgentLoop", fake_agent_loop)
+    monkeypatch.setattr("nanobot.channels.manager.ChannelManager", fake_channel_manager)
+    monkeypatch.setattr("nanobot.cron.service.CronService", fake_cron_service)
+    monkeypatch.setattr("asyncio.start_server", fake_start_server)
+    monkeypatch.setattr("nanobot.cli.commands.evaluate_response", _fake_evaluate_response)
+
+    result = runner.invoke(app, ["gateway", "--config", str(config_file)])
+    assert result.exit_code == 0
+
+    cron = captured["cron"]
+    job = CronJob(id="heartbeat", name="heartbeat")
+    response = asyncio.run(cron.on_job(job))
+
+    assert response == "All clear from heartbeat."
+    bus.publish_outbound.assert_awaited_once()
+    sent = bus.publish_outbound.await_args.args[0]
+    assert sent.channel == "telegram"
+    assert sent.chat_id == "user1"
+    assert sent.content == "All clear from heartbeat."
+
+    target = session_manager.get_or_create("telegram:user1")
+    summary = target.metadata["proactive_summary"]
+    assert summary["status"] == "delivered"
+    assert summary["summary"] == "All clear from heartbeat."
+
+
+def test_gateway_heartbeat_suppressed_before_agent_turn_skips_llm_call(
+    monkeypatch, tmp_path: Path
+) -> None:
+    config_file = _write_instance_config(tmp_path)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "HEARTBEAT.md").write_text("## Active Tasks\n\n- Check status\n")
+
+    config = Config()
+    config.agents.defaults.workspace = str(workspace)
+
+    session_manager = SessionManager(workspace)
+    seed = session_manager.get_or_create("telegram:user1")
+    seed.add_message("user", "hi")
+    session_manager.save(seed)
+
+    captured: dict[str, object] = {}
+    bus = MagicMock()
+    bus.publish_outbound = AsyncMock()
+
+    fake_agent_loop, fake_channel_manager, fake_cron_service, fake_start_server = _heartbeat_gateway_fakes(
+        session_manager=session_manager,
+        enabled_channels=["telegram"],
+        process_direct_response="should never be generated",
+        captured=captured,
+    )
+
+    async def _unexpected_evaluate_response(*_args, **_kwargs) -> bool:
+        raise AssertionError("quiet-hours-suppressed heartbeat must not reach the evaluator")
+
+    from nanobot.heartbeat.proactive import HeartbeatTargetDecision
+
+    def _fake_decide_heartbeat_target(*_args, **_kwargs) -> HeartbeatTargetDecision:
+        return HeartbeatTargetDecision(
+            channel="telegram", chat_id="user1", suppressed=True, reason="quiet_hours",
+        )
+
+    _patch_cli_command_runtime(
+        monkeypatch,
+        config,
+        message_bus=lambda: bus,
+        session_manager=lambda _workspace: session_manager,
+    )
+    monkeypatch.setattr("nanobot.cli.commands.AgentLoop", fake_agent_loop)
+    monkeypatch.setattr("nanobot.channels.manager.ChannelManager", fake_channel_manager)
+    monkeypatch.setattr("nanobot.cron.service.CronService", fake_cron_service)
+    monkeypatch.setattr("asyncio.start_server", fake_start_server)
+    monkeypatch.setattr("nanobot.cli.commands.evaluate_response", _unexpected_evaluate_response)
+    monkeypatch.setattr("nanobot.heartbeat.proactive.decide_heartbeat_target", _fake_decide_heartbeat_target)
+
+    result = runner.invoke(app, ["gateway", "--config", str(config_file)])
+    assert result.exit_code == 0
+
+    cron = captured["cron"]
+    job = CronJob(id="heartbeat", name="heartbeat")
+    response = asyncio.run(cron.on_job(job))
+
+    assert response is None
+    assert "process_direct_calls" not in captured
+    bus.publish_outbound.assert_not_awaited()
+
+
+def test_gateway_heartbeat_suppresses_duplicate_delivery(monkeypatch, tmp_path: Path) -> None:
+    config_file = _write_instance_config(tmp_path)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "HEARTBEAT.md").write_text("## Active Tasks\n\n- Check status\n")
+
+    config = Config()
+    config.agents.defaults.workspace = str(workspace)
+
+    session_manager = SessionManager(workspace)
+    target = session_manager.get_or_create("telegram:user1")
+    target.add_message("user", "hi")
+    session_manager.set_proactive_summary(
+        target,
+        {
+            "status": "delivered",
+            "category": "follow-up",
+            "title": "Follow-up digest ready",
+            "summary": "All clear from heartbeat.",
+            "target_channel": "telegram",
+        },
+    )
+    session_manager.save(target)
+
+    captured: dict[str, object] = {}
+    bus = MagicMock()
+    bus.publish_outbound = AsyncMock()
+
+    fake_agent_loop, fake_channel_manager, fake_cron_service, fake_start_server = _heartbeat_gateway_fakes(
+        session_manager=session_manager,
+        enabled_channels=["telegram"],
+        process_direct_response="All clear from heartbeat.",
+        captured=captured,
+    )
+
+    async def _fake_evaluate_response(*_args, **_kwargs) -> bool:
+        return True
+
+    _patch_cli_command_runtime(
+        monkeypatch,
+        config,
+        message_bus=lambda: bus,
+        session_manager=lambda _workspace: session_manager,
+    )
+    monkeypatch.setattr("nanobot.cli.commands.AgentLoop", fake_agent_loop)
+    monkeypatch.setattr("nanobot.channels.manager.ChannelManager", fake_channel_manager)
+    monkeypatch.setattr("nanobot.cron.service.CronService", fake_cron_service)
+    monkeypatch.setattr("asyncio.start_server", fake_start_server)
+    monkeypatch.setattr("nanobot.cli.commands.evaluate_response", _fake_evaluate_response)
+
+    result = runner.invoke(app, ["gateway", "--config", str(config_file)])
+    assert result.exit_code == 0
+
+    cron = captured["cron"]
+    job = CronJob(id="heartbeat", name="heartbeat")
+    response = asyncio.run(cron.on_job(job))
+
+    assert response == "All clear from heartbeat."
+    bus.publish_outbound.assert_not_awaited()
+
+    reloaded = session_manager.get_or_create("telegram:user1")
+    summary = reloaded.metadata["proactive_summary"]
+    assert summary["status"] == "suppressed"
+    assert summary["suppressed_reason"] == "duplicate"
 
 
 def _write_instance_config(tmp_path: Path) -> Path:
