@@ -9,6 +9,7 @@ Use this file for project-specific preferences, recurring workflow conventions, 
 - Before scheduling reminders, check available skills and follow skill guidance first.
 - Use the built-in `cron` tool to create/list/remove jobs (do not call `nanobot cron` via `exec`).
 - Get USER_ID and CHANNEL from the current session (e.g., `8281248569` and `telegram` from `telegram:8281248569`).
+- Use `cron` for exact wall-clock schedules or user-visible timed delivery, such as specific times (`07:00`, `12:20`, `21:30`), daily/weekday schedules, or timezone-aware scheduled briefings/reminders.
 
 **Do NOT just write reminders to MEMORY.md** — that won't trigger actual notifications.
 
@@ -20,4 +21,4 @@ Use this file for project-specific preferences, recurring workflow conventions, 
 - Use `edit_file` only for small exact replacements copied from the current `HEARTBEAT.md`.
 - Use `write_file` for first creation or intentional full-file rewrites.
 
-When the user asks for a recurring/periodic heartbeat task, update `HEARTBEAT.md` instead of creating a one-time reminder. Use the built-in `cron` tool for separate reminders or custom schedules that should not be part of the heartbeat task list.
+Use `HEARTBEAT.md` for situation-aware periodic review tasks that can run on the heartbeat interval, such as morning digests, blocked-task follow-up, pending approval checks, or proactive summaries. Do not put exact-time schedules into `HEARTBEAT.md`; if the user asks for specific times or cron-like delivery, use `cron` instead.
