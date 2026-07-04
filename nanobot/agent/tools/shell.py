@@ -160,8 +160,10 @@ class ExecTool(Tool):
             path_prepend=cfg.path_prepend,
             path_append=cfg.path_append,
             allowed_env_keys=cfg.allowed_env_keys,
+            allowed_dirs=cfg.allowed_dirs,
             allow_patterns=cfg.allow_patterns,
             deny_patterns=cfg.deny_patterns,
+            approval_patterns=cfg.approval_patterns,
         )
 
     def __init__(

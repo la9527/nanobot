@@ -78,13 +78,22 @@ class _FsTool(Tool):
     def create(cls, ctx: Any) -> Tool:
         from nanobot.agent.skills import BUILTIN_SKILLS_DIR
 
+        configured_dirs = [
+            Path(raw).expanduser().resolve(strict=False)
+            for raw in getattr(ctx.config.filesystem, "allowed_dirs", None) or []
+        ]
         restrict = (
             ctx.config.restrict_to_workspace
             or ctx.config.exec.sandbox
+            or bool(configured_dirs)
         )
         sandbox_restricts = bool(ctx.config.exec.sandbox)
-        allowed_dir = Path(ctx.workspace) if restrict else None
-        extra_read = [BUILTIN_SKILLS_DIR]
+        if configured_dirs:
+            allowed_dir = configured_dirs[0]
+            extra_read = [*configured_dirs[1:], BUILTIN_SKILLS_DIR]
+        else:
+            allowed_dir = Path(ctx.workspace) if restrict else None
+            extra_read = [BUILTIN_SKILLS_DIR]
         return cls(
             workspace=Path(ctx.workspace),
             allowed_dir=allowed_dir,

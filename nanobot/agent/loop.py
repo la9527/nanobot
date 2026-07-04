@@ -609,6 +609,137 @@ class AgentLoop:
 
         logger.info("Registered {} tools: {}", len(registered), registered)
 
+    def _resolve_allowed_dirs(self, raw_dirs: list[str] | None) -> list[Path]:
+        """Resolve configured directory strings to absolute, deduped paths."""
+        resolved: list[Path] = []
+        for raw in raw_dirs or []:
+            candidate = Path(raw).expanduser()
+            if not candidate.is_absolute():
+                candidate = self.workspace / candidate
+            path = candidate.resolve()
+            if path not in resolved:
+                resolved.append(path)
+        return resolved
+
+    def _resolve_channel_tools_override(self, channel: str) -> "ChannelToolsOverride":
+        """Look up an optional per-channel tool policy override from config."""
+        from nanobot.config.schema import ChannelToolsOverride
+
+        if self.channels_config is None:
+            return ChannelToolsOverride()
+        section = getattr(self.channels_config, channel, None)
+        if not isinstance(section, dict):
+            return ChannelToolsOverride()
+        raw_tools = section.get("tools")
+        if not isinstance(raw_tools, dict):
+            return ChannelToolsOverride()
+        try:
+            return ChannelToolsOverride.model_validate(raw_tools)
+        except Exception as exc:
+            logger.warning("Ignoring invalid tool override for channel {}: {}", channel, exc)
+            return ChannelToolsOverride()
+
+    def _resolve_tool_policy(self, channel: str) -> dict[str, Any]:
+        """Merge global tool config with a per-channel override into one policy."""
+        override = self._resolve_channel_tools_override(channel)
+
+        restrict_to_workspace = self.tools_config.restrict_to_workspace
+        if override.restrict_to_workspace is not None:
+            restrict_to_workspace = override.restrict_to_workspace
+
+        filesystem_allowed_dirs = self._resolve_allowed_dirs(self.tools_config.filesystem.allowed_dirs)
+        if override.filesystem.allowed_dirs is not None:
+            filesystem_allowed_dirs = self._resolve_allowed_dirs(override.filesystem.allowed_dirs)
+
+        exec_allowed_dirs = self._resolve_allowed_dirs(self.exec_config.allowed_dirs)
+        if override.exec.allowed_dirs is not None:
+            exec_allowed_dirs = self._resolve_allowed_dirs(override.exec.allowed_dirs)
+
+        exec_allow_patterns = list(self.exec_config.allow_patterns)
+        if override.exec.allow_patterns is not None:
+            exec_allow_patterns = list(override.exec.allow_patterns)
+
+        exec_deny_patterns = list(self.exec_config.deny_patterns)
+        if override.exec.deny_patterns is not None:
+            exec_deny_patterns = list(override.exec.deny_patterns)
+
+        exec_approval_patterns = list(self.exec_config.approval_patterns)
+        if override.exec.approval_patterns is not None:
+            exec_approval_patterns = list(override.exec.approval_patterns)
+
+        return {
+            "restrict_to_workspace": restrict_to_workspace,
+            "filesystem_allowed_dirs": filesystem_allowed_dirs,
+            "exec_allowed_dirs": exec_allowed_dirs,
+            "exec_allow_patterns": exec_allow_patterns,
+            "exec_deny_patterns": exec_deny_patterns,
+            "exec_approval_patterns": exec_approval_patterns,
+        }
+
+    def _build_effective_tools(self, channel: str) -> ToolRegistry:
+        """Build a per-channel tool registry, reusing shared tools and re-creating
+        only the config_key="file"/"exec" tools with the resolved channel policy.
+
+        Fast path: with no configured override for this channel, the resolved
+        policy is identical to the tools registered by ``_register_default_tools``,
+        so return ``self.tools`` unchanged (preserves identity/state such as
+        ``MessageTool._sent_in_turn`` and avoids surprising test doubles that
+        replace ``self.tools`` with a duck-typed stand-in).
+        """
+        if self.channels_config is None:
+            return self.tools
+        section = getattr(self.channels_config, channel, None)
+        if not isinstance(section, dict) or not isinstance(section.get("tools"), dict):
+            return self.tools
+
+        from nanobot.agent.tools.context import ToolContext
+        from nanobot.agent.tools.loader import ToolLoader
+
+        policy = self._resolve_tool_policy(channel)
+        scoped_config = self.tools_config.model_copy(update={
+            "restrict_to_workspace": policy["restrict_to_workspace"],
+            "filesystem": self.tools_config.filesystem.model_copy(update={
+                "allowed_dirs": [str(path) for path in policy["filesystem_allowed_dirs"]],
+            }),
+            "exec": self.exec_config.model_copy(update={
+                "allowed_dirs": [str(path) for path in policy["exec_allowed_dirs"]],
+                "allow_patterns": policy["exec_allow_patterns"],
+                "deny_patterns": policy["exec_deny_patterns"],
+                "approval_patterns": policy["exec_approval_patterns"],
+            }),
+        })
+
+        scoped_config_keys = {"file", "exec"}
+        registry = ToolRegistry()
+        for name in self.tools.tool_names:
+            tool = self.tools.get(name)
+            if tool is not None and getattr(tool, "config_key", None) not in scoped_config_keys:
+                registry.register(tool)
+
+        ctx = ToolContext(
+            config=scoped_config,
+            workspace=str(self.workspace),
+            bus=self.bus,
+            subagent_manager=self.subagents,
+            cron_service=self.cron_service,
+            sessions=self.sessions,
+            provider_snapshot_loader=self._provider_snapshot_loader,
+            image_generation_provider_configs=self._image_generation_provider_configs,
+            timezone=self.context.timezone or "UTC",
+            workspace_sandbox=self.workspace_scopes.sandbox_status,
+            runtime_events=self.runtime_events,
+        )
+        for tool_cls in ToolLoader().discover():
+            if getattr(tool_cls, "config_key", None) not in scoped_config_keys:
+                continue
+            try:
+                if not tool_cls.enabled(ctx):
+                    continue
+                registry.register(tool_cls.create(ctx))
+            except Exception:
+                logger.exception("Failed to build channel-scoped tool: {}", tool_cls.__name__)
+        return registry
+
     async def _connect_mcp(self) -> None:
         """Connect configured MCP servers."""
         await agent_context.connect_mcp(self, self.tools, followup_callback=self._handle_mcp_tool_followup)
@@ -916,7 +1047,7 @@ class AgentLoop:
         try:
             result = await self.runner.run(AgentRunSpec(
                 initial_messages=initial_messages,
-                tools=tools or self.tools,
+                tools=tools or self._build_effective_tools(channel),
                 model=self.model,
                 max_iterations=self.max_iterations,
                 max_tool_result_chars=self.max_tool_result_chars,
