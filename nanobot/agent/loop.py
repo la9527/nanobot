@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import os
+import re
 import time
+import uuid
 from contextlib import AsyncExitStack, nullcontext, suppress
 from dataclasses import dataclass, field
 from enum import Enum, auto
@@ -165,6 +167,9 @@ class AgentLoop:
 
     _RUNTIME_CHECKPOINT_KEY = "runtime_checkpoint"
     _PENDING_USER_TURN_KEY = "pending_user_turn"
+    _SMART_ROUTER_TIER_KEY = "smart_router_last_tier"
+    _SMART_ROUTER_MODEL_KEY = "smart_router_last_model"
+    _TURN_ID_KEY = "turn_id"
 
     # Event-driven state transition table.
     # Handlers return an event string; the driver looks up the next state here.
@@ -214,6 +219,7 @@ class AgentLoop:
         preset_snapshot_loader: preset_helpers.PresetSnapshotLoader | None = None,
         runtime_events: RuntimeEventBus | None = None,
         runtime_model_publisher: Callable[[str, str | None], None] | None = None,
+        runtime_config: Any | None = None,
     ):
         from nanobot.config.schema import ToolsConfig
 
@@ -224,6 +230,7 @@ class AgentLoop:
         self.runtime_event_publisher = RuntimeEventPublisher(self.runtime_events)
         self.channels_config = channels_config
         self.provider = provider
+        self.runtime_config = runtime_config
         self._provider_snapshot_loader = provider_snapshot_loader
         self._preset_snapshot_loader = preset_snapshot_loader
         self._runtime_model_publisher = runtime_model_publisher
@@ -353,12 +360,15 @@ class AgentLoop:
         allowing callers to override or extend the standard config-derived
         parameters (e.g. ``cron_service``, ``session_manager``).
         """
-        from nanobot.providers.factory import make_provider
+        from nanobot.agent.model_target_providers import (
+            make_runtime_plugin_hooks,
+            make_target_aware_provider,
+        )
 
         if bus is None:
             bus = MessageBus()
         defaults = config.agents.defaults
-        provider = extra.pop("provider", None) or make_provider(config)
+        provider = extra.pop("provider", None) or make_target_aware_provider(config)
         resolved = config.resolve_preset()
         model = extra.pop("model", None) or resolved.model
         context_window_tokens = extra.pop("context_window_tokens", None) or resolved.context_window_tokens
@@ -367,6 +377,8 @@ class AgentLoop:
             config,
             provider_snapshot_loader,
         )
+        extra_hooks = extra.pop("hooks", None) or []
+        hooks = [*extra_hooks, *make_runtime_plugin_hooks(config)]
         return cls(
             bus=bus,
             provider=provider,
@@ -393,12 +405,99 @@ class AgentLoop:
             model_preset=defaults.model_preset,
             provider_snapshot_loader=provider_snapshot_loader,
             preset_snapshot_loader=preset_snapshot_loader,
+            runtime_config=config,
+            hooks=hooks,
             **extra,
         )
 
     def _sync_subagent_runtime_limits(self) -> None:
         """Keep subagent runtime limits aligned with mutable loop settings."""
         self.subagents.max_iterations = self.max_iterations
+
+    @classmethod
+    def _new_turn_id(cls) -> str:
+        return f"turn-{uuid.uuid4().hex[:16]}"
+
+    @classmethod
+    def _with_turn_id(cls, msg: InboundMessage) -> InboundMessage:
+        metadata = dict(msg.metadata or {})
+        value = metadata.get(cls._TURN_ID_KEY)
+        if isinstance(value, str) and value.strip():
+            metadata[cls._TURN_ID_KEY] = value.strip()
+        else:
+            metadata[cls._TURN_ID_KEY] = cls._new_turn_id()
+        return dataclasses.replace(msg, metadata=metadata)
+
+    def get_available_model_targets(self) -> dict[str, Any]:
+        """Return configured model targets, including built-in defaults.
+
+        Returns an empty dict when no ``runtime_config`` was supplied — the
+        loop then always uses the globally active model preset (unchanged
+        pre-smart-router behavior).
+        """
+        if self.runtime_config is None:
+            return {}
+        from nanobot.model_targets import build_model_targets
+
+        return build_model_targets(self.runtime_config)
+
+    def get_active_model_target_name(self, session: Session | None) -> str:
+        """Return the active model target name for the given session."""
+        from nanobot.model_targets import DEFAULT_MODEL_TARGET_NAME, get_active_model_target_name
+
+        if self.runtime_config is None:
+            return DEFAULT_MODEL_TARGET_NAME
+        return get_active_model_target_name(self.runtime_config, session)
+
+    def set_session_model_target(self, session: Session, target_name: str) -> None:
+        """Persist a per-session model target override."""
+        from nanobot.model_targets import SESSION_MODEL_TARGET_KEY
+
+        session.metadata[SESSION_MODEL_TARGET_KEY] = target_name
+        self.sessions.save(session)
+
+    def clear_session_model_target(self, session: Session) -> None:
+        """Clear a per-session model target override."""
+        from nanobot.model_targets import SESSION_MODEL_TARGET_KEY
+
+        session.metadata.pop(SESSION_MODEL_TARGET_KEY, None)
+        self.sessions.save(session)
+
+    def _resolve_execution_runtime(self, session: Session | None) -> tuple[LLMProvider, str, str | None]:
+        """Resolve the provider/model to use for a single turn.
+
+        Defers to the loop's globally active preset (``self.provider``/
+        ``self.model``) whenever no ``runtime_config`` is configured, or the
+        session has not opted into a non-default model target. This keeps the
+        existing ``model_presets`` system fully authoritative by default; a
+        per-turn provider is only constructed when a session explicitly
+        selects another named target (e.g. smart-router).
+        """
+        if self.runtime_config is None:
+            return self.provider, self.model, None
+
+        from nanobot.model_targets import (
+            DEFAULT_MODEL_TARGET_NAME,
+            apply_model_target,
+            resolve_model_target,
+        )
+
+        target_name = self.get_active_model_target_name(session)
+        if target_name == DEFAULT_MODEL_TARGET_NAME:
+            return self.provider, self.model, None
+        try:
+            target = resolve_model_target(self.runtime_config, target_name)
+        except KeyError:
+            return self.provider, self.model, None
+
+        from nanobot.agent.model_target_providers import make_target_aware_provider
+
+        updated_config = apply_model_target(self.runtime_config, target)
+        provider = make_target_aware_provider(updated_config)
+        model = updated_config.agents.defaults.model
+        if target.kind == "smart_router":
+            model = target.name
+        return provider, model, target.name
 
     def _apply_provider_snapshot(
         self,
