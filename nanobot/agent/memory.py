@@ -719,6 +719,7 @@ class Consolidator:
         return session.get_history(
             max_messages=unconsolidated_count,
             include_timestamps=include_timestamps,
+            channel_delivery_mode="tail-only",
         )
 
     @staticmethod

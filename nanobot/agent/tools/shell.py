@@ -36,7 +36,7 @@ from nanobot.agent.tools.schema import (
 from nanobot.config.paths import get_media_dir
 from nanobot.config_base import Base
 from nanobot.security.workspace_access import current_scope_allows_loopback, current_tool_workspace
-from nanobot.security.workspace_policy import is_path_within
+from nanobot.security.workspace_policy import is_path_allowed, is_path_within
 
 _IS_WINDOWS = sys.platform == "win32"
 
@@ -170,7 +170,9 @@ class ExecTool(Tool):
         working_dir: str | None = None,
         deny_patterns: list[str] | None = None,
         allow_patterns: list[str] | None = None,
+        approval_patterns: list[str] | None = None,
         restrict_to_workspace: bool = False,
+        allowed_dirs: list[str] | None = None,
         webui_allow_local_service_access: bool = True,
         allow_local_preview_access: bool | None = None,
         sandbox: str = "",
@@ -202,7 +204,9 @@ class ExecTool(Tool):
             r"\bsed\s+-i[^|;&<>]*(?:history\.jsonl|\.dream_cursor)",  # sed -i
         ]
         self.allow_patterns = allow_patterns or []
+        self.approval_patterns = approval_patterns or []
         self.restrict_to_workspace = restrict_to_workspace
+        self.allowed_dirs = list(allowed_dirs or [])
         if allow_local_preview_access is not None:
             webui_allow_local_service_access = allow_local_preview_access
         self.webui_allow_local_service_access = webui_allow_local_service_access
@@ -249,6 +253,27 @@ class ExecTool(Tool):
     @property
     def exclusive(self) -> bool:
         return True
+
+    def approval_prompt(self, params: dict[str, Any]) -> str | None:
+        command = params.get("command")
+        if not isinstance(command, str):
+            return None
+        for pattern in self.approval_patterns:
+            try:
+                if re.search(pattern, command, re.IGNORECASE):
+                    compact = " ".join(command.strip().split())
+                    if len(compact) > 240:
+                        compact = compact[:237] + "..."
+                    working_dir = params.get("working_dir") or self.working_dir or os.getcwd()
+                    return (
+                        "Approval required before running this command.\n"
+                        f"Working directory: {working_dir}\n"
+                        f"Command: {compact}\n"
+                        "Reply yes to run it or no to block it."
+                    )
+            except re.error:
+                logger.warning("Ignoring invalid exec approval regex: {}", pattern)
+        return None
 
     async def execute(
         self, command: str | None = None, cmd: str | None = None,
@@ -385,15 +410,20 @@ class ExecTool(Tool):
         # paths under /etc would pass the _guard_command check that anchors
         # on cwd.
         if access.restrict_to_workspace and workspace_root:
+            allowed_roots = [workspace_root, *self.allowed_dirs]
+        elif self.allowed_dirs:
+            allowed_roots = list(self.allowed_dirs)
+        else:
+            allowed_roots = []
+        if allowed_roots:
             try:
                 requested = Path(cwd).expanduser().resolve()
-                resolved_root = Path(workspace_root).expanduser().resolve()
             except Exception:
                 return (
                     "Error: working_dir could not be resolved"
                     + _WORKSPACE_BOUNDARY_NOTE
                 )
-            if not is_path_within(requested, resolved_root):
+            if not is_path_allowed(requested, allowed_roots):
                 return (
                     "Error: working_dir is outside the configured workspace"
                     + _WORKSPACE_BOUNDARY_NOTE
@@ -629,6 +659,7 @@ class ExecTool(Tool):
             return "Error: Command blocked by safety guard (internal/private URL detected)"
 
         should_restrict = self.restrict_to_workspace if restrict_to_workspace is None else restrict_to_workspace
+        should_restrict = should_restrict or bool(self.allowed_dirs)
         if should_restrict:
             if "..\\" in cmd or "../" in cmd:
                 return (
@@ -665,6 +696,8 @@ class ExecTool(Tool):
                 )
                 if not allowed and resolved_workspace is not None:
                     allowed = is_path_within(p, resolved_workspace)
+                if not allowed and self.allowed_dirs:
+                    allowed = is_path_allowed(p, self.allowed_dirs)
                 if p.is_absolute() and not allowed:
                     return (
                         "Error: Command blocked by safety guard (path outside working dir)"
