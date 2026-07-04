@@ -154,7 +154,12 @@ async def test_drain_injections_skips_empty_content():
 
 @pytest.mark.asyncio
 async def test_drain_injections_filters_empty_dict_payloads():
-    """Pre-normalized dict injections should obey the same empty-content guard."""
+    """Pre-normalized dict injections should obey the same empty-content guard.
+
+    Both user and assistant role dicts are accepted (assistant dicts support
+    the subagent direct-final-delivery injection path), but empty/blank
+    content is still filtered out regardless of role.
+    """
     from nanobot.agent.runner import AgentRunner, AgentRunSpec
 
     provider = MagicMock()
@@ -167,7 +172,7 @@ async def test_drain_injections_filters_empty_dict_payloads():
         {"role": "user", "content": ""},
         {"role": "user", "content": "   "},
         {"role": "user", "content": None},
-        {"role": "assistant", "content": "should not be re-injected as user"},
+        {"role": "assistant", "content": "direct-final delivery content"},
         None,
         {"role": "user", "content": "valid"},
         {"role": "user", "content": multimodal},
@@ -183,6 +188,7 @@ async def test_drain_injections_filters_empty_dict_payloads():
     )
     result = await runner._drain_injections(spec)
     assert result == [
+        {"role": "assistant", "content": "direct-final delivery content"},
         {"role": "user", "content": "valid"},
         {"role": "user", "content": multimodal},
     ]

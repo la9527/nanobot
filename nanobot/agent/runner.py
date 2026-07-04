@@ -69,6 +69,7 @@ _MAX_INJECTION_CYCLES = 5
 _SNIP_SAFETY_BUFFER = 1024
 _MICROCOMPACT_KEEP_RECENT = 10
 _MICROCOMPACT_MIN_CHARS = 500
+_DIRECT_FINAL_INJECTION_KEY = "_nanobot_direct_final"
 _COMPACTABLE_TOOLS = frozenset({
     "read_file", "exec", "grep", "find_files",
     "web_search", "web_fetch", "list_dir", "list_exec_sessions",
@@ -109,6 +110,7 @@ class AgentRunSpec:
     retry_wait_callback: Any | None = None
     checkpoint_callback: Any | None = None
     injection_callback: Any | None = None
+    tool_approval_callback: Any | None = None
     llm_timeout_s: float | None = None
     goal_active_predicate: Callable[[], bool] | None = None
     goal_continue_message: GoalContinueMessage | None = None
@@ -127,6 +129,7 @@ class AgentRunResult:
     error: str | None = None
     tool_events: list[dict[str, str]] = field(default_factory=list)
     had_injections: bool = False
+    response_metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class AgentRunner:
@@ -160,19 +163,21 @@ class AgentRunner:
     ) -> None:
         """Append injected user messages while preserving role alternation."""
         for injection in injections:
+            cleaned = dict(injection)
+            cleaned.pop(_DIRECT_FINAL_INJECTION_KEY, None)
             if (
                 messages
-                and injection.get("role") == "user"
+                and cleaned.get("role") == "user"
                 and messages[-1].get("role") == "user"
             ):
                 merged = dict(messages[-1])
                 merged["content"] = cls._merge_message_content(
                     merged.get("content"),
-                    injection.get("content"),
+                    cleaned.get("content"),
                 )
                 messages[-1] = merged
                 continue
-            messages.append(injection)
+            messages.append(cleaned)
 
     async def _try_drain_injections(
         self,
@@ -184,13 +189,15 @@ class AgentRunner:
         phase: str = "after error",
         iteration: int | None = None,
         allow_goal_continue: bool = False,
-    ) -> tuple[bool, int]:
-        """Drain pending injections. Returns (should_continue, updated_cycles).
+    ) -> tuple[bool, int, dict[str, Any] | None]:
+        """Drain pending injections. Returns (should_continue, updated_cycles, direct_final).
 
         If injections are found and we haven't exceeded _MAX_INJECTION_CYCLES,
         append them to *messages* (and emit a checkpoint if *assistant_message*
-        and *iteration* are both provided) and return (True, cycles+1) so the
-        caller continues the iteration loop.  Otherwise return (False, cycles).
+        and *iteration* are both provided) and return (True, cycles+1, None) so the
+        caller continues the iteration loop.  Otherwise return (False, cycles, None).
+        A real injection carrying the direct-final marker short-circuits the
+        turn instead: (False, cycles, direct_final).
         """
         injections: list[dict[str, Any]] = []
         real_injection = False
@@ -202,7 +209,15 @@ class AgentRunner:
             if predicate is not None and predicate():
                 injections = [self._build_goal_continue_message(spec)]
         if not injections:
-            return False, injection_cycles
+            return False, injection_cycles, None
+        direct_final = (
+            next(
+                (dict(item) for item in injections if item.get(_DIRECT_FINAL_INJECTION_KEY)),
+                None,
+            )
+            if real_injection
+            else None
+        )
         if real_injection:
             injection_cycles += 1
         if assistant_message is not None:
@@ -227,7 +242,9 @@ class AgentRunner:
             )
         else:
             logger.info("Injected sustained-goal continuation {}", phase)
-        return True, injection_cycles
+        if direct_final is not None:
+            return False, injection_cycles, direct_final
+        return True, injection_cycles, None
 
     def _build_goal_continue_message(self, spec: AgentRunSpec) -> dict[str, str]:
         custom = spec.goal_continue_message
@@ -271,9 +288,9 @@ class AgentRunner:
         for item in items:
             if item is None:
                 continue
-            if isinstance(item, dict) and item.get("role") == "user" and "content" in item:
+            if isinstance(item, dict) and item.get("role") in {"user", "assistant"} and "content" in item:
                 if self._has_injection_content(item.get("content")):
-                    injected_messages.append(item)
+                    injected_messages.append(dict(item))
                 continue
             if isinstance(item, dict):
                 continue
@@ -366,6 +383,7 @@ class AgentRunner:
         length_recovery_count = 0
         had_injections = False
         injection_cycles = 0
+        response_metadata: dict[str, Any] = {}
 
         for iteration in range(spec.max_iterations):
             try:
@@ -399,6 +417,8 @@ class AgentRunner:
             )
             await hook.before_iteration(context)
             response = await self._request_model(spec, messages_for_model, hook, context)
+            if isinstance(response.provider_metadata, dict):
+                response_metadata = dict(response.provider_metadata)
             context.response = response
             context.tool_calls = list(response.tool_calls)
 
@@ -480,10 +500,15 @@ class AgentRunner:
                     context.error = error
                     context.stop_reason = stop_reason
                     await hook.after_iteration(context)
-                    should_continue, injection_cycles = await self._try_drain_injections(
+                    should_continue, injection_cycles, _direct_final = await self._try_drain_injections(
                         spec, messages, None, injection_cycles,
                         phase="after tool error",
                     )
+                    if _direct_final is not None:
+                        had_injections = True
+                        final_content = None
+                        stop_reason = "direct_followup"
+                        break
                     if should_continue:
                         had_injections = True
                         continue
@@ -502,12 +527,19 @@ class AgentRunner:
                 empty_content_retries = 0
                 length_recovery_count = 0
                 # Checkpoint 1: drain injections after tools, before next LLM call
-                _drained, injection_cycles = await self._try_drain_injections(
+                _drained, injection_cycles, _direct_final = await self._try_drain_injections(
                     spec, messages, None, injection_cycles,
                     phase="after tool execution",
                 )
-                if _drained:
+                if _drained or _direct_final is not None:
                     had_injections = True
+                if _direct_final is not None:
+                    final_content = None
+                    stop_reason = "direct_followup"
+                    context.final_content = None
+                    context.stop_reason = stop_reason
+                    await hook.after_iteration(context)
+                    break
                 await hook.after_iteration(context)
                 continue
 
@@ -543,6 +575,8 @@ class AgentRunner:
                     await hook.on_stream_end(context, resuming=False)
                 retry_messages = self._finalization_retry_messages(messages_for_model)
                 response = await self._request_finalization_retry(spec, messages_for_model)
+                if isinstance(response.provider_metadata, dict):
+                    response_metadata = dict(response.provider_metadata)
                 retry_usage = self._usage_or_estimate(spec, retry_messages, response)
                 self._accumulate_usage(usage, retry_usage)
                 raw_usage = self._merge_usage(raw_usage, retry_usage)
@@ -583,17 +617,25 @@ class AgentRunner:
             # Check for mid-turn injections BEFORE signaling stream end.
             # If injections are found we keep the stream alive (resuming=True)
             # so streaming channels don't prematurely finalize the card.
-            should_continue, injection_cycles = await self._try_drain_injections(
+            should_continue, injection_cycles, _direct_final = await self._try_drain_injections(
                 spec, messages, assistant_message, injection_cycles,
                 phase="after final response",
                 iteration=iteration,
                 allow_goal_continue=True,
             )
-            if should_continue:
+            if should_continue or _direct_final is not None:
                 had_injections = True
 
             if hook.wants_streaming():
                 await hook.on_stream_end(context, resuming=should_continue)
+
+            if _direct_final is not None:
+                final_content = None
+                stop_reason = "direct_followup"
+                context.final_content = None
+                context.stop_reason = stop_reason
+                await hook.after_iteration(context)
+                break
 
             if should_continue:
                 await hook.after_iteration(context)
@@ -611,10 +653,15 @@ class AgentRunner:
                 context.error = error
                 context.stop_reason = stop_reason
                 await hook.after_iteration(context)
-                should_continue, injection_cycles = await self._try_drain_injections(
+                should_continue, injection_cycles, _direct_final = await self._try_drain_injections(
                     spec, messages, None, injection_cycles,
                     phase="after LLM error",
                 )
+                if _direct_final is not None:
+                    had_injections = True
+                    final_content = None
+                    stop_reason = "direct_followup"
+                    break
                 if should_continue:
                     had_injections = True
                     continue
@@ -628,10 +675,15 @@ class AgentRunner:
                 context.error = error
                 context.stop_reason = stop_reason
                 await hook.after_iteration(context)
-                should_continue, injection_cycles = await self._try_drain_injections(
+                should_continue, injection_cycles, _direct_final = await self._try_drain_injections(
                     spec, messages, None, injection_cycles,
                     phase="after empty response",
                 )
+                if _direct_final is not None:
+                    had_injections = True
+                    final_content = None
+                    stop_reason = "direct_followup"
+                    break
                 if should_continue:
                     had_injections = True
                     continue
@@ -665,11 +717,11 @@ class AgentRunner:
             # independent inbound messages by _dispatch's finally block.
             # We include them before the no-tools finalization pass so the
             # final response can account for every known follow-up.
-            drained_after_max_iterations, injection_cycles = await self._try_drain_injections(
+            drained_after_max_iterations, injection_cycles, _direct_final = await self._try_drain_injections(
                 spec, messages, None, injection_cycles,
                 phase="after max_iterations",
             )
-            if drained_after_max_iterations:
+            if drained_after_max_iterations or _direct_final is not None:
                 had_injections = True
             final_content = None
             if spec.finalize_on_max_iterations:
@@ -692,6 +744,7 @@ class AgentRunner:
             error=error,
             tool_events=tool_events,
             had_injections=had_injections,
+            response_metadata=response_metadata,
         )
 
     def _build_request_kwargs(
@@ -1099,6 +1152,44 @@ class AgentRunner:
             return prep_error + hint, event, (
                 RuntimeError(prep_error) if spec.fail_on_tool_error else None
             )
+        approval_prompt = None
+        if tool is not None:
+            try:
+                approval_prompt = tool.approval_prompt(params)
+            except Exception as exc:
+                approval_error = f"Error: approval check failed for {tool_call.name}: {exc}"
+                event = {
+                    "name": tool_call.name,
+                    "status": "error",
+                    "detail": approval_error[:120],
+                }
+                if spec.fail_on_tool_error:
+                    return approval_error, event, RuntimeError(approval_error)
+                return approval_error, event, None
+        if approval_prompt:
+            callback = spec.tool_approval_callback
+            approval_error: str | None = None
+            if callback is None:
+                approval_error = "Error: Tool call requires approval but no approval flow is available"
+            else:
+                try:
+                    approved, denial_reason = await callback(tool_call, tool, params, approval_prompt)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    approved = False
+                    denial_reason = f"Error: Tool approval failed: {exc}"
+                if not approved:
+                    approval_error = denial_reason or "Error: Tool call denied by user approval flow"
+            if approval_error:
+                event = {
+                    "name": tool_call.name,
+                    "status": "error",
+                    "detail": approval_error.replace("\n", " ").strip()[:120],
+                }
+                if spec.fail_on_tool_error:
+                    return approval_error + hint, event, RuntimeError(approval_error)
+                return approval_error + hint, event, None
         emit_file_edit_events = (
             spec.progress_callback is not None
             and on_progress_accepts_file_edit_events(spec.progress_callback)
