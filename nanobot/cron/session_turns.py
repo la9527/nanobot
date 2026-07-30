@@ -11,6 +11,16 @@ CRON_DEFER_UNTIL_IDLE_META = "_cron_defer_until_session_idle"
 CRON_HISTORY_META = "_cron_turn"
 
 
+def is_invalid_cron_response(content: str | None) -> bool:
+    """Return True when a cron turn did not produce a final user-facing answer."""
+    if not isinstance(content, str) or not content.strip():
+        return True
+    normalized = content.strip().casefold()
+    # Some local tool-call parsers leak this intermediate marker as ordinary
+    # text after the tool result instead of returning a structured final turn.
+    return normalized.startswith("[calling tool") or normalized.startswith("calling tool")
+
+
 def cron_trigger(metadata: Mapping[str, Any] | None) -> dict[str, Any] | None:
     """Return structured cron trigger metadata when present."""
     raw = (metadata or {}).get(CRON_TRIGGER_META)

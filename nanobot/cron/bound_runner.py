@@ -11,7 +11,11 @@ from typing import Any, Protocol
 from nanobot.agent.tools.cron import CronTool
 from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.cron.session_delivery import origin_delivery_context
-from nanobot.cron.session_turns import CRON_DEFER_UNTIL_IDLE_META, CRON_TRIGGER_META
+from nanobot.cron.session_turns import (
+    CRON_DEFER_UNTIL_IDLE_META,
+    CRON_TRIGGER_META,
+    is_invalid_cron_response,
+)
 from nanobot.cron.types import CronJob
 from nanobot.cron.webui_metadata import cron_proactive_delivery_metadata
 from nanobot.utils.prompt_templates import render_template
@@ -86,12 +90,17 @@ async def run_bound_cron_job(
         "job_id": job.id,
         "job_name": job.name,
         "run_id": run_id,
+        "require_first_tool": job.payload.require_first_tool,
+        "first_tool_name": job.payload.first_tool_name,
         "prompt_ref": prompt_ref,
         "persist_content": (
             f"Scheduled cron job triggered: {job.name}\n\n{job.payload.message}"
         ),
     }
     metadata[CRON_DEFER_UNTIL_IDLE_META] = True
+    # Cron deliveries must only send the validated final answer. Streaming
+    # tool-call/intermediate deltas can otherwise leak to Telegram.
+    metadata["_wants_stream"] = False
     run_record_base: dict[str, Any] = {
         "job_id": job.id,
         "job_name": job.name,
@@ -140,6 +149,20 @@ async def run_bound_cron_job(
             cron_tool.reset_cron_context(cron_token)
 
     response = resp.content if resp else ""
+    if response.lstrip().startswith("Error:") or is_invalid_cron_response(response):
+        # AgentLoop converts provider failures into an outbound error message.
+        # Treat that result as a failed cron run rather than reporting a false
+        # success to the scheduler and run-history UI.
+        error_text = response.strip() or "Cron turn produced no final response"
+        cron.write_run_record(
+            run_id,
+            {
+                **run_record_base,
+                "status": "error",
+                "error": error_text,
+            },
+        )
+        raise RuntimeError(error_text)
     cron.write_run_record(
         run_id,
         {

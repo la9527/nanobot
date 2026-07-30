@@ -44,7 +44,9 @@ from nanobot.command import CommandContext, CommandRouter, register_builtin_comm
 from nanobot.config.schema import AgentDefaults, ModelPresetConfig
 from nanobot.i18n import translate as _t
 from nanobot.cron.session_turns import (
+    is_cron_turn,
     cron_history_overrides,
+    is_invalid_cron_response,
 )
 from nanobot.providers.base import LLMProvider
 from nanobot.providers.factory import ProviderSnapshot
@@ -1498,7 +1500,9 @@ class AgentLoop:
                 self._pending_queues[session_key] = pending
                 try:
                     on_stream = on_stream_end = None
-                    if msg.metadata.get("_wants_stream"):
+                    # Bound cron turns are delivered only after final-response
+                    # validation; never expose partial tool-call deltas.
+                    if msg.metadata.get("_wants_stream") and not is_cron_turn(msg.metadata):
                         # Split one answer into distinct stream segments.
                         stream_base_id = f"{msg.session_key}:{time.time_ns()}"
                         stream_segment = 0
@@ -1533,6 +1537,19 @@ class AgentLoop:
                         msg, on_stream=on_stream, on_stream_end=on_stream_end,
                         pending_queue=pending,
                     )
+                    cron_response_error: Exception | None = None
+                    if is_cron_turn(msg.metadata) and (
+                        response is None or is_invalid_cron_response(response.content)
+                    ):
+                        cron_response_error = RuntimeError(
+                            "Cron turn produced no final response"
+                        )
+                        logger.warning(
+                            "Suppressing invalid cron response for session {}: {!r}",
+                            session_key,
+                            response.content if response is not None else None,
+                        )
+                        response = None
                     completed_channel = msg.channel
                     completed_chat_id = msg.chat_id
                     if response is not None:
@@ -1552,7 +1569,10 @@ class AgentLoop:
                             session_key=session_key,
                             metadata=msg.metadata,
                         )
-                    self._cron_turns.complete(msg, response=response)
+                    if cron_response_error is not None:
+                        self._cron_turns.complete(msg, error=cron_response_error)
+                    else:
+                        self._cron_turns.complete(msg, response=response)
                 except asyncio.CancelledError:
                     self._cron_turns.complete(
                         msg,
