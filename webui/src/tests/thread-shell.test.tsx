@@ -1104,6 +1104,99 @@ describe("ThreadShell", () => {
     expect(historyCalls).toBe(1);
   });
 
+  it("switches the session model target from the composer badge", async () => {
+    const client = makeClient();
+    const onRefreshSessions = vi.fn();
+    let activeTarget = "smart-router-local";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("websocket%3Achat-a/webui-thread")) {
+          return httpJson(
+            transcriptFromSimpleMessages([
+              { role: "user", content: "question" },
+              { role: "assistant", content: "answer" },
+            ]),
+          );
+        }
+        if (url.includes("websocket%3Achat-a/messages")) {
+          return httpJson({
+            key: "websocket:chat-a",
+            created_at: null,
+            updated_at: null,
+            active_target: activeTarget,
+            messages: [
+              { role: "user", content: "question" },
+              { role: "assistant", content: "answer" },
+            ],
+          });
+        }
+        if (url.includes("websocket%3Achat-a/model-target/smart-router-full/select")) {
+          activeTarget = "smart-router-full";
+          return httpJson({
+            key: "websocket:chat-a",
+            active_target: activeTarget,
+          });
+        }
+        return {
+          ok: false,
+          status: 404,
+          json: async () => ({}),
+        };
+      }),
+    );
+
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={session("chat-a")}
+          title="Chat chat-a"
+          onToggleSidebar={() => {}}
+          onNewChat={() => {}}
+          bootstrapActiveTarget="default"
+          bootstrapModelTargets={[
+            {
+              name: "smart-router-local",
+              kind: "model_target",
+              display_name: "Local",
+              provider: "openai_codex",
+              description: "Use the local target",
+            },
+            {
+              name: "smart-router-full",
+              kind: "model_target",
+              display_name: "Full",
+              provider: "openai_codex",
+              description: "Use the full target",
+            },
+          ]}
+          onRefreshSessions={onRefreshSessions}
+        />,
+      ),
+    );
+
+    await waitFor(() => expect(screen.getByText("answer")).toBeInTheDocument());
+
+    fireEvent.pointerDown(
+      screen.getByTestId("composer-model-logo-openai_codex").closest("button") as HTMLElement,
+      { button: 0 },
+    );
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: /Full/i }));
+
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith(
+        "/api/sessions/websocket%3Achat-a/model-target/smart-router-full/select",
+        expect.objectContaining({
+          headers: { Authorization: "Bearer tok" },
+        }),
+      ),
+    );
+    await waitFor(() => expect(onRefreshSessions).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Full" })).toBeInTheDocument());
+  });
+
   it("does not scroll again when canonical history refreshes after a session update", async () => {
     const client = makeClient();
     const scrollTo = vi.fn();
@@ -1151,9 +1244,10 @@ describe("ThreadShell", () => {
       await waitFor(() => expect(screen.getByText("question")).toBeInTheDocument());
       await waitFor(() => expect(scrollTo).toHaveBeenCalled());
       await act(async () => {
-        for (let i = 0; i < 8; i += 1) {
+        for (let i = 0; i < 20; i += 1) {
           await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
         }
+        await new Promise((resolve) => window.setTimeout(resolve, 100));
       });
       scrollTo.mockClear();
 

@@ -248,6 +248,17 @@ function absorbCompleteAssistantMessage(
   prev: UIMessage[],
   message: Omit<UIMessage, "id" | "role" | "createdAt">,
 ): UIMessage[] {
+  const lastAssistant = [...prev]
+    .reverse()
+    .find((candidate) => candidate.role === "assistant" && candidate.kind !== "trace");
+  if (
+    lastAssistant
+    && !lastAssistant.isStreaming
+    && lastAssistant.content === message.content
+    && JSON.stringify(lastAssistant.media ?? []) === JSON.stringify(message.media ?? [])
+  ) {
+    return prev;
+  }
   const last = prev[prev.length - 1];
   if (!last || !isReasoningOnlyPlaceholder(last) || !matchesTurn(last, message)) {
     return [
@@ -830,6 +841,20 @@ export function useNanobotStream(
       }
 
       if (ev.event === "message") {
+        if (ev.kind === "remote_user") {
+          clearActivitySegment();
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: crypto.randomUUID(),
+              role: "user",
+              content: ev.text,
+              ...turnFieldsFromEvent(ev),
+              createdAt: Date.now(),
+            },
+          ]);
+          return;
+        }
         if (
           suppressStreamUntilTurnEndRef.current &&
           (ev.kind === "tool_hint" || ev.kind === "progress" || ev.kind === "reasoning")

@@ -35,6 +35,7 @@ import { NanobotClient } from "@/lib/nanobot-client";
 import { ClientProvider, useClient } from "@/providers/ClientProvider";
 import type {
   ChatSummary,
+  ModelTargetOption,
   RuntimeSurface,
   SessionAutomationJob,
   SettingsPayload,
@@ -61,6 +62,8 @@ type BootState =
       token: string;
       tokenExpiresAt: number;
       modelName: string | null;
+      activeTarget: string | null;
+      modelTargets: ModelTargetOption[];
       runtimeSurface: RuntimeSurface;
     };
 
@@ -364,6 +367,8 @@ export default function App() {
               token: boot.token,
               tokenExpiresAt,
               modelName: boot.model_name ?? current.modelName,
+              activeTarget: boot.active_target ?? current.activeTarget,
+              modelTargets: boot.model_targets ?? current.modelTargets,
               runtimeSurface,
             }
           : current,
@@ -405,6 +410,8 @@ export default function App() {
             token: boot.token,
             tokenExpiresAt: bootstrapTokenExpiresAt(boot.expires_in),
             modelName: boot.model_name ?? null,
+            activeTarget: boot.active_target ?? null,
+            modelTargets: boot.model_targets ?? [],
             runtimeSurface,
           });
         } catch (e) {
@@ -514,6 +521,8 @@ export default function App() {
     >
       <Shell
         runtimeSurface={state.runtimeSurface}
+        bootstrapActiveTarget={state.activeTarget}
+        bootstrapModelTargets={state.modelTargets}
         onModelNameChange={handleModelNameChange}
         onLogout={handleLogout}
         onNativeEngineRestart={handleNativeEngineRestart}
@@ -524,11 +533,15 @@ export default function App() {
 
 function Shell({
   runtimeSurface,
+  bootstrapActiveTarget,
+  bootstrapModelTargets,
   onModelNameChange,
   onLogout,
   onNativeEngineRestart,
 }: {
   runtimeSurface: RuntimeSurface;
+  bootstrapActiveTarget: string | null;
+  bootstrapModelTargets: ModelTargetOption[];
   onModelNameChange: (modelName: string | null) => void;
   onLogout: () => void;
   onNativeEngineRestart: () => Promise<string>;
@@ -1586,6 +1599,9 @@ function Shell({
                 onWorkspaceScopeChange={applyWorkspaceScope}
                 settingsSnapshot={settingsSnapshot}
                 onOpenModelSettings={onOpenModelSettings}
+                bootstrapActiveTarget={bootstrapActiveTarget}
+                bootstrapModelTargets={bootstrapModelTargets}
+                onRefreshSessions={refresh}
               />
             </div>
             {view !== "chat" && (

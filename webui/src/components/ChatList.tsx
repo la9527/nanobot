@@ -35,6 +35,7 @@ import {
   visibleSessionsForGroup,
   type ChatGroupLabels,
 } from "@/lib/chat-groups";
+import { sessionSidebarBadges } from "@/lib/sessionMetadata";
 import { cn } from "@/lib/utils";
 import type { ChatSummary, SidebarDensity, SidebarSortMode } from "@/lib/types";
 
@@ -248,6 +249,7 @@ export const ChatList = memo(function ChatList({
                       : updated.has(s.chatId) && !active
                         ? "updated"
                         : null;
+                    const statusBadges = sessionSidebarBadges(s);
                     return (
                       <li key={s.key} className="min-w-0">
                         <div
@@ -293,6 +295,25 @@ export const ChatList = memo(function ChatList({
                             {timestamp && !projectMode ? (
                               <span className="block w-full truncate text-[11px] leading-4 text-muted-foreground/58">
                                 {timestamp}
+                              </span>
+                            ) : null}
+                            {statusBadges.length ? (
+                              <span className="mt-1 flex flex-wrap gap-1">
+                                {statusBadges.map((badge) => (
+                                  <span
+                                    key={badge.key}
+                                    className={cn(
+                                      "inline-flex max-w-full items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium leading-none",
+                                      badge.tone === "neutral" && "border-border/45 bg-background/70 text-muted-foreground/85",
+                                      badge.tone === "info" && "border-sky-200/70 bg-sky-50 text-sky-700 dark:border-sky-500/25 dark:bg-sky-500/10 dark:text-sky-200",
+                                      badge.tone === "success" && "border-emerald-200/70 bg-emerald-50 text-emerald-700 dark:border-emerald-500/25 dark:bg-emerald-500/10 dark:text-emerald-200",
+                                      badge.tone === "warning" && "border-amber-200/70 bg-amber-50 text-amber-700 dark:border-amber-500/25 dark:bg-amber-500/10 dark:text-amber-200",
+                                      badge.tone === "danger" && "border-rose-200/70 bg-rose-50 text-rose-700 dark:border-rose-500/25 dark:bg-rose-500/10 dark:text-rose-200",
+                                    )}
+                                  >
+                                    <span className="truncate">{badge.label}</span>
+                                  </span>
+                                ))}
                               </span>
                             ) : null}
                           </button>

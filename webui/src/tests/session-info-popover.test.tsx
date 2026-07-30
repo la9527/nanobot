@@ -4,6 +4,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SessionInfoPopover } from "@/components/thread/SessionInfoPopover";
 import { setAppLanguage } from "@/i18n";
+import type { ChatSummary } from "@/lib/types";
+
+function makeSession(overrides: Partial<ChatSummary> = {}): ChatSummary {
+  return {
+    key: "websocket:chat-1",
+    channel: "websocket",
+    chatId: "chat-1",
+    createdAt: "2026-05-20T10:00:00Z",
+    updatedAt: "2026-05-20T10:00:00Z",
+    preview: "",
+    ...overrides,
+  };
+}
 
 function automationJob(
   nextRunAt = Date.now() + 3_600_000,
@@ -48,9 +61,8 @@ describe("SessionInfoPopover", () => {
 
     render(
       <SessionInfoPopover
-        sessionKey="websocket:chat-1"
+        session={makeSession({ title: "Release work" })}
         token="tok"
-        title="Release work"
       />,
     );
 
@@ -74,9 +86,8 @@ describe("SessionInfoPopover", () => {
 
     render(
       <SessionInfoPopover
-        sessionKey="websocket:chat-1"
+        session={makeSession({ title: "@hyperframes 使用指南" })}
         token="tok"
-        title="@hyperframes 使用指南"
       />,
     );
 
@@ -101,9 +112,8 @@ describe("SessionInfoPopover", () => {
 
     render(
       <SessionInfoPopover
-        sessionKey="websocket:chat-1"
+        session={makeSession({ title: "Release work" })}
         token="tok"
-        title="Release work"
       />,
     );
 
@@ -124,9 +134,8 @@ describe("SessionInfoPopover", () => {
 
     render(
       <SessionInfoPopover
-        sessionKey="websocket:chat-1"
+        session={makeSession({ title: "Release work" })}
         token="tok"
-        title="Release work"
       />,
     );
 

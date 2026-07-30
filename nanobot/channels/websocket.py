@@ -18,7 +18,7 @@ from websockets.asyncio.server import ServerConnection, serve, unix_serve
 from websockets.exceptions import ConnectionClosed
 from websockets.http11 import Request as WsRequest
 
-from nanobot.bus.events import OUTBOUND_META_AGENT_UI, OutboundMessage
+from nanobot.bus.events import OUTBOUND_META_AGENT_UI, InboundMessage, OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.channels.base import BaseChannel
 from nanobot.config.paths import get_media_dir
@@ -695,6 +695,68 @@ class WebSocketChannel(BaseChannel):
             paths.append(saved)
         return paths, None
 
+    @staticmethod
+    def _is_webui_session_key(key: str) -> bool:
+        return key.startswith("websocket:") or key.startswith("telegram:")
+
+    @staticmethod
+    def _decode_telegram_session_target(
+        session_key: str,
+    ) -> tuple[str, dict[str, Any]] | None:
+        if not session_key.startswith("telegram:"):
+            return None
+        topic_match = re.fullmatch(r"telegram:([^:]+):topic:(\d+)", session_key)
+        if topic_match:
+            return topic_match.group(1), {
+                "message_thread_id": int(topic_match.group(2)),
+            }
+        direct_match = re.fullmatch(r"telegram:([^:]+)", session_key)
+        if direct_match:
+            return direct_match.group(1), {}
+        return None
+
+    async def _publish_bridged_session_message(
+        self,
+        *,
+        session_key: str,
+        client_id: str,
+        content: str,
+        media_paths: list[str] | None,
+        metadata: dict[str, Any] | None,
+    ) -> str | None:
+        target = self._decode_telegram_session_target(session_key)
+        if target is None:
+            return "unsupported session"
+        chat_id, extra_meta = target
+        if content.strip() or media_paths:
+            await self.bus.publish_outbound(
+                OutboundMessage(
+                    channel="telegram",
+                    chat_id=chat_id,
+                    content=content,
+                    media=media_paths or [],
+                    metadata={**extra_meta},
+                )
+            )
+        inbound_meta = {
+            **(metadata or {}),
+            **extra_meta,
+            "_webui_bridge": True,
+            "bridge_client_id": client_id,
+        }
+        await self.bus.publish_inbound(
+            InboundMessage(
+                channel="telegram",
+                sender_id=f"webui:{client_id}",
+                chat_id=chat_id,
+                content=content,
+                media=media_paths or [],
+                metadata=inbound_meta,
+                session_key_override=session_key,
+            )
+        )
+        return None
+
     async def _dispatch_envelope(
         self,
         connection: Any,
@@ -860,6 +922,62 @@ class WebSocketChannel(BaseChannel):
                 is_dm=False,
             )
             return
+        if t == "session_message":
+            session_key = envelope.get("session_key")
+            content = envelope.get("content")
+            if not isinstance(session_key, str) or not session_key:
+                await self._send_event(connection, "error", detail="invalid session_key")
+                return
+            decoded_key = session_key if self._is_webui_session_key(session_key) else None
+            if decoded_key is None:
+                await self._send_event(connection, "error", detail="session not found")
+                return
+            if not isinstance(content, str):
+                await self._send_event(connection, "error", detail="missing content")
+                return
+
+            raw_media = envelope.get("media")
+            media_paths: list[str] = []
+            if raw_media is not None:
+                if not isinstance(raw_media, list):
+                    await self._send_event(
+                        connection,
+                        "error",
+                        detail="image_rejected",
+                        reason="malformed",
+                    )
+                    return
+                media_paths, reason = self._save_envelope_media(raw_media)
+                if reason is not None:
+                    await self._send_event(
+                        connection,
+                        "error",
+                        detail="image_rejected",
+                        reason=reason,
+                    )
+                    return
+
+            if not content.strip() and not media_paths:
+                await self._send_event(connection, "error", detail="missing content")
+                return
+
+            if not media_paths and await self._maybe_apply_memory_correction(
+                chat_id=decoded_key,
+                content=content,
+                session_key=decoded_key,
+            ):
+                return
+
+            error = await self._publish_bridged_session_message(
+                session_key=decoded_key,
+                client_id=client_id,
+                content=content,
+                media_paths=media_paths or None,
+                metadata={"remote": getattr(connection, "remote_address", None)},
+            )
+            if error is not None:
+                await self._send_event(connection, "error", detail=error)
+            return
         await self._send_event(connection, "error", detail=f"unknown type: {t!r}")
 
     async def _workspace_scope_or_error(
@@ -1001,6 +1119,9 @@ class WebSocketChannel(BaseChannel):
                 payload["media_urls"] = urls
         if msg.reply_to:
             payload["reply_to"] = msg.reply_to
+        turn_id = msg.metadata.get("turn_id")
+        if isinstance(turn_id, str) and turn_id.strip():
+            payload["turn_id"] = turn_id
         lat = msg.metadata.get("latency_ms")
         if isinstance(lat, (int, float)):
             payload["latency_ms"] = int(lat)
@@ -1016,6 +1137,8 @@ class WebSocketChannel(BaseChannel):
             payload["kind"] = "tool_hint"
         elif msg.metadata.get("_progress"):
             payload["kind"] = "progress"
+        elif msg.metadata.get("_remote_user_echo"):
+            payload["kind"] = "remote_user"
         phase = "activity" if payload.get("kind") in ("tool_hint", "progress") else "answer"
         self._transcripts.prepare_and_append(
             msg.chat_id,

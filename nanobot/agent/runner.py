@@ -115,6 +115,8 @@ class AgentRunSpec:
     goal_active_predicate: Callable[[], bool] | None = None
     goal_continue_message: GoalContinueMessage | None = None
     finalize_on_max_iterations: bool = True
+    require_first_tool: bool = False
+    first_tool_name: str | None = None
 
 
 @dataclass(slots=True)
@@ -753,6 +755,7 @@ class AgentRunner:
         messages: list[dict[str, Any]],
         *,
         tools: list[dict[str, Any]] | None,
+        require_tool_choice: bool = False,
     ) -> dict[str, Any]:
         kwargs: dict[str, Any] = {
             "messages": messages,
@@ -767,6 +770,19 @@ class AgentRunner:
             kwargs["max_tokens"] = spec.max_tokens
         if spec.reasoning_effort is not None:
             kwargs["reasoning_effort"] = spec.reasoning_effort
+        if require_tool_choice and tools:
+            tool_names = {
+                definition.get("function", {}).get("name")
+                for definition in tools
+                if isinstance(definition, dict)
+            }
+            if spec.first_tool_name in tool_names:
+                kwargs["tool_choice"] = {
+                    "type": "function",
+                    "function": {"name": spec.first_tool_name},
+                }
+            else:
+                kwargs["tool_choice"] = "required"
         return kwargs
 
     async def _request_model(
@@ -793,6 +809,7 @@ class AgentRunner:
             spec,
             messages,
             tools=spec.tools.get_definitions(),
+            require_tool_choice=spec.require_first_tool and context.iteration == 0,
         )
         wants_streaming = hook.wants_streaming()
         wants_progress_streaming = (

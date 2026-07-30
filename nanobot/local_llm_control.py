@@ -23,7 +23,7 @@ LOCAL_LLM_ENV_FILENAME = "local-llm.env"
 DEFAULT_SCRIPT_PATH = "/Volumes/ExtData/Nanobot/infra/scripts/local-models/local-models.sh"
 
 ALLOWED_ACTIONS = {"status", "start", "stop", "restart", "smoke", "use"}
-ALLOWED_TARGETS = {"lfm2", "lfm25-8b-a1b", "qwen35-base-mlx-4bit", "qwen36", "qwen3-vl-4b", "qwen3-vl-8b", "lfm25-vl-1.6b", "all"}
+ALLOWED_TARGETS = {"lfm2", "lfm25-8b-a1b", "qwen35-base-mlx-4bit", "qwen36", "qwen3-vl-4b", "qwen3-vl-8b", "lfm25-vl-1.6b", "gemma4-e4b-current", "all"}
 ALL_REJECTED_ACTIONS = {"start", "restart", "smoke", "use"}
 
 _VISION_CHECK_TTL_SECONDS = 30.0
@@ -70,10 +70,10 @@ LOCAL_LLM_TARGETS: dict[str, dict[str, str]] = {
         "recommendation": "general_text",
     },
     "qwen35-base-mlx-4bit": {
-        "label": "Qwen3.5 Base",
+        "label": "Qwen3.5 9B",
         "provider": "vllm",
         "runtime": "mlx_lm.server",
-        "model": "mlx-community/Qwen3.5-27B-4bit",
+        "model": "mlx-community/Qwen3.5-9B-MLX-4bit",
         "api_base": "http://127.0.0.1:1248/v1",
         "launchd_label": "com.nanobot.local-model-qwen35-base-mlx-4bit",
         "role": "text",
@@ -108,6 +108,16 @@ LOCAL_LLM_TARGETS: dict[str, dict[str, str]] = {
         "launchd_label": "com.nanobot.local-model-lfm25-vl-1.6b",
         "role": "vision",
         "recommendation": "vision_ocr_candidate",
+    },
+    "gemma4-e4b-current": {
+        "label": "Gemma 4 E4B Current",
+        "provider": "rapid-mlx",
+        "runtime": "rapid-mlx 0.7.26",
+        "model": "mlx-community/gemma-4-e4b-it-4bit",
+        "api_base": "http://127.0.0.1:1264/v1",
+        "launchd_label": "com.nanobot.local-model-gemma4-e4b-current",
+        "role": "text",
+        "recommendation": "default_text_fast",
     },
 }
 

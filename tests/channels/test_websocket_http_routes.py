@@ -16,6 +16,7 @@ import httpx
 import pytest
 import websockets
 
+from nanobot.bus.events import OutboundMessage
 from nanobot.channels.websocket import WebSocketChannel, WebSocketConfig
 from nanobot.config.schema import Config
 from nanobot.cron.service import CronService
@@ -104,6 +105,7 @@ def _ch(
 def bus() -> MagicMock:
     b = MagicMock()
     b.publish_inbound = AsyncMock()
+    b.publish_outbound = AsyncMock()
     return b
 
 
@@ -715,7 +717,51 @@ async def test_mcp_presets_routes_require_token_and_return_payload(
 
 
 @pytest.mark.asyncio
-async def test_sessions_list_only_returns_websocket_sessions_by_default(
+async def test_sessions_routes_include_active_target_and_metadata_summary(
+    bus: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("nanobot.config.loader.load_config", lambda config_path=None: Config())
+    sm = _seed_session(tmp_path, key="websocket:meta")
+    session = sm.get_or_create("websocket:meta")
+    session.metadata["task_summary"] = {
+        "title": "Migrate the WebUI",
+        "status": "running",
+        "origin_channel": "websocket",
+    }
+    sm.save(session)
+
+    channel = _ch(bus, session_manager=sm, port=29947)
+    server_task = asyncio.create_task(channel.start())
+    await asyncio.sleep(0.3)
+    try:
+        boot = await _http_get("http://127.0.0.1:29947/webui/bootstrap")
+        token = boot.json()["token"]
+        auth = {"Authorization": f"Bearer {token}"}
+
+        listing = await _http_get(
+            "http://127.0.0.1:29947/api/sessions", headers=auth
+        )
+        assert listing.status_code == 200
+        row = next(s for s in listing.json()["sessions"] if s["key"] == "websocket:meta")
+        assert row["active_target"] == "default"
+        assert row["metadata"]["task_summary"]["status"] == "completed"
+
+        msgs = await _http_get(
+            "http://127.0.0.1:29947/api/sessions/websocket:meta/messages",
+            headers=auth,
+        )
+        assert msgs.status_code == 200
+        body = msgs.json()
+        assert body["active_target"] == "default"
+        assert body["metadata"]["task_summary"]["title"] == "Migrate the WebUI"
+        assert body["workspace_scope"]["access_mode"] in {"restricted", "full"}
+    finally:
+        await channel.stop()
+        await server_task
+
+
+@pytest.mark.asyncio
+async def test_sessions_list_includes_telegram_and_websocket_sessions(
     bus: MagicMock, tmp_path: Path
 ) -> None:
     # Seed a realistic multi-channel disk state: CLI, Slack, Lark and
@@ -726,6 +772,8 @@ async def test_sessions_list_only_returns_websocket_sessions_by_default(
             "cli:direct",
             "slack:C123",
             "lark:oc_abc",
+            "telegram:12345",
+            "telegram:-1001:topic:42",
             "websocket:alpha",
             "websocket:beta",
         ],
@@ -743,12 +791,145 @@ async def test_sessions_list_only_returns_websocket_sessions_by_default(
         )
         assert listing.status_code == 200
         keys = {s["key"] for s in listing.json()["sessions"]}
-        # Only websocket-channel sessions are part of the webui surface; CLI /
-        # Slack / Lark rows would be non-resumable from the browser.
-        assert keys == {"websocket:alpha", "websocket:beta"}
+        # The browser supports native websocket chats plus bridged Telegram
+        # sessions; CLI / Slack / Lark rows stay hidden.
+        assert keys == {
+            "telegram:12345",
+            "telegram:-1001:topic:42",
+            "websocket:alpha",
+            "websocket:beta",
+        }
     finally:
         await channel.stop()
         await server_task
+
+
+@pytest.mark.asyncio
+async def test_session_messages_route_reads_telegram_sessions(
+    bus: MagicMock, tmp_path: Path
+) -> None:
+    sm = _seed_session(tmp_path, key="telegram:12345")
+    channel = _ch(bus, session_manager=sm, port=29925)
+    server_task = asyncio.create_task(channel.start())
+    await asyncio.sleep(0.3)
+    try:
+        boot = await _http_get("http://127.0.0.1:29925/webui/bootstrap")
+        token = boot.json()["token"]
+        auth = {"Authorization": f"Bearer {token}"}
+
+        msgs = await _http_get(
+            "http://127.0.0.1:29925/api/sessions/telegram%3A12345/messages",
+            headers=auth,
+        )
+        assert msgs.status_code == 200
+        assert msgs.json()["key"] == "telegram:12345"
+    finally:
+        await channel.stop()
+        await server_task
+
+
+@pytest.mark.asyncio
+async def test_session_message_envelope_publishes_telegram_inbound(
+    bus: MagicMock, tmp_path: Path
+) -> None:
+    sm = _seed_session(tmp_path, key="telegram:-1001:topic:42")
+    channel = _ch(bus, session_manager=sm, port=29926)
+
+    class DummyConn:
+        remote_address = ("127.0.0.1", 9999)
+
+    await channel._dispatch_envelope(
+        DummyConn(),
+        "browser-client",
+        {
+            "type": "session_message",
+            "session_key": "telegram:-1001:topic:42",
+            "content": "reply from webui",
+        },
+    )
+
+    bus.publish_outbound.assert_awaited_once()
+    outbound = bus.publish_outbound.await_args.args[0]
+    assert outbound.channel == "telegram"
+    assert outbound.chat_id == "-1001"
+    assert outbound.content == "reply from webui"
+    assert outbound.metadata["message_thread_id"] == 42
+
+    bus.publish_inbound.assert_awaited_once()
+    msg = bus.publish_inbound.await_args.args[0]
+    assert msg.channel == "telegram"
+    assert msg.chat_id == "-1001"
+    assert msg.session_key_override == "telegram:-1001:topic:42"
+    assert msg.metadata["message_thread_id"] == 42
+    assert msg.content == "reply from webui"
+
+
+@pytest.mark.asyncio
+async def test_bridged_memory_correction_updates_user_profile_without_bus_publish(
+    bus: MagicMock, tmp_path: Path,
+) -> None:
+    sm = _seed_session(tmp_path, key="telegram:-1001:topic:42")
+    channel = _ch(bus, session_manager=sm, port=29929)
+
+    class DummyConn:
+        remote_address = ("127.0.0.1", 9999)
+
+    await channel._dispatch_envelope(
+        DummyConn(),
+        "browser-client",
+        {
+            "type": "session_message",
+            "session_key": "telegram:-1001:topic:42",
+            "content": "이건 기본 선호가 아님\n수정할 기본 선호: 답변 길이는 기본적으로 간결하게 유지\n현재 task: owner defaults\n저장 위치: USER.md",
+        },
+    )
+
+    bus.publish_inbound.assert_not_awaited()
+    user_text = (tmp_path / "USER.md").read_text(encoding="utf-8")
+    assert "- 답변 길이는 기본적으로 간결하게 유지" in user_text
+    data = sm.read_session_file("telegram:-1001:topic:42")
+    assert data is not None
+    assert data["messages"][-1]["role"] == "assistant"
+    assert data["messages"][-1]["content"] == (
+        "USER.md 기본 선호 보정 항목에 추가했어요: 답변 길이는 기본적으로 간결하게 유지"
+    )
+
+
+@pytest.mark.asyncio
+async def test_send_marks_remote_user_echo_kind_for_webui_mirrors(
+    bus: MagicMock, tmp_path: Path
+) -> None:
+    sm = _seed_session(tmp_path, key="telegram:12345")
+    channel = _ch(bus, session_manager=sm, port=29927)
+
+    class DummyConn:
+        remote_address = ("127.0.0.1", 9999)
+
+        def __init__(self) -> None:
+            self.sent: list[str] = []
+
+        async def send(self, raw: str) -> None:
+            self.sent.append(raw)
+
+    conn = DummyConn()
+    channel._attach(conn, "telegram:12345")
+
+    await channel.send(
+        OutboundMessage(
+            channel="websocket",
+            chat_id="telegram:12345",
+            content="fresh telegram push",
+            metadata={"_remote_user_echo": True, "turn_id": "turn-wire-123"},
+        )
+    )
+
+    assert conn.sent
+    payload = json.loads(conn.sent[-1])
+    assert payload["event"] == "message"
+    assert payload["chat_id"] == "telegram:12345"
+    assert payload["kind"] == "remote_user"
+    assert payload["text"] == "fresh telegram push"
+    assert payload["turn_id"] == "turn-wire-123"
 
 
 @pytest.mark.asyncio

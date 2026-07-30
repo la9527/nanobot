@@ -73,6 +73,47 @@ async def test_runner_preserves_reasoning_fields_and_tool_results():
 
 
 @pytest.mark.asyncio
+async def test_runner_requires_only_the_first_tool_request_when_configured():
+    from nanobot.agent.runner import AgentRunner, AgentRunSpec
+
+    provider = MagicMock(spec=LLMProvider)
+    request_kwargs: list[dict] = []
+
+    async def chat_with_retry(**kwargs):
+        request_kwargs.append(kwargs)
+        if len(request_kwargs) == 1:
+            return LLMResponse(
+                content="",
+                tool_calls=[ToolCallRequest(id="call_1", name="web_search", arguments={"q": "latest"})],
+            )
+        return LLMResponse(content="final briefing")
+
+    provider.chat_with_retry = chat_with_retry
+    tools = MagicMock()
+    tools.get_definitions.return_value = [
+        {"type": "function", "function": {"name": "web_search", "parameters": {"type": "object"}}}
+    ]
+    tools.execute = AsyncMock(return_value="fresh evidence")
+
+    result = await AgentRunner(provider).run(AgentRunSpec(
+        initial_messages=[{"role": "user", "content": "prepare the news briefing"}],
+        tools=tools,
+        model="test-model",
+        max_iterations=3,
+        max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+        require_first_tool=True,
+        first_tool_name="web_search",
+    ))
+
+    assert result.final_content == "final briefing"
+    assert request_kwargs[0]["tool_choice"] == {
+        "type": "function",
+        "function": {"name": "web_search"},
+    }
+    assert "tool_choice" not in request_kwargs[1]
+
+
+@pytest.mark.asyncio
 async def test_runner_returns_max_iterations_fallback():
     from nanobot.agent.runner import AgentRunner, AgentRunSpec
 

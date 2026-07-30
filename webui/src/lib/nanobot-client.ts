@@ -408,6 +408,19 @@ export class NanobotClient {
     this.queueSend(frame);
   }
 
+  sendSessionMessage(
+    sessionKey: string,
+    content: string,
+    media?: OutboundMedia[],
+  ): void {
+    this.queueSend({
+      type: "session_message",
+      session_key: sessionKey,
+      content,
+      ...(media && media.length > 0 ? { media } : {}),
+    });
+  }
+
   setWorkspaceScope(chatId: string, workspaceScope: WorkspaceScopePayload): void {
     this.knownChats.add(chatId);
     this.queueSend({

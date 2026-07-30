@@ -48,6 +48,15 @@ import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
@@ -71,6 +80,7 @@ import type {
   CliAppInfo,
   GoalStateWsPayload,
   McpPresetInfo,
+  ModelTargetOption,
   OutboundCliAppMention,
   OutboundMcpPresetMention,
   SlashCommand,
@@ -145,6 +155,27 @@ function getVoiceShortcutLabel(): string {
   }
 }
 
+function orderModelTargets(targets: ModelTargetOption[]): ModelTargetOption[] {
+  const smartRouterRank: Record<string, number> = {
+    auto: 0,
+    local: 1,
+    mini: 2,
+    full: 3,
+  };
+  return [...targets].sort((left, right) => {
+    const leftGroup = left.group === "smart-router" ? 0 : 1;
+    const rightGroup = right.group === "smart-router" ? 0 : 1;
+    if (leftGroup !== rightGroup) return leftGroup - rightGroup;
+    if (left.group === "smart-router" && right.group === "smart-router") {
+      return (smartRouterRank[left.smart_router_mode ?? "full"] ?? 99)
+        - (smartRouterRank[right.smart_router_mode ?? "full"] ?? 99);
+    }
+    const leftLabel = (left.display_name || left.name).trim();
+    const rightLabel = (right.display_name || right.name).trim();
+    return leftLabel.localeCompare(rightLabel);
+  });
+}
+
 interface ThreadComposerProps {
   onSend: (content: string, images?: SendImage[], options?: SendOptions) => void;
   disabled?: boolean;
@@ -155,6 +186,10 @@ interface ThreadComposerProps {
   modelProviderLabel?: string | null;
   modelNeedsSetup?: boolean;
   onModelBadgeClick?: () => void;
+  modelTargets?: ModelTargetOption[];
+  activeModelTarget?: string | null;
+  modelTargetPending?: boolean;
+  onSelectModelTarget?: (targetName: string | null) => void;
   variant?: "thread" | "hero";
   slashCommands?: SlashCommand[];
   cliApps?: CliAppInfo[];
@@ -767,6 +802,10 @@ export function ThreadComposer({
   modelProviderLabel = null,
   modelNeedsSetup = false,
   onModelBadgeClick,
+  modelTargets = [],
+  activeModelTarget = null,
+  modelTargetPending = false,
+  onSelectModelTarget,
   variant = "thread",
   slashCommands = [],
   cliApps = [],
@@ -891,6 +930,16 @@ export function ThreadComposer({
     && !hasErrors
     && hasComposerContent;
   const canOpenModelSettings = Boolean(modelNeedsSetup && onModelBadgeClick && !disabled);
+  const orderedModelTargets = useMemo(
+    () => orderModelTargets(modelTargets.filter((target) => target.name !== "default")),
+    [modelTargets],
+  );
+  const canSelectModelTarget = Boolean(
+    !disabled
+    && !modelNeedsSetup
+    && onSelectModelTarget
+    && (orderedModelTargets.length > 0 || activeModelTarget === "default"),
+  );
   const canQueueGuidance =
     isStreaming
     && !disabled
@@ -1777,8 +1826,12 @@ export function ThreadComposer({
                 provider={modelProvider}
                 providerLabel={modelProviderLabel}
                 needsSetup={modelNeedsSetup}
+                modelTargets={orderedModelTargets}
+                activeTarget={activeModelTarget}
+                selectionPending={modelTargetPending}
                 isHero={isHero}
                 onClick={modelNeedsSetup ? onModelBadgeClick : undefined}
+                onSelectTarget={canSelectModelTarget ? onSelectModelTarget : undefined}
               />
             ) : null}
             {showVoiceButton ? (
@@ -2065,15 +2118,23 @@ function ComposerModelBadge({
   provider,
   providerLabel,
   needsSetup,
+  modelTargets = [],
+  activeTarget = null,
+  selectionPending = false,
   isHero,
   onClick,
+  onSelectTarget,
 }: {
   label: string;
   provider?: string | null;
   providerLabel?: string | null;
   needsSetup?: boolean;
+  modelTargets?: ModelTargetOption[];
+  activeTarget?: string | null;
+  selectionPending?: boolean;
   isHero: boolean;
   onClick?: () => void;
+  onSelectTarget?: (targetName: string | null) => void;
 }) {
   const inferredProvider = needsSetup ? null : provider || inferProviderFromModelName(label);
   const brand = providerBrand(inferredProvider);
@@ -2082,20 +2143,23 @@ function ComposerModelBadge({
   const showLogo = !!logoUrl;
   const title = providerLabel ? `${label} · ${providerLabel}` : label;
   const interactive = Boolean(onClick);
-  const Container = interactive ? "button" : "span";
+  const canSelectTarget = Boolean(!needsSetup && onSelectTarget && (modelTargets.length > 0 || activeTarget === "default"));
+  const selectedTarget = activeTarget?.trim() || "default";
 
   useEffect(() => setLogoIndex(0), [inferredProvider]);
 
-  return (
-    <Container
+  const badge = (
+    <button
+      type="button"
       title={title}
-      type={interactive ? "button" : undefined}
-      onClick={onClick}
+      onClick={!canSelectTarget ? onClick : undefined}
+      disabled={selectionPending}
       className={cn(
         "inline-flex min-w-0 items-center rounded-full border border-border/55 bg-card font-medium text-foreground/82",
         "shadow-[0_2px_8px_rgba(15,23,42,0.045)]",
-        interactive && "cursor-pointer hover:bg-accent/55 hover:text-foreground",
+        (interactive || canSelectTarget) && "cursor-pointer hover:bg-accent/55 hover:text-foreground",
         needsSetup && "border-amber-500/35 bg-amber-50/70 text-amber-900 dark:bg-amber-500/10 dark:text-amber-200",
+        selectionPending && "cursor-wait opacity-80",
         isHero
           ? "h-8 max-w-[min(12.5rem,44vw)] gap-1.5 px-2 text-[11.5px]"
           : "h-9 max-w-[min(12rem,44vw)] gap-2 px-2.5 text-[12px]",
@@ -2140,7 +2204,60 @@ function ComposerModelBadge({
         )}
       </span>
       <span className="truncate">{label}</span>
-    </Container>
+      {selectionPending ? (
+        <Loader2 className={cn("shrink-0 animate-spin text-muted-foreground/70", isHero ? "h-3 w-3" : "h-3.5 w-3.5")} />
+      ) : canSelectTarget ? (
+        <ChevronDown className={cn("shrink-0 text-muted-foreground/70", isHero ? "h-3 w-3" : "h-3.5 w-3.5")} />
+      ) : null}
+    </button>
+  );
+
+  if (!canSelectTarget) return badge;
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        {badge}
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="end"
+        sideOffset={8}
+        className="w-[min(18rem,calc(100vw-1rem))] rounded-2xl p-1.5"
+      >
+        <DropdownMenuLabel className="px-2 pb-1 pt-1 text-[11px] uppercase tracking-[0.12em] text-muted-foreground/72">
+          Chat model target
+        </DropdownMenuLabel>
+        <DropdownMenuRadioGroup
+          value={selectedTarget}
+          onValueChange={(value) => {
+            if (value === selectedTarget) return;
+            onSelectTarget?.(value === "default" ? null : value);
+          }}
+        >
+          <DropdownMenuRadioItem value="default" className="items-start rounded-xl px-2 py-2">
+            <div className="flex min-w-0 flex-col">
+              <span className="text-[12px] font-medium">Default</span>
+              <span className="text-[11px] text-muted-foreground">Follow the current workspace preset.</span>
+            </div>
+          </DropdownMenuRadioItem>
+          {modelTargets.length ? <DropdownMenuSeparator className="my-1" /> : null}
+          {modelTargets.map((target) => (
+            <DropdownMenuRadioItem
+              key={target.name}
+              value={target.name}
+              className="items-start rounded-xl px-2 py-2"
+            >
+              <div className="flex min-w-0 flex-col">
+                <span className="text-[12px] font-medium">{target.display_name || target.name}</span>
+                <span className="text-[11px] text-muted-foreground">
+                  {target.description || target.model || target.provider || target.kind}
+                </span>
+              </div>
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 

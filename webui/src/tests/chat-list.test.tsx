@@ -450,4 +450,37 @@ describe("ChatList", () => {
     expect(regionNames).toEqual(["project-a", "project-b", "Chats"]);
     expect(screen.getAllByText("Projects")).toHaveLength(1);
   });
+
+  it("renders session status badges from metadata summaries", () => {
+    render(
+      <ChatList
+        sessions={[
+          session({
+            chatId: "approval",
+            title: "Approval flow",
+            activeTarget: "smart-router-local",
+            metadata: {
+              approval_summary: {
+                status: "pending",
+                prompt_preview: "Approve sending the summary?",
+              },
+              context_window: {
+                status: "warning",
+              },
+            },
+          }),
+        ]}
+        activeKey={null}
+        onSelect={vi.fn()}
+        onRequestDelete={vi.fn()}
+        onTogglePin={vi.fn()}
+        onRequestRename={vi.fn()}
+        onToggleArchive={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Approval")).toBeInTheDocument();
+    expect(screen.getByText("Context warning")).toBeInTheDocument();
+    expect(screen.queryByText("Local")).not.toBeInTheDocument();
+  });
 });

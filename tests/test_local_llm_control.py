@@ -33,12 +33,14 @@ def test_status_defaults_to_qwen36_without_override(tmp_path: Path) -> None:
     assert "qwen3-vl-4b" in rows
     assert "qwen3-vl-8b" in rows
     assert "lfm25-vl-1.6b" in rows
+    assert "gemma4-e4b-current" in rows
     assert rows["lfm25-8b-a1b"]["runtime"] == "rapid-mlx"
     assert rows["qwen36"]["runtime"] == "mlx_vlm.server"
     assert rows["qwen35-base-mlx-4bit"]["runtime"] == "mlx_lm.server"
     assert rows["qwen3-vl-4b"]["runtime"] == "rapid-mlx"
     assert rows["qwen3-vl-8b"]["runtime"] == "rapid-mlx"
     assert rows["lfm25-vl-1.6b"]["runtime"] == "mlx_vlm.server"
+    assert rows["gemma4-e4b-current"]["runtime"] == "rapid-mlx 0.7.26"
     assert rows["lfm2"]["role"] == "text"
     assert rows["lfm2"]["recommendation"] == "default_text"
     assert rows["lfm25-8b-a1b"]["role"] == "text"
@@ -51,6 +53,8 @@ def test_status_defaults_to_qwen36_without_override(tmp_path: Path) -> None:
     assert rows["qwen3-vl-8b"]["recommendation"] == "hybrid_vision_quality"
     assert rows["lfm25-vl-1.6b"]["role"] == "vision"
     assert rows["lfm25-vl-1.6b"]["recommendation"] == "vision_ocr_candidate"
+    assert rows["gemma4-e4b-current"]["role"] == "text"
+    assert rows["gemma4-e4b-current"]["recommendation"] == "default_text_fast"
     assert rows["qwen36"]["is_default"] is True
     assert rows["lfm2"]["is_default"] is False
 

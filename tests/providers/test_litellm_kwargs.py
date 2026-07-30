@@ -1266,6 +1266,58 @@ def _build_kwargs_for(provider_name: str, model: str, reasoning_effort=None):
     )
 
 
+def test_openai_pinned_tool_choice_uses_current_wire_format() -> None:
+    spec = find_by_name("openai")
+    provider = OpenAICompatProvider(api_key="k", default_model="gpt-5", spec=spec)
+
+    kwargs = provider._build_kwargs(
+        messages=[{"role": "user", "content": "hi"}],
+        tools=[{"type": "function", "function": {"name": "web_search"}}],
+        model="gpt-5",
+        max_tokens=1024,
+        temperature=0.7,
+        reasoning_effort=None,
+        tool_choice={"type": "function", "function": {"name": "web_search"}},
+    )
+
+    assert kwargs["tool_choice"] == {"type": "function", "name": "web_search"}
+
+
+def test_openai_responses_pinned_tool_choice_uses_current_wire_format() -> None:
+    spec = find_by_name("openai")
+    provider = OpenAICompatProvider(api_key="k", default_model="gpt-5", spec=spec)
+
+    body = provider._build_responses_body(
+        messages=[{"role": "user", "content": "hi"}],
+        tools=[{"type": "function", "function": {"name": "web_search"}}],
+        model="gpt-5",
+        max_tokens=1024,
+        temperature=0.7,
+        reasoning_effort=None,
+        tool_choice={"type": "function", "function": {"name": "web_search"}},
+    )
+
+    assert body["tool_choice"] == {"type": "function", "name": "web_search"}
+
+
+def test_vllm_pinned_tool_choice_keeps_nested_wire_format() -> None:
+    spec = find_by_name("vllm")
+    provider = OpenAICompatProvider(api_key="k", default_model="local", spec=spec)
+    choice = {"type": "function", "function": {"name": "web_search"}}
+
+    kwargs = provider._build_kwargs(
+        messages=[{"role": "user", "content": "hi"}],
+        tools=[{"type": "function", "function": {"name": "web_search"}}],
+        model="local",
+        max_tokens=1024,
+        temperature=0.7,
+        reasoning_effort=None,
+        tool_choice=choice,
+    )
+
+    assert kwargs["tool_choice"] == choice
+
+
 def test_dashscope_thinking_enabled_with_reasoning_effort() -> None:
     kw = _build_kwargs_for("dashscope", "qwen3-plus", reasoning_effort="medium")
     assert kw["extra_body"] == {"enable_thinking": True}

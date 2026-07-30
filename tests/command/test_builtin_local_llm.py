@@ -139,7 +139,7 @@ async def test_cmd_local_llm_confirm_use_reports_restart_requirement(
 
 
 def test_help_text_mentions_local_llm_command() -> None:
-    assert "/local-llm [status|start|stop|restart|smoke|use|confirm] [lfm2|lfm25-8b-a1b|qwen35-base-mlx-4bit|qwen36|qwen3-vl-4b|qwen3-vl-8b|lfm25-vl-1.6b] — Show or control local LLM runtime." in build_help_text()
+    assert "/local-llm [status|start|stop|restart|smoke|use|confirm] [lfm2|lfm25-8b-a1b|qwen35-base-mlx-4bit|qwen36|qwen3-vl-4b|qwen3-vl-8b|lfm25-vl-1.6b|gemma4-e4b-current] — Show or control local LLM runtime." in build_help_text()
 
 
 def test_command_router_dispatches_local_llm_prefix() -> None:

@@ -772,7 +772,23 @@ class OpenAICompatProvider(LLMProvider):
 
         if tools:
             kwargs["tools"] = tools
-            kwargs["tool_choice"] = tool_choice or "auto"
+            wire_tool_choice = tool_choice
+            if (
+                spec
+                and spec.name == "openai"
+                and isinstance(tool_choice, dict)
+                and tool_choice.get("type") == "function"
+                and isinstance(tool_choice.get("function"), dict)
+                and isinstance(tool_choice["function"].get("name"), str)
+            ):
+                # The current OpenAI Chat Completions API expects a pinned
+                # function name beside ``type``. Local OpenAI-compatible
+                # servers such as Rapid-MLX retain the nested legacy shape.
+                wire_tool_choice = {
+                    "type": "function",
+                    "name": tool_choice["function"]["name"],
+                }
+            kwargs["tool_choice"] = wire_tool_choice or "auto"
 
         # Backfill reasoning_content="" on assistants missing it: DeepSeek
         # thinking mode rejects history otherwise (#3554, #3584); "" reads
@@ -931,7 +947,22 @@ class OpenAICompatProvider(LLMProvider):
 
         if tools:
             body["tools"] = convert_tools(tools)
-            body["tool_choice"] = tool_choice or "auto"
+            wire_tool_choice = tool_choice
+            if (
+                self._spec
+                and self._spec.name == "openai"
+                and isinstance(tool_choice, dict)
+                and tool_choice.get("type") == "function"
+                and isinstance(tool_choice.get("function"), dict)
+                and isinstance(tool_choice["function"].get("name"), str)
+            ):
+                # Responses API uses the same pinned-function representation
+                # as the current Chat Completions API: the name is top-level.
+                wire_tool_choice = {
+                    "type": "function",
+                    "name": tool_choice["function"]["name"],
+                }
+            body["tool_choice"] = wire_tool_choice or "auto"
 
         extra_body = getattr(self, "_extra_body", {})
         if extra_body:

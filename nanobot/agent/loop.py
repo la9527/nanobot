@@ -44,8 +44,9 @@ from nanobot.command import CommandContext, CommandRouter, register_builtin_comm
 from nanobot.config.schema import AgentDefaults, ModelPresetConfig
 from nanobot.i18n import translate as _t
 from nanobot.cron.session_turns import (
-    is_cron_turn,
+    cron_trigger,
     cron_history_overrides,
+    is_cron_turn,
     is_invalid_cron_response,
 )
 from nanobot.providers.base import LLMProvider
@@ -904,7 +905,49 @@ class AgentLoop:
         self, msg: InboundMessage
     ) -> Callable[..., Awaitable[None]]:
         """Build a progress callback that publishes to the message bus."""
-        return build_bus_progress_callback(self.bus, msg)
+        publish_progress = build_bus_progress_callback(self.bus, msg)
+        mirror_session_key = msg.session_key if msg.session_key.startswith("telegram:") else None
+        if mirror_session_key is None:
+            return publish_progress
+
+        async def _publish_progress(
+            content: str,
+            *,
+            tool_hint: bool = False,
+            tool_events: list[dict[str, Any]] | None = None,
+            file_edit_events: list[dict[str, Any]] | None = None,
+            reasoning: bool = False,
+            reasoning_end: bool = False,
+        ) -> None:
+            await publish_progress(
+                content,
+                tool_hint=tool_hint,
+                tool_events=tool_events,
+                file_edit_events=file_edit_events,
+                reasoning=reasoning,
+                reasoning_end=reasoning_end,
+            )
+            meta = dict(msg.metadata or {})
+            meta["_progress"] = True
+            meta["_tool_hint"] = tool_hint
+            if reasoning:
+                meta["_reasoning_delta"] = True
+            if reasoning_end:
+                meta["_reasoning_end"] = True
+            if tool_events:
+                meta["_tool_events"] = tool_events
+            if file_edit_events:
+                meta["_file_edit_events"] = file_edit_events
+            await self.bus.publish_outbound(
+                OutboundMessage(
+                    channel="websocket",
+                    chat_id=mirror_session_key,
+                    content=content,
+                    metadata=meta,
+                )
+            )
+
+        return _publish_progress
 
     async def _build_retry_wait_callback(
         self, msg: InboundMessage
@@ -1316,6 +1359,7 @@ class AgentLoop:
             )
 
         session_metadata = session.metadata if session is not None else None
+        cron_metadata = cron_trigger(metadata)
         try:
             result = await runner.run(AgentRunSpec(
                 initial_messages=initial_messages,
@@ -1357,6 +1401,15 @@ class AgentLoop:
                 ),
                 goal_active_predicate=lambda: sustained_goal_active(session.metadata) if session is not None else False,
                 goal_continue_message=_goal_continue,
+                require_first_tool=bool(
+                    cron_metadata and cron_metadata.get("require_first_tool") is True
+                ),
+                first_tool_name=(
+                    cron_metadata.get("first_tool_name")
+                    if cron_metadata
+                    and isinstance(cron_metadata.get("first_tool_name"), str)
+                    else None
+                ),
                 finalize_on_max_iterations=turn_continuation.should_finalize_on_max_iterations(
                     pending_queue_available=pending_queue is not None and session is not None,
                     session_metadata=session_metadata,
@@ -1490,6 +1543,7 @@ class AgentLoop:
             msg = dataclasses.replace(msg, session_key_override=session_key)
         lock = self._session_locks.setdefault(session_key, asyncio.Lock())
         gate = self._concurrency_gate or nullcontext()
+        mirror_session_key = session_key if session_key.startswith("telegram:") else None
 
         pending: asyncio.Queue | None = None
         try:
@@ -1519,6 +1573,13 @@ class AgentLoop:
                                 content=delta,
                                 metadata=meta,
                             ))
+                            if mirror_session_key:
+                                await self.bus.publish_outbound(OutboundMessage(
+                                    channel="websocket",
+                                    chat_id=mirror_session_key,
+                                    content=delta,
+                                    metadata=meta,
+                                ))
 
                         async def on_stream_end(*, resuming: bool = False) -> None:
                             nonlocal stream_segment
@@ -1531,6 +1592,13 @@ class AgentLoop:
                                 content="",
                                 metadata=meta,
                             ))
+                            if mirror_session_key:
+                                await self.bus.publish_outbound(OutboundMessage(
+                                    channel="websocket",
+                                    chat_id=mirror_session_key,
+                                    content="",
+                                    metadata=meta,
+                                ))
                             stream_segment += 1
 
                     response = await self._process_message(
@@ -1556,6 +1624,16 @@ class AgentLoop:
                         await self.bus.publish_outbound(response)
                         completed_channel = response.channel
                         completed_chat_id = response.chat_id
+                        if mirror_session_key:
+                            await self.bus.publish_outbound(OutboundMessage(
+                                channel="websocket",
+                                chat_id=mirror_session_key,
+                                content=response.content,
+                                reply_to=response.reply_to,
+                                media=response.media,
+                                metadata=dict(response.metadata or {}),
+                                buttons=response.buttons,
+                            ))
                     elif msg.channel == "cli":
                         await self.bus.publish_outbound(OutboundMessage(
                             channel=msg.channel, chat_id=msg.chat_id,
@@ -1569,6 +1647,13 @@ class AgentLoop:
                             session_key=session_key,
                             metadata=msg.metadata,
                         )
+                        if mirror_session_key:
+                            await self._runtime_events().turn_completed(
+                                channel="websocket",
+                                chat_id=mirror_session_key,
+                                session_key=session_key,
+                                metadata=msg.metadata,
+                            )
                     if cron_response_error is not None:
                         self._cron_turns.complete(msg, error=cron_response_error)
                     else:
@@ -2173,6 +2258,24 @@ class AgentLoop:
         ctx.user_persisted_early = self._persist_user_message_early(
             ctx.msg, ctx.session
         )
+        if (
+            ctx.user_persisted_early
+            and ctx.session_key.startswith("telegram:")
+            and not ctx.msg.metadata.get("_webui_bridge")
+        ):
+            mirror_meta: dict[str, Any] = {"_remote_user_echo": True}
+            turn_id = ctx.msg.metadata.get("turn_id")
+            if isinstance(turn_id, str) and turn_id.strip():
+                mirror_meta["turn_id"] = turn_id
+            await self.bus.publish_outbound(
+                OutboundMessage(
+                    channel="websocket",
+                    chat_id=ctx.session_key,
+                    content=ctx.msg.content if isinstance(ctx.msg.content, str) else "",
+                    media=list(ctx.msg.media or []),
+                    metadata=mirror_meta,
+                )
+            )
 
         if ctx.on_progress is None:
             ctx.on_progress = await self._build_bus_progress_callback(ctx.msg)

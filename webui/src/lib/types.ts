@@ -221,6 +221,202 @@ export interface UIFileEdit {
   pending?: boolean;
 }
 
+export interface ModelTargetOption {
+  name: string;
+  kind: string;
+  provider?: string | null;
+  model?: string | null;
+  description?: string | null;
+  display_name?: string | null;
+  group?: string | null;
+  smart_router_mode?: "auto" | "local" | "mini" | "full" | null;
+}
+
+export interface SessionContinuityMetadata {
+  canonical_owner_id?: string;
+  channel_kind?: string;
+  external_identity?: string;
+  trust_level?: string;
+  last_confirmed_at?: string | null;
+}
+
+export interface SessionApprovalSummary {
+  status?: string;
+  channel?: string;
+  tool_name?: string;
+  tool_call_id?: string;
+  message_id?: string | null;
+  prompt_preview?: string;
+}
+
+export interface SessionPendingInteraction {
+  id?: string;
+  kind?: string;
+  status?: string;
+  question?: string;
+  buttons?: string[][];
+  request?: Record<string, unknown>;
+  conflicts?: Array<Record<string, unknown>>;
+  expected_field?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface SessionProactiveSummary {
+  status?: string;
+  category?: string;
+  title?: string;
+  summary?: string;
+  target_channel?: string;
+  suppressed_reason?: string | null;
+  updated_at?: string | null;
+}
+
+export interface SessionRuntimeCheckpoint {
+  phase?: string;
+  iteration?: number;
+  model?: string;
+}
+
+export interface SessionTaskSummary {
+  task_id?: string;
+  canonical_owner_id?: string;
+  title?: string;
+  status?: string;
+  origin_channel?: string;
+  origin_session_key?: string;
+  updated_at?: string | null;
+  next_step_hint?: string;
+}
+
+export interface SessionOwnerProfile {
+  canonical_owner_id?: string;
+  preferred_language?: string;
+  timezone?: string;
+  response_tone?: string;
+  response_length?: string;
+}
+
+export interface SessionMemoryBoundary {
+  owner_profile?: string;
+  project_memory?: string;
+  session_state?: string;
+  raw_history?: string;
+}
+
+export interface SessionMemoryCorrectionAction {
+  code?: string;
+  phrase?: string;
+  target?: string;
+  store?: string;
+}
+
+export interface SessionMemoryCorrection {
+  actions?: SessionMemoryCorrectionAction[];
+}
+
+export interface SessionContextWindowSummary {
+  max_tokens?: number;
+  used_input_tokens?: number;
+  reserved_output_tokens?: number;
+  available_tokens?: number;
+  usage_ratio?: number;
+  status?: string;
+  source?: string;
+  active_target?: string | null;
+  resolved_model?: string | null;
+  updated_at?: string | null;
+}
+
+export interface SessionActionResultPreview {
+  subject?: string;
+  body_preview?: string;
+  to_recipients?: string[];
+  cc_recipients?: string[];
+  bcc_recipients?: string[];
+  thread_id?: string | null;
+  title?: string;
+  start_at?: string;
+  end_at?: string;
+  location?: string | null;
+  description?: string | null;
+}
+
+export interface SessionActionResultConflictEvent {
+  event_id?: string | null;
+  title?: string;
+  start_at?: string;
+  end_at?: string;
+  all_day?: boolean;
+  location?: string | null;
+}
+
+export interface SessionActionResultThread {
+  thread_id?: string;
+  subject?: string;
+  sender_summary?: string;
+  last_update_at?: string;
+  unread?: boolean;
+  importance_hint?: string | null;
+  snippet?: string | null;
+  summary?: string | null;
+  urgency?: string | null;
+  recommended_next_action?: string | null;
+}
+
+export interface SessionActionResultDetails {
+  draft_id?: string | null;
+  message_id?: string | null;
+  event_id?: string | null;
+  preview?: SessionActionResultPreview;
+  mailbox_label?: string | null;
+  total_candidates?: number | null;
+  summary_text?: string | null;
+  window_label?: string | null;
+  requested_start_at?: string;
+  requested_end_at?: string;
+  available?: boolean;
+  checked_window_label?: string | null;
+  reason?: string | null;
+  conflicting_events?: SessionActionResultConflictEvent[];
+  threads?: SessionActionResultThread[];
+}
+
+export interface SessionActionResult {
+  action_id?: string;
+  domain?: string;
+  action?: string;
+  status?: string;
+  title?: string;
+  summary?: string;
+  next_step?: string | null;
+  visibility?: {
+    badge?: string | null;
+    inline_status?: string | null;
+    linked_summary?: string | null;
+  };
+  error?: {
+    code?: string;
+    message?: string;
+  } | null;
+  details?: SessionActionResultDetails;
+}
+
+export interface SessionMetadata {
+  continuity?: SessionContinuityMetadata;
+  approval_summary?: SessionApprovalSummary;
+  calendar_pending_interaction?: SessionPendingInteraction;
+  proactive_summary?: SessionProactiveSummary;
+  pending_user_turn?: boolean;
+  runtime_checkpoint?: SessionRuntimeCheckpoint;
+  task_summary?: SessionTaskSummary;
+  owner_profile?: SessionOwnerProfile;
+  memory_boundary?: SessionMemoryBoundary;
+  memory_correction?: SessionMemoryCorrection;
+  context_window?: SessionContextWindowSummary;
+  action_result?: SessionActionResult;
+}
+
 export interface ChatSummary {
   /** Server-side session key, e.g. ``websocket:abcd-...``. */
   key: string;
@@ -233,6 +429,8 @@ export interface ChatSummary {
   preview: string;
   /** Unix epoch seconds when this session currently has a turn in flight. */
   runStartedAt?: number | null;
+  activeTarget?: string | null;
+  metadata?: SessionMetadata | null;
   workspaceScope?: WorkspaceScopePayload | null;
 }
 
@@ -294,6 +492,8 @@ export interface BootstrapResponse {
   ws_url?: string | null;
   expires_in: number;
   model_name?: string | null;
+  active_target?: string | null;
+  model_targets?: ModelTargetOption[];
   runtime_surface?: RuntimeSurface;
   runtime_capabilities?: RuntimeCapabilities;
 }
@@ -760,6 +960,39 @@ export interface SlashCommand {
   argHint?: string;
 }
 
+export interface SessionMessagesResponse {
+  key: string;
+  created_at: string | null;
+  updated_at: string | null;
+  active_target?: string | null;
+  metadata?: SessionMetadata;
+  workspace_scope?: WorkspaceScopePayload | null;
+  messages: Array<{
+    role: string;
+    content: string;
+    turn_id?: string;
+    metadata?: {
+      render_as?: "text";
+    };
+    timestamp?: string;
+    visible_reasoning?: string;
+    tool_calls?: unknown;
+    tool_call_id?: string;
+    name?: string;
+    buttons?: string[][];
+    media_urls?: {
+      url: string;
+      name?: string;
+    }[];
+  }>;
+}
+
+export interface SessionModelTargetResponse {
+  key: string;
+  active_target: string;
+  target?: ModelTargetOption | null;
+}
+
 export type ConnectionStatus =
   | "idle"
   | "connecting"
@@ -787,7 +1020,7 @@ export type InboundEvent =
       tool_events?: ToolProgressEvent[];
       /** Present when the frame is an agent breadcrumb (e.g. tool hint,
        * generic progress line) rather than a conversational reply. */
-      kind?: "tool_hint" | "progress" | "reasoning";
+      kind?: "tool_hint" | "progress" | "reasoning" | "remote_user";
       /** Server-measured turn wall time when this frame finishes an assistant reply. */
       latency_ms?: number;
       /** Lightweight provenance for proactive assistant messages. */
@@ -937,6 +1170,7 @@ export type Outbound =
   | { type: "attach"; chat_id: string }
   | { type: "set_workspace_scope"; chat_id: string; workspace_scope: WorkspaceScopePayload }
   | { type: "transcribe_audio"; request_id: string; data_url: string; duration_ms?: number }
+  | { type: "session_message"; session_key: string; content: string; media?: OutboundMedia[] }
   | {
       type: "message";
       chat_id: string;

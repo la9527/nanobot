@@ -182,6 +182,34 @@ def _read_webui_model_targets() -> list[dict[str, Any]]:
         return []
 
 
+def _metadata_summary_for_session_list(metadata: Any) -> dict[str, Any] | None:
+    if not isinstance(metadata, dict):
+        return None
+    summary: dict[str, Any] = {}
+    for key in (
+        "continuity",
+        "approval_summary",
+        "proactive_summary",
+        "pending_user_turn",
+        "runtime_checkpoint",
+        "task_summary",
+        "owner_profile",
+        "memory_correction",
+        "context_window",
+    ):
+        value = metadata.get(key)
+        if value is None:
+            continue
+        if isinstance(value, (dict, list, str, int, float, bool)):
+            summary[key] = value
+    action_result = metadata.get("action_result")
+    if isinstance(action_result, dict):
+        compact = {k: v for k, v in action_result.items() if k != "details"}
+        if compact:
+            summary["action_result"] = compact
+    return summary or None
+
+
 # ---------------------------------------------------------------------------
 # GatewayHTTPHandler
 # ---------------------------------------------------------------------------
@@ -492,11 +520,18 @@ class GatewayHTTPHandler:
             logger.warning("local LLM action failed: {}", exc)
             return _http_error(500, "local LLM action failed")
 
-    def _decode_webui_session_key(self, key: str) -> str | None:
+    def _decode_webui_session_key(
+        self,
+        key: str,
+        *,
+        websocket_only: bool = False,
+    ) -> str | None:
         decoded_key = _decode_api_key(key)
         if decoded_key is None:
             return None
-        if not _is_websocket_channel_session_key(decoded_key):
+        if not _is_webui_session_key(decoded_key):
+            return None
+        if websocket_only and not _is_websocket_channel_session_key(decoded_key):
             return None
         return decoded_key
 
@@ -566,7 +601,7 @@ class GatewayHTTPHandler:
             return _http_error(401, "Unauthorized")
         if self.session_manager is None:
             return _http_error(503, "session manager unavailable")
-        decoded_key = self._decode_webui_session_key(key)
+        decoded_key = self._decode_webui_session_key(key, websocket_only=True)
         if decoded_key is None:
             return _http_error(404, "session not found")
         if self.session_manager.read_session_file(decoded_key) is None:
@@ -578,7 +613,7 @@ class GatewayHTTPHandler:
             return _http_error(401, "Unauthorized")
         if self.session_manager is None:
             return _http_error(503, "session manager unavailable")
-        decoded_key = self._decode_webui_session_key(key)
+        decoded_key = self._decode_webui_session_key(key, websocket_only=True)
         if decoded_key is None:
             return _http_error(404, "session not found")
         if self.session_manager.read_session_file(decoded_key) is None:
@@ -601,7 +636,7 @@ class GatewayHTTPHandler:
             return _http_error(401, "Unauthorized")
         if self.session_manager is None:
             return _http_error(503, "session manager unavailable")
-        decoded_key = self._decode_webui_session_key(key)
+        decoded_key = self._decode_webui_session_key(key, websocket_only=True)
         if decoded_key is None:
             return _http_error(404, "session not found")
         if self.session_manager.read_session_file(decoded_key) is None:
@@ -642,10 +677,16 @@ class GatewayHTTPHandler:
         sessions = list_webui_sessions(self.session_manager)
         from nanobot.session.webui_turns import websocket_turn_wall_started_at
 
+        active_target_config = None
+        try:
+            active_target_config = _load_webui_config()
+        except Exception as e:
+            logger.debug("webui session list could not load config for active targets: {}", e)
+
         cleaned = []
         for s in sessions:
             key = s.get("key")
-            if not (isinstance(key, str) and key.startswith("websocket:")):
+            if not (isinstance(key, str) and _is_webui_session_key(key)):
                 continue
             row = {k: v for k, v in s.items() if k != "path"}
             chat_id = key.split(":", 1)[1]
@@ -654,6 +695,17 @@ class GatewayHTTPHandler:
                 row["run_started_at"] = started_at
             scope = self.workspaces.scope_for_session_key(key)
             row["workspace_scope"] = scope.payload()
+            session = self.session_manager.get_or_create(key)
+            metadata_summary = _metadata_summary_for_session_list(session.metadata)
+            if metadata_summary is not None:
+                row["metadata"] = metadata_summary
+            if active_target_config is not None:
+                try:
+                    from nanobot.model_targets import get_active_model_target_name
+
+                    row["active_target"] = get_active_model_target_name(active_target_config, session)
+                except Exception as e:
+                    logger.debug("webui session list could not resolve active target for '{}': {}", key, e)
             cleaned.append(row)
         return {"sessions": cleaned}
 
@@ -665,15 +717,25 @@ class GatewayHTTPHandler:
         decoded_key = _decode_api_key(key)
         if decoded_key is None:
             return _http_error(400, "invalid session key")
-        if not _is_websocket_channel_session_key(decoded_key):
+        if not _is_webui_session_key(decoded_key):
             return _http_error(404, "session not found")
         data = self.session_manager.read_session_file(decoded_key)
         if data is None:
             return _http_error(404, "session not found")
+        config, _targets = self._load_model_target_context()
+        if config is not None:
+            try:
+                from nanobot.model_targets import get_active_model_target_name
+
+                session = self.session_manager.get_or_create(decoded_key)
+                data["active_target"] = get_active_model_target_name(config, session)
+            except Exception as e:
+                logger.debug("session message payload could not resolve active target: {}", e)
         messages = data.get("messages")
         if isinstance(messages, list):
             scrub_subagent_messages_for_channel(messages)
         self.media.augment_media_urls(data)
+        data["workspace_scope"] = self.workspaces.scope_for_session_key(decoded_key).payload()
         return _http_json_response(data)
 
     def _handle_webui_thread_get(self, request: WsRequest, key: str) -> Response:
@@ -1169,3 +1231,7 @@ def _positive_int(value: Any) -> int | None:
 
 def _is_websocket_channel_session_key(key: str) -> bool:
     return key.startswith("websocket:")
+
+
+def _is_webui_session_key(key: str) -> bool:
+    return key.startswith("websocket:") or key.startswith("telegram:")

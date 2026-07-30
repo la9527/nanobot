@@ -6,15 +6,18 @@ import {
   ApiError,
   deleteSession as apiDeleteSession,
   fetchSessionAutomations,
+  fetchSessionMessages,
   fetchWebuiThread,
   listSessions,
 } from "@/lib/api";
 import { hasPendingAgentActivity } from "@/lib/activity-timeline";
 import { deriveTitle } from "@/lib/format";
+import { toMediaAttachment } from "@/lib/media";
 import type {
   ChatSummary,
   SessionAutomationJob,
   SessionDeleteResult,
+  SessionMessagesResponse,
   UIMessage,
   WorkspaceScopePayload,
 } from "@/lib/types";
@@ -23,6 +26,9 @@ const EMPTY_MESSAGES: UIMessage[] = [];
 const INITIAL_HISTORY_PAGE_LIMIT = 160;
 const OLDER_HISTORY_PAGE_LIMIT = 120;
 const CHAT_CREATE_TIMEOUT_MS = 60_000;
+const REMOTE_SESSION_REFRESH_MS = 1_000;
+
+type SessionHistoryMessage = SessionMessagesResponse["messages"][number];
 
 function persistedMessagesToUi(messages: UIMessage[]): UIMessage[] {
   return messages.map((m, idx) => ({
@@ -30,6 +36,138 @@ function persistedMessagesToUi(messages: UIMessage[]): UIMessage[] {
     id: m.id ?? `hist-${idx}`,
     createdAt: typeof m.createdAt === "number" ? m.createdAt : Date.now(),
   }));
+}
+
+function shouldPollSessionHistory(key: string): boolean {
+  return key.startsWith("telegram:");
+}
+
+function normalizeDuplicateText(content: string): string {
+  return content.replace(/\s+/gu, " ").trim();
+}
+
+function historyMessageRichness(message: SessionHistoryMessage): number {
+  let score = 0;
+  if (message.metadata?.render_as === "text") score += 1;
+  if (message.visible_reasoning?.trim()) score += 4;
+  if (Array.isArray(message.buttons) && message.buttons.some((row) => row.length > 0)) score += 2;
+  if (Array.isArray(message.media_urls) && message.media_urls.length > 0) score += 2;
+  return score;
+}
+
+function haveSameTurnId(
+  previous: SessionHistoryMessage,
+  current: SessionHistoryMessage,
+): boolean {
+  return (
+    typeof previous.turn_id === "string"
+    && previous.turn_id.trim().length > 0
+    && previous.turn_id.trim() === current.turn_id?.trim()
+  );
+}
+
+function areDuplicateAssistantHistoryRows(
+  previous: SessionHistoryMessage,
+  current: SessionHistoryMessage,
+): boolean {
+  return (
+    previous.role === "assistant"
+    && current.role === "assistant"
+    && (
+      haveSameTurnId(previous, current)
+      || normalizeDuplicateText(previous.content) === normalizeDuplicateText(current.content)
+    )
+    && JSON.stringify(previous.buttons ?? []) === JSON.stringify(current.buttons ?? [])
+    && JSON.stringify(previous.media_urls ?? []) === JSON.stringify(current.media_urls ?? [])
+  );
+}
+
+function collapseDuplicateAssistantHistoryRows(
+  messages: SessionMessagesResponse["messages"],
+): SessionMessagesResponse["messages"] {
+  const deduped: SessionHistoryMessage[] = [];
+  for (const message of messages) {
+    if (message.role !== "user" && message.role !== "assistant") continue;
+    const previous = deduped[deduped.length - 1];
+    if (previous && areDuplicateAssistantHistoryRows(previous, message)) {
+      deduped[deduped.length - 1] = historyMessageRichness(message) > historyMessageRichness(previous)
+        ? message
+        : previous;
+      continue;
+    }
+    deduped.push(message);
+  }
+  return deduped;
+}
+
+function collapseConsecutiveAssistantDuplicates(messages: UIMessage[]): UIMessage[] {
+  const deduped: UIMessage[] = [];
+  for (const message of messages) {
+    const previous = deduped[deduped.length - 1];
+    if (
+      previous
+      && previous.role === "assistant"
+      && message.role === "assistant"
+      && !previous.isStreaming
+      && !message.isStreaming
+      && normalizeDuplicateText(previous.content) === normalizeDuplicateText(message.content)
+    ) {
+      deduped[deduped.length - 1] = message.reasoning && !previous.reasoning
+        ? message
+        : previous;
+      continue;
+    }
+    deduped.push(message);
+  }
+  return deduped;
+}
+
+export function hydrateSessionMessages(body: SessionMessagesResponse): UIMessage[] {
+  const hydrated: UIMessage[] = collapseDuplicateAssistantHistoryRows(body.messages).flatMap((m, idx) => {
+    if (m.role !== "user" && m.role !== "assistant") return [];
+    if (typeof m.content !== "string") return [];
+    const createdAt = m.timestamp ? Date.parse(m.timestamp) : Date.now();
+    const media =
+      Array.isArray(m.media_urls) && m.media_urls.length > 0
+        ? m.media_urls.map((entry) => toMediaAttachment(entry))
+        : undefined;
+    const images =
+      m.role === "user" && media?.length
+        ? media
+            .filter((item) => item.kind === "image")
+            .map((item) => ({ url: item.url, name: item.name }))
+        : undefined;
+    const turnId = typeof m.turn_id === "string" && m.turn_id.trim() ? m.turn_id.trim() : null;
+    const messageId = turnId ?? `hist-${idx}`;
+    const hydratedMessage: UIMessage = {
+      id: messageId,
+      role: m.role,
+      content: m.content,
+      createdAt,
+      ...(images ? { images } : {}),
+      ...(media ? { media } : {}),
+      ...(Array.isArray(m.buttons) && m.buttons.some((row) => row.length > 0)
+        ? { buttons: m.buttons }
+        : {}),
+    };
+    const visibleReasoning = m.role === "assistant" && typeof m.visible_reasoning === "string"
+      ? m.visible_reasoning.trim()
+      : "";
+    if (!visibleReasoning) return [hydratedMessage];
+    return [
+      {
+        id: `${messageId}-reasoning`,
+        role: "tool",
+        kind: "trace",
+        content: visibleReasoning,
+        traces: [visibleReasoning],
+        createdAt: Math.max(0, createdAt - 1),
+      },
+      hydratedMessage,
+    ];
+  });
+
+  return collapseConsecutiveAssistantDuplicates(hydrated);
 }
 
 function hasPendingToolCallsFromThread(
@@ -227,6 +365,16 @@ export function useSessionHistory(key: string | null): {
   });
 
   useEffect(() => {
+    if (!key || !shouldPollSessionHistory(key)) return;
+    const timer = window.setInterval(() => {
+      setRefreshSeq((value) => value + 1);
+    }, REMOTE_SESSION_REFRESH_MS);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [key]);
+
+  useEffect(() => {
     if (!key) {
       setState({
         key: null,
@@ -263,6 +411,25 @@ export function useSessionHistory(key: string | null): {
         });
     (async () => {
       try {
+        if (shouldPollSessionHistory(key)) {
+          const body = await fetchSessionMessages(token, key);
+          if (cancelled) return;
+          const ui = hydrateSessionMessages(body);
+          setState((prev) => ({
+            key,
+            messages: ui,
+            loading: false,
+            loadingOlder: false,
+            error: null,
+            hasPendingToolCalls: hasPendingAgentActivity(ui),
+            forkBoundaryMessageCount: null,
+            beforeCursor: null,
+            hasMoreBefore: false,
+            userMessageOffset: 0,
+            version: prev.key === key ? prev.version + 1 : 1,
+          }));
+          return;
+        }
         const body = await fetchWebuiThread(token, key, {
           limit: INITIAL_HISTORY_PAGE_LIMIT,
           direction: "latest",
@@ -342,6 +509,7 @@ export function useSessionHistory(key: string | null): {
 
   const loadOlder = useCallback(async () => {
     if (!key || loadingOlderRef.current) return;
+    if (shouldPollSessionHistory(key)) return;
     const before = state.key === key ? state.beforeCursor : null;
     if (!before || !state.hasMoreBefore) return;
     loadingOlderRef.current = true;

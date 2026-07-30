@@ -229,6 +229,14 @@ class CronService:
                         payload=CronPayload(
                             kind=j["payload"].get("kind", "agent_turn"),
                             message=j["payload"].get("message", ""),
+                            require_first_tool=(
+                                j["payload"].get("requireFirstTool") is True
+                                or j["payload"].get("require_first_tool") is True
+                            ),
+                            first_tool_name=(
+                                j["payload"].get("firstToolName")
+                                or j["payload"].get("first_tool_name")
+                            ),
                             deliver=j["payload"].get("deliver", False),
                             channel=j["payload"].get("channel"),
                             to=j["payload"].get("to"),
@@ -381,6 +389,8 @@ class CronService:
                     "payload": {
                         "kind": j.payload.kind,
                         "message": j.payload.message,
+                        "requireFirstTool": j.payload.require_first_tool,
+                        "firstToolName": j.payload.first_tool_name,
                         "deliver": j.payload.deliver,
                         "channel": j.payload.channel,
                         "to": j.payload.to,

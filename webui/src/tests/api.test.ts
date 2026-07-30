@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  clearSessionActionResult,
+  clearSessionModelTarget,
+  clearSessionProactiveSummary,
   createModelConfiguration,
   deleteSession,
   fetchFilePreview,
@@ -10,6 +13,8 @@ import {
   fetchMcpPresets,
   fetchProviderModels,
   fetchSessionAutomations,
+  fetchSessionMessages,
+  fetchSessionModelTarget,
   fetchSettingsUsage,
   fetchSidebarState,
   fetchSkillDetail,
@@ -25,6 +30,7 @@ import {
   runCliAppAction,
   runMcpPresetAction,
   saveCustomMcpServer,
+  selectSessionModelTarget,
   updateAutomation,
   updateSidebarState,
   updateImageGenerationSettings,
@@ -625,6 +631,106 @@ describe("webui API helpers", () => {
         runStartedAt: 1_700_000_000,
       },
     ]);
+  });
+
+  it("maps session metadata and active target from the sessions list", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        sessions: [
+          {
+            key: "websocket:chat-1",
+            created_at: "2026-05-01T10:00:00",
+            updated_at: "2026-05-01T10:01:00",
+            title: "WebUI migration",
+            active_target: "smart-router-local",
+            metadata: {
+              approval_summary: {
+                status: "pending",
+                prompt_preview: "Approve the deployment?",
+              },
+            },
+          },
+        ],
+      }),
+    } as Response);
+
+    await expect(listSessions("tok")).resolves.toMatchObject([
+      {
+        key: "websocket:chat-1",
+        activeTarget: "smart-router-local",
+        metadata: {
+          approval_summary: {
+            status: "pending",
+            prompt_preview: "Approve the deployment?",
+          },
+        },
+      },
+    ]);
+  });
+
+  it("fetches session messages with an encoded websocket key", async () => {
+    await fetchSessionMessages("tok", "websocket:chat-1");
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/sessions/websocket%3Achat-1/messages",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer tok" },
+      }),
+    );
+  });
+
+  it("fetches the effective session model target", async () => {
+    await fetchSessionModelTarget("tok", "websocket:chat-1");
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/sessions/websocket%3Achat-1/model-target",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer tok" },
+      }),
+    );
+  });
+
+  it("selects a session model target with an encoded target name", async () => {
+    await selectSessionModelTarget("tok", "websocket:chat-1", "smart-router/full");
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/sessions/websocket%3Achat-1/model-target/smart-router%2Ffull/select",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer tok" },
+      }),
+    );
+  });
+
+  it("clears the session model target override", async () => {
+    await clearSessionModelTarget("tok", "websocket:chat-1");
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/sessions/websocket%3Achat-1/model-target/clear",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer tok" },
+      }),
+    );
+  });
+
+  it("clears action result and proactive summary previews", async () => {
+    await clearSessionActionResult("tok", "websocket:chat-1");
+    await clearSessionProactiveSummary("tok", "websocket:chat-1");
+
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      "/api/sessions/websocket%3Achat-1/action-result/clear",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer tok" },
+      }),
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      "/api/sessions/websocket%3Achat-1/proactive-summary/clear",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer tok" },
+      }),
+    );
   });
 
   it("maps slash command metadata from the commands endpoint", async () => {

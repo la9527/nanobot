@@ -2726,8 +2726,10 @@ def test_sessions_list_includes_active_run_started_at(monkeypatch) -> None:
     assert resp.status_code == 200
     body = json.loads(resp.body.decode())
     workspace_scope = body["sessions"][0].pop("workspace_scope")
+    active_target = body["sessions"][0].pop("active_target")
     assert workspace_scope["project_path"] == str(channel.gateway.media.workspace_path)
     assert workspace_scope["access_mode"] in {"restricted", "full"}
+    assert isinstance(active_target, str) and active_target
     assert body["sessions"] == [
         {
             "key": "websocket:chat-1",

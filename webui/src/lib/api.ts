@@ -13,6 +13,8 @@ import type {
   ProviderSettingsUpdate,
   SessionDeleteResult,
   SessionAutomationsPayload,
+  SessionMessagesResponse,
+  SessionModelTargetResponse,
   SettingsPayload,
   SettingsUpdate,
   SidebarStatePayload,
@@ -110,6 +112,8 @@ export async function listSessions(
     title?: string;
     preview?: string;
     run_started_at?: number | null;
+    active_target?: string | null;
+    metadata?: ChatSummary["metadata"] | null;
     workspace_scope?: WorkspaceScopePayload | null;
   };
   const body = await request<{ sessions: Row[] }>(
@@ -126,6 +130,8 @@ export async function listSessions(
     title: s.title ?? "",
     preview: s.preview ?? "",
     runStartedAt: s.run_started_at ?? null,
+    activeTarget: s.active_target ?? null,
+    metadata: s.metadata ?? null,
     workspaceScope: s.workspace_scope ?? null,
   }));
 }
@@ -184,6 +190,19 @@ export async function fetchSessionAutomations(
 ): Promise<SessionAutomationsPayload> {
   return request<SessionAutomationsPayload>(
     `${base}/api/sessions/${encodeURIComponent(key)}/automations`,
+    token,
+    undefined,
+    API_READ_TIMEOUT_MS,
+  );
+}
+
+export async function fetchSessionMessages(
+  token: string,
+  key: string,
+  base: string = "",
+): Promise<SessionMessagesResponse> {
+  return request<SessionMessagesResponse>(
+    `${base}/api/sessions/${encodeURIComponent(key)}/messages`,
     token,
     undefined,
     API_READ_TIMEOUT_MS,
@@ -255,6 +274,72 @@ export async function fetchSkillDetail(
 ): Promise<SkillDetail> {
   return request<SkillDetail>(
     `${base}/api/webui/skills/${encodeURIComponent(name)}`,
+    token,
+    undefined,
+    API_READ_TIMEOUT_MS,
+  );
+}
+
+export async function fetchSessionModelTarget(
+  token: string,
+  key: string,
+  base: string = "",
+): Promise<SessionModelTargetResponse> {
+  return request<SessionModelTargetResponse>(
+    `${base}/api/sessions/${encodeURIComponent(key)}/model-target`,
+    token,
+    undefined,
+    API_READ_TIMEOUT_MS,
+  );
+}
+
+export async function selectSessionModelTarget(
+  token: string,
+  key: string,
+  targetName: string,
+  base: string = "",
+): Promise<SessionModelTargetResponse> {
+  return request<SessionModelTargetResponse>(
+    `${base}/api/sessions/${encodeURIComponent(key)}/model-target/${encodeURIComponent(targetName)}/select`,
+    token,
+    undefined,
+    API_READ_TIMEOUT_MS,
+  );
+}
+
+export async function clearSessionModelTarget(
+  token: string,
+  key: string,
+  base: string = "",
+): Promise<SessionModelTargetResponse> {
+  return request<SessionModelTargetResponse>(
+    `${base}/api/sessions/${encodeURIComponent(key)}/model-target/clear`,
+    token,
+    undefined,
+    API_READ_TIMEOUT_MS,
+  );
+}
+
+export async function clearSessionActionResult(
+  token: string,
+  key: string,
+  base: string = "",
+): Promise<{ key: string; cleared: boolean }> {
+  return request<{ key: string; cleared: boolean }>(
+    `${base}/api/sessions/${encodeURIComponent(key)}/action-result/clear`,
+    token,
+    undefined,
+    API_READ_TIMEOUT_MS,
+  );
+}
+
+export async function clearSessionProactiveSummary(
+  token: string,
+  key: string,
+  base: string = "",
+): Promise<{ key: string; cleared: boolean }> {
+  return request<{ key: string; cleared: boolean }>(
+    `${base}/api/sessions/${encodeURIComponent(key)}/proactive-summary/clear`,
     token,
     undefined,
     API_READ_TIMEOUT_MS,

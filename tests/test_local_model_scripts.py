@@ -25,9 +25,10 @@ def test_local_models_help_lists_supported_targets():
     assert "qwen3-vl-4b" in output.lower()
     assert "qwen3-vl-8b" in output.lower()
     assert "lfm25-vl-1.6b" in output.lower()
+    assert "gemma4-e4b-current" in output.lower()
     lines = [line.strip().lower() for line in output.splitlines()]
-    assert "install <lfm2|lfm25-8b-a1b|qwen35-base-mlx-4bit|qwen36|qwen3-vl-4b|qwen3-vl-8b|lfm25-vl-1.6b>        install and start one launchd service" in lines
-    assert "start <lfm2|lfm25-8b-a1b|qwen35-base-mlx-4bit|qwen36|qwen3-vl-4b|qwen3-vl-8b|lfm25-vl-1.6b>          start one installed launchd service" in lines
+    assert "install <lfm2|lfm25-8b-a1b|qwen35-base-mlx-4bit|qwen36|qwen3-vl-4b|qwen3-vl-8b|lfm25-vl-1.6b|gemma4-e4b-current>        install and start one launchd service" in lines
+    assert "start <lfm2|lfm25-8b-a1b|qwen35-base-mlx-4bit|qwen36|qwen3-vl-4b|qwen3-vl-8b|lfm25-vl-1.6b|gemma4-e4b-current>          start one installed launchd service" in lines
 
 
 def test_local_models_help_lists_broker_actions():
@@ -246,6 +247,8 @@ def test_cleanup_model_install_state_removes_legacy_plist_files():
     assert 'manual_fallback_supported_for_model()' in content
     assert 'model_launchd_wait_attempts()' in content
     assert 'stop_manual_model_process "$model"' in content
+    assert 'plist_set_bool "$plist_path" ":RunAtLoad" false' in content
+    assert 'plist_set_bool "$plist_path" ":KeepAlive" false' in content
 
 
 def test_photo_mcp_wrappers_use_my_mcp_servers_root():
@@ -330,6 +333,61 @@ def test_use_local_model_stops_other_targets_before_activation():
 
     assert '"$SCRIPT_DIR/stop-local-model-services.sh" all' in content
     assert '"$SCRIPT_DIR/start-local-model-services.sh" "$target"' in content
+
+
+def test_stop_local_model_services_disables_launchd_before_bootout():
+    repo_root = Path(__file__).resolve().parents[2]
+    script_path = repo_root / "infra/scripts/local-models/stop-local-model-services.sh"
+
+    content = script_path.read_text(encoding="utf-8")
+
+    assert 'launchctl disable "$GUI_DOMAIN/$label"' in content
+    assert 'launchctl bootout "$GUI_DOMAIN/$label"' in content
+
+
+def test_nanobot_wrappers_ensure_active_local_model_before_start():
+    repo_root = Path(__file__).resolve().parents[2]
+    gateway_script = repo_root / "infra/scripts/start-nanobot-gateway.sh"
+    api_script = repo_root / "infra/scripts/start-nanobot-api.sh"
+
+    gateway_content = gateway_script.read_text(encoding="utf-8")
+    api_content = api_script.read_text(encoding="utf-8")
+
+    assert 'LOCAL_MODEL_ENSURE_SCRIPT="$SCRIPT_DIR/local-models/ensure-active-local-model.sh"' in gateway_content
+    assert 'LOCAL_MODEL_ENSURE_SCRIPT="$SCRIPT_DIR/local-models/ensure-active-local-model.sh"' in api_content
+    assert '"$LOCAL_MODEL_ENSURE_SCRIPT"' in gateway_content
+    assert '"$LOCAL_MODEL_ENSURE_SCRIPT"' in api_content
+
+
+def test_ensure_active_local_model_script_uses_bootstrap_lock_and_stops_other_models():
+    repo_root = Path(__file__).resolve().parents[2]
+    script_path = repo_root / "infra/scripts/local-models/ensure-active-local-model.sh"
+
+    content = script_path.read_text(encoding="utf-8")
+
+    assert 'LOCK_DIR="${NANOBOT_LOCAL_MODEL_BOOTSTRAP_LOCK_DIR:-$NANOBOT_HOME/state/locks/local-model-bootstrap.lock}"' in content
+    assert 'wait_for_models_endpoint "$target" 1' in content
+    assert '"$SCRIPT_DIR/stop-local-model-services.sh" "$model" || true' in content
+    assert '"$SCRIPT_DIR/start-local-model-services.sh" "$target"' in content
+
+
+def test_local_model_launchd_plists_default_to_non_resident_mode():
+    repo_root = Path(__file__).resolve().parents[2]
+    plist_paths = [
+        repo_root / "infra/launchd/com.nanobot.local-model-lfm2.plist",
+        repo_root / "infra/launchd/com.nanobot.local-model-lfm25-8b-a1b.plist",
+        repo_root / "infra/launchd/com.nanobot.local-model-lfm25-vl-1.6b.plist",
+        repo_root / "infra/launchd/com.nanobot.local-model-qwen35-base-mlx-4bit.plist",
+        repo_root / "infra/launchd/com.nanobot.local-model-qwen36.plist",
+        repo_root / "infra/launchd/com.nanobot.local-model-qwen3-vl-4b.plist",
+        repo_root / "infra/launchd/com.nanobot.local-model-qwen3-vl-8b.plist",
+    ]
+
+    for plist_path in plist_paths:
+        content = plist_path.read_text(encoding="utf-8")
+        assert "<key>RunAtLoad</key>" in content
+        assert "<key>KeepAlive</key>" in content
+        assert "<true/>" not in content
 
 
 def test_qwen36_wrapper_uses_mlx_vlm_server_runtime():

@@ -10,12 +10,17 @@ import { ThreadHeader } from "@/components/thread/ThreadHeader";
 import { StreamErrorNotice } from "@/components/thread/StreamErrorNotice";
 import { ThreadViewport, type ThreadViewportHandle } from "@/components/thread/ThreadViewport";
 import { useNanobotStream, type SendImage, type SendOptions } from "@/hooks/useNanobotStream";
-import { useSessionHistory } from "@/hooks/useSessions";
+import { hydrateSessionMessages, useSessionHistory } from "@/hooks/useSessions";
 import {
+  clearSessionActionResult,
+  clearSessionModelTarget,
+  clearSessionProactiveSummary,
   fetchInstalledCliApps,
   fetchMcpPresets,
+  fetchSessionMessages,
   fetchSettings,
   listSlashCommands,
+  selectSessionModelTarget,
 } from "@/lib/api";
 import {
   CLI_APPS_CHANGED_EVENT,
@@ -28,9 +33,12 @@ import {
   isMcpPresetsPayload,
 } from "@/lib/mcp-preset-events";
 import { inferProviderFromModelName, providerDisplayLabel } from "@/lib/provider-brand";
+import { modelTargetLabel } from "@/lib/sessionMetadata";
 import type {
   ChatSummary,
+  ModelTargetOption,
   SettingsPayload,
+  SessionMetadata,
   SlashCommand,
   UIMessage,
   WorkspaceScopePayload,
@@ -107,6 +115,7 @@ const FILE_PREVIEW_MIN_WIDTH = 360;
 const FILE_PREVIEW_MAX_WIDTH = 860;
 const FILE_PREVIEW_MIN_MAIN_WIDTH = 420;
 const FILE_PREVIEW_CLOSE_ANIMATION_MS = 320;
+const LINKED_REPLY_PLACEHOLDER_ID_PREFIX = "linked-pending:";
 
 function clampFilePreviewWidth(width: number, maxWidth: number): number {
   return Math.min(Math.max(width, FILE_PREVIEW_MIN_WIDTH), maxWidth);
@@ -142,6 +151,9 @@ interface ThreadShellProps {
   onWorkspaceScopeChange?: (scope: WorkspaceScopePayload) => void;
   settingsSnapshot?: SettingsPayload | null;
   onOpenModelSettings?: () => void;
+  bootstrapActiveTarget?: string | null;
+  bootstrapModelTargets?: ModelTargetOption[];
+  onRefreshSessions?: () => Promise<void> | void;
 }
 
 function toModelBadgeLabel(modelName: string | null): string | null {
@@ -292,10 +304,20 @@ export function ThreadShell({
   onWorkspaceScopeChange,
   settingsSnapshot = null,
   onOpenModelSettings,
+  bootstrapActiveTarget = null,
+  bootstrapModelTargets = [],
+  onRefreshSessions,
 }: ThreadShellProps) {
   const { t } = useTranslation();
-  const chatId = session?.chatId ?? null;
+  const isWebSocketSession = session?.channel === "websocket";
   const historyKey = session?.key ?? null;
+  const chatId = isWebSocketSession ? session?.chatId ?? null : null;
+  const streamChatId = isWebSocketSession
+    ? session?.chatId ?? null
+    : session?.channel === "telegram"
+      ? historyKey
+      : null;
+  const threadKey = streamChatId ?? historyKey;
   const {
     messages: historical,
     loading,
@@ -326,6 +348,12 @@ export function ThreadShell({
     selectItems: installedMcpPresetsFromPayload,
   });
   const [settings, setSettings] = useState<SettingsPayload | null>(settingsSnapshot);
+  const [sessionDetail, setSessionDetail] = useState<{
+    activeTarget: string | null;
+    metadata: SessionMetadata | null;
+    workspaceScope: WorkspaceScopePayload | null;
+  } | null>(null);
+  const [modelTargetPending, setModelTargetPending] = useState(false);
   const [heroGreetingKey, setHeroGreetingKey] = useState(randomHeroGreetingKey);
   const [scrollToBottomSignal, setScrollToBottomSignal] = useState(0);
   const [scrollToLatestUserPromptSignal, setScrollToLatestUserPromptSignal] = useState(0);
@@ -338,22 +366,47 @@ export function ThreadShell({
   const pendingFirstRef = useRef<PendingFirstMessage | null>(null);
   const viewportRef = useRef<ThreadViewportHandle | null>(null);
   const messageCacheRef = useRef<Map<string, UIMessage[]>>(new Map());
-  /** Last chatId we associated with the in-memory thread (for cache-on-switch). */
-  const prevChatIdForCacheRef = useRef<string | null>(null);
-  /** Skip one message-cache write right after chatId changes (messages may not match yet). */
+  /** Last thread key we associated with the in-memory thread (for cache-on-switch). */
+  const prevThreadKeyForCacheRef = useRef<string | null>(null);
+  /** Skip one message-cache write right after thread key changes (messages may not match yet). */
   const skipLayoutCacheRef = useRef(false);
   const appliedHistoryVersionRef = useRef<Map<string, number>>(new Map());
   const pendingCanonicalHydrateRef = useRef<Set<string>>(new Set());
-  const sessionKeyByChatIdRef = useRef<Map<string, string>>(new Map());
-  const bottomScrolledChatIdRef = useRef<string | null>(null);
+  const bottomScrolledThreadKeyRef = useRef<string | null>(null);
+  const [remoteReplyPending, setRemoteReplyPending] = useState(false);
+  const remoteReplyBaselineRef = useRef<{
+    assistantCount: number;
+    startedAt: number;
+  } | null>(null);
+  const linkedReplyWaitingText = t("thread.linkedSession.waitingReply", {
+    defaultValue: "Waiting for the linked external session to return a reply.",
+  });
 
   const initial = useMemo(() => {
-    if (!chatId) return historical;
-    return messageCacheRef.current.get(chatId) ?? historical;
-  }, [chatId, historical]);
+    if (!threadKey) return historical;
+    return messageCacheRef.current.get(threadKey) ?? historical;
+  }, [historical, threadKey]);
+  const refreshSessionDetail = useCallback(async () => {
+    if (!historyKey) {
+      setSessionDetail(null);
+      return;
+    }
+    try {
+      const detail = await fetchSessionMessages(token, historyKey);
+      setSessionDetail({
+        activeTarget: detail.active_target ?? null,
+        metadata: detail.metadata ?? null,
+        workspaceScope: detail.workspace_scope ?? null,
+      });
+    } catch {
+      setSessionDetail(null);
+    }
+  }, [historyKey, token]);
   const handleTurnEnd = useCallback(() => {
+    void refreshSessionDetail();
+    void onRefreshSessions?.();
     onTurnEnd?.();
-  }, [onTurnEnd]);
+  }, [onRefreshSessions, onTurnEnd, refreshSessionDetail]);
   const {
     messages,
     isStreaming,
@@ -365,11 +418,7 @@ export function ThreadShell({
     setMessages,
     streamError,
     dismissStreamError,
-  } = useNanobotStream(chatId, initial, hasPendingToolCalls, handleTurnEnd);
-
-  useEffect(() => {
-    if (chatId && historyKey) sessionKeyByChatIdRef.current.set(chatId, historyKey);
-  }, [chatId, historyKey]);
+  } = useNanobotStream(streamChatId, initial, hasPendingToolCalls, handleTurnEnd);
 
   useEffect(() => {
     filePreviewWidthRef.current = filePreviewWidth;
@@ -382,6 +431,10 @@ export function ThreadShell({
     }
     setFilePreviewClosing(false);
     setFilePreviewPath(null);
+    setSessionDetail(null);
+    setModelTargetPending(false);
+    setRemoteReplyPending(false);
+    remoteReplyBaselineRef.current = null;
   }, [historyKey]);
 
   useEffect(() => {
@@ -396,10 +449,46 @@ export function ThreadShell({
 
   const showHeroComposer = messages.length === 0 && !loading;
   const wasShowingHeroComposerRef = useRef(showHeroComposer);
-  const modelBadge = useMemo(
-    () => toModelBadgeInfo(modelName, settings),
-    [modelName, settings],
+  const mergedSession = useMemo(() => {
+    if (!session) return null;
+    return {
+      ...session,
+      activeTarget: sessionDetail?.activeTarget ?? session.activeTarget ?? null,
+      metadata: sessionDetail?.metadata ?? session.metadata ?? null,
+      workspaceScope: sessionDetail?.workspaceScope ?? session.workspaceScope ?? null,
+    };
+  }, [session, sessionDetail]);
+  const currentActiveTarget = session
+    ? (mergedSession?.activeTarget ?? bootstrapActiveTarget ?? null)
+    : bootstrapActiveTarget;
+  const activeTargetOption = useMemo(
+    () => bootstrapModelTargets.find((target) => target.name === currentActiveTarget) ?? null,
+    [bootstrapModelTargets, currentActiveTarget],
   );
+  const modelBadge = useMemo(() => {
+    if (currentActiveTarget && currentActiveTarget !== "default") {
+      const provider = activeTargetOption?.provider
+        || inferProviderFromModelName(activeTargetOption?.model ?? null)
+        || null;
+      return {
+        label: modelTargetLabel(currentActiveTarget, bootstrapModelTargets)
+          ?? toModelBadgeLabel(activeTargetOption?.model ?? modelName)
+          ?? "Model",
+        provider,
+        providerLabel: provider
+          ? providerDisplayLabel(settings?.providers ?? [], provider)
+          : null,
+        needsSetup: false,
+      };
+    }
+    return toModelBadgeInfo(modelName, settings);
+  }, [
+    activeTargetOption,
+    bootstrapModelTargets,
+    currentActiveTarget,
+    modelName,
+    settings,
+  ]);
   const modelBadgeLabel = modelBadge.needsSetup
     ? t("thread.composer.modelNotConfigured", { defaultValue: "Model not configured" })
     : modelBadge.label;
@@ -444,10 +533,14 @@ export function ThreadShell({
   }, [client, refreshModelSettings]);
 
   useEffect(() => {
-    if (!chatId || loading) return;
-    const cached = messageCacheRef.current.get(chatId);
-    const appliedVersion = appliedHistoryVersionRef.current.get(chatId) ?? 0;
-    const hasPendingCanonicalHydrate = pendingCanonicalHydrateRef.current.has(chatId);
+    void refreshSessionDetail();
+  }, [refreshSessionDetail]);
+
+  useEffect(() => {
+    if (!threadKey || loading) return;
+    const cached = messageCacheRef.current.get(threadKey);
+    const appliedVersion = appliedHistoryVersionRef.current.get(threadKey) ?? 0;
+    const hasPendingCanonicalHydrate = pendingCanonicalHydrateRef.current.has(threadKey);
     const hasNewCanonicalHistory = hasPendingCanonicalHydrate && historyVersion > appliedVersion;
     // When the user switches away and back, keep the local in-memory thread
     // state (including not-yet-persisted messages) instead of replacing it with
@@ -458,14 +551,14 @@ export function ThreadShell({
       const normalizedHistory = projectWebuiThreadMessages(historical);
       const keepLiveMessages = (messagesToKeep: UIMessage[]) => {
         const projected = projectWebuiThreadMessages(messagesToKeep);
-        messageCacheRef.current.set(chatId, projected);
+        messageCacheRef.current.set(threadKey, projected);
         return projected;
       };
       if (hasNewCanonicalHistory && historical.length > 0) {
         if (isStaleThreadSnapshot(prev, normalizedHistory)) return keepLiveMessages(prev);
-        pendingCanonicalHydrateRef.current.delete(chatId);
-        appliedHistoryVersionRef.current.set(chatId, historyVersion);
-        messageCacheRef.current.set(chatId, normalizedHistory);
+        pendingCanonicalHydrateRef.current.delete(threadKey);
+        appliedHistoryVersionRef.current.set(threadKey, historyVersion);
+        messageCacheRef.current.set(threadKey, normalizedHistory);
         return normalizedHistory;
       }
       if (cached && cached.length > 0) {
@@ -474,71 +567,72 @@ export function ThreadShell({
           normalizedHistory.length > normalizedCached.length
           && !isStaleThreadSnapshot(prev, normalizedHistory)
         ) {
-          messageCacheRef.current.set(chatId, normalizedHistory);
-          appliedHistoryVersionRef.current.set(chatId, historyVersion);
+          messageCacheRef.current.set(threadKey, normalizedHistory);
+          appliedHistoryVersionRef.current.set(threadKey, historyVersion);
           return normalizedHistory;
         }
         if (isStaleThreadSnapshot(prev, normalizedCached)) return keepLiveMessages(prev);
         return normalizedCached;
       }
       if (isStaleThreadSnapshot(prev, normalizedHistory)) return keepLiveMessages(prev);
-      appliedHistoryVersionRef.current.set(chatId, historyVersion);
-      if (normalizedHistory.length > 0) messageCacheRef.current.set(chatId, normalizedHistory);
+      appliedHistoryVersionRef.current.set(threadKey, historyVersion);
+      if (normalizedHistory.length > 0) messageCacheRef.current.set(threadKey, normalizedHistory);
       return normalizedHistory;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loading, chatId, historical, historyVersion]);
+  }, [loading, historical, historyVersion, threadKey]);
 
   useEffect(() => {
-    if (!chatId) return;
+    if (!threadKey) return;
     return client.onSessionUpdate((updatedChatId, scope) => {
-      if (updatedChatId !== chatId) return;
+      if (updatedChatId !== threadKey) return;
+      void refreshSessionDetail();
       if (scope === "metadata") return;
-      pendingCanonicalHydrateRef.current.add(chatId);
+      pendingCanonicalHydrateRef.current.add(threadKey);
       refreshHistory();
     });
-  }, [chatId, client, refreshHistory]);
+  }, [client, refreshHistory, refreshSessionDetail, threadKey]);
 
   useEffect(() => {
-    if (!chatId) {
-      bottomScrolledChatIdRef.current = null;
+    if (!threadKey) {
+      bottomScrolledThreadKeyRef.current = null;
       return;
     }
-    if (loading || bottomScrolledChatIdRef.current === chatId) return;
-    bottomScrolledChatIdRef.current = chatId;
+    if (loading || bottomScrolledThreadKeyRef.current === threadKey) return;
+    bottomScrolledThreadKeyRef.current = threadKey;
     setScrollToBottomSignal((value) => value + 1);
-  }, [chatId, loading]);
+  }, [loading, threadKey]);
 
   useEffect(() => {
-    if (chatId) return;
+    if (streamChatId) return;
     setMessages(projectWebuiThreadMessages(historical));
-  }, [chatId, historical, setMessages]);
+  }, [historical, setMessages, streamChatId]);
 
   useLayoutEffect(() => {
-    if (chatId) {
-      const prev = prevChatIdForCacheRef.current;
-      if (prev && prev !== chatId) {
+    if (threadKey) {
+      const prev = prevThreadKeyForCacheRef.current;
+      if (prev && prev !== threadKey) {
         messageCacheRef.current.set(prev, projectWebuiThreadMessages(messages));
         skipLayoutCacheRef.current = true;
       }
-      prevChatIdForCacheRef.current = chatId;
+      prevThreadKeyForCacheRef.current = threadKey;
     } else {
-      if (prevChatIdForCacheRef.current) {
+      if (prevThreadKeyForCacheRef.current) {
         messageCacheRef.current.set(
-          prevChatIdForCacheRef.current,
+          prevThreadKeyForCacheRef.current,
           projectWebuiThreadMessages(messages),
         );
         skipLayoutCacheRef.current = true;
       }
-      prevChatIdForCacheRef.current = null;
+      prevThreadKeyForCacheRef.current = null;
     }
-  }, [chatId, messages]);
+  }, [messages, threadKey]);
 
   // Persist thread to in-memory cache after paint so ``useNanobotStream``'s chat switch
   // ``useEffect`` reset has flushed; ``skipLayoutCacheRef`` drops the first run that still
   // sees the *previous* chat's ``messages`` (avoids stale rows leaking across sessions).
   useEffect(() => {
-    if (!chatId) {
+    if (!threadKey) {
       return;
     }
     if (skipLayoutCacheRef.current) {
@@ -548,18 +642,18 @@ export function ThreadShell({
     if (loading) {
       return;
     }
-    messageCacheRef.current.set(chatId, projectWebuiThreadMessages(messages));
-  }, [chatId, loading, messages]);
+    messageCacheRef.current.set(threadKey, projectWebuiThreadMessages(messages));
+  }, [loading, messages, threadKey]);
 
   useEffect(() => {
-    if (!chatId) return;
+    if (!streamChatId || isWebSocketSession === false) return;
     const pending = pendingFirstRef.current;
     if (!pending) return;
     pendingFirstRef.current = null;
     setScrollToLatestUserPromptSignal((value) => value + 1);
     send(pending.content, pending.images, pending.options);
     setBooting(false);
-  }, [chatId, send]);
+  }, [isWebSocketSession, send, streamChatId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -597,6 +691,97 @@ export function ThreadShell({
     },
     [send, withWorkspaceScope],
   );
+
+  useEffect(() => {
+    if (!remoteReplyPending) return;
+    const baseline = remoteReplyBaselineRef.current;
+    if (!baseline) return;
+    const assistantMessages = messages.filter(
+      (message) =>
+        message.role === "assistant"
+        && !message.id.startsWith(LINKED_REPLY_PLACEHOLDER_ID_PREFIX),
+    );
+    const hasFreshAssistantReply = assistantMessages.some(
+      (message) => message.createdAt >= baseline.startedAt,
+    );
+    if (!hasFreshAssistantReply && assistantMessages.length <= baseline.assistantCount) return;
+    setRemoteReplyPending(false);
+    remoteReplyBaselineRef.current = null;
+    setMessages((prev) =>
+      prev.filter((message) => !message.id.startsWith(LINKED_REPLY_PLACEHOLDER_ID_PREFIX)),
+    );
+  }, [messages, remoteReplyPending, setMessages]);
+
+  const handleBridgedSessionSend = useCallback(async (
+    content: string,
+    images?: SendImage[],
+  ) => {
+    if (!historyKey || session?.channel !== "telegram" || remoteReplyPending) return;
+    const trimmedContent = content.trim();
+    const wireMedia = images?.map((image) => image.media);
+    if (!trimmedContent && (!wireMedia || wireMedia.length === 0)) return;
+
+    setScrollToLatestUserPromptSignal((value) => value + 1);
+    const startedAt = Date.now();
+    const assistantCountBefore = messages.filter((message) => message.role === "assistant").length;
+    remoteReplyBaselineRef.current = {
+      assistantCount: assistantCountBefore,
+      startedAt,
+    };
+    setRemoteReplyPending(true);
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: crypto.randomUUID(),
+        role: "user",
+        content,
+        ...(images?.length ? { images: images.map((image) => image.preview) } : {}),
+        createdAt: startedAt,
+      },
+      {
+        id: `${LINKED_REPLY_PLACEHOLDER_ID_PREFIX}${startedAt}`,
+        role: "assistant",
+        content: linkedReplyWaitingText,
+        createdAt: startedAt + 1,
+      },
+    ]);
+
+    try {
+      client.sendSessionMessage(historyKey, content, wireMedia);
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        const body = await fetchSessionMessages(token, historyKey);
+        const hydrated = projectWebuiThreadMessages(hydrateSessionMessages(body));
+        const assistantCount = hydrated.filter((message) => message.role === "assistant").length;
+        if (assistantCount > assistantCountBefore) {
+          setMessages(hydrated);
+          if (threadKey) messageCacheRef.current.set(threadKey, hydrated);
+          refreshHistory();
+          setRemoteReplyPending(false);
+          remoteReplyBaselineRef.current = null;
+          return;
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 250));
+      }
+      refreshHistory();
+    } finally {
+      setRemoteReplyPending(false);
+      remoteReplyBaselineRef.current = null;
+      setMessages((prev) =>
+        prev.filter((message) => !message.id.startsWith(LINKED_REPLY_PLACEHOLDER_ID_PREFIX)),
+      );
+    }
+  }, [
+    client,
+    historyKey,
+    linkedReplyWaitingText,
+    messages,
+    refreshHistory,
+    remoteReplyPending,
+    session?.channel,
+    setMessages,
+    threadKey,
+    token,
+  ]);
 
   const handleOpenFilePreview = useCallback((path: string) => {
     if (filePreviewCloseTimerRef.current !== null) {
@@ -698,6 +883,42 @@ export function ThreadShell({
     [chatId, onForkChat],
   );
 
+  const handleSelectModelTarget = useCallback(async (targetName: string | null) => {
+    if (!historyKey) return;
+    setModelTargetPending(true);
+    try {
+      if (targetName) {
+        await selectSessionModelTarget(token, historyKey, targetName);
+      } else {
+        await clearSessionModelTarget(token, historyKey);
+      }
+      await Promise.allSettled([
+        refreshSessionDetail(),
+        Promise.resolve(onRefreshSessions?.()),
+      ]);
+    } finally {
+      setModelTargetPending(false);
+    }
+  }, [historyKey, onRefreshSessions, refreshSessionDetail, token]);
+
+  const handleClearActionResult = useCallback(async () => {
+    if (!historyKey) return;
+    await clearSessionActionResult(token, historyKey);
+    await Promise.allSettled([
+      refreshSessionDetail(),
+      Promise.resolve(onRefreshSessions?.()),
+    ]);
+  }, [historyKey, onRefreshSessions, refreshSessionDetail, token]);
+
+  const handleClearProactiveSummary = useCallback(async () => {
+    if (!historyKey) return;
+    await clearSessionProactiveSummary(token, historyKey);
+    await Promise.allSettled([
+      refreshSessionDetail(),
+      Promise.resolve(onRefreshSessions?.()),
+    ]);
+  }, [historyKey, onRefreshSessions, refreshSessionDetail, token]);
+
   const composer = (
     <>
       {streamError ? (
@@ -708,8 +929,8 @@ export function ThreadShell({
       ) : null}
       {session ? (
         <ThreadComposer
-          onSend={handleThreadSend}
-          disabled={!chatId}
+          onSend={isWebSocketSession ? handleThreadSend : handleBridgedSessionSend}
+          disabled={isWebSocketSession ? !chatId : !historyKey || remoteReplyPending}
           isStreaming={isStreaming}
           placeholder={
             showHeroComposer
@@ -721,11 +942,15 @@ export function ThreadShell({
           modelProviderLabel={modelBadge.providerLabel}
           modelNeedsSetup={modelBadge.needsSetup}
           onModelBadgeClick={modelBadge.needsSetup ? onOpenModelSettings : undefined}
+          modelTargets={bootstrapModelTargets}
+          activeModelTarget={currentActiveTarget}
+          modelTargetPending={modelTargetPending}
+          onSelectModelTarget={isWebSocketSession && historyKey ? handleSelectModelTarget : undefined}
           variant={showHeroComposer ? "hero" : "thread"}
           slashCommands={slashCommands}
           cliApps={cliApps}
           mcpPresets={mcpPresets}
-          onStop={stop}
+          onStop={isWebSocketSession ? stop : undefined}
           onTranscribeAudio={transcribeAudio}
           runStartedAt={runStartedAt}
           goalState={goalState}
@@ -735,7 +960,7 @@ export function ThreadShell({
           workspaceScopeDisabled={workspaceScopeDisabled}
           workspaceError={workspaceError}
           onWorkspaceScopeChange={onWorkspaceScopeChange}
-          pendingQueueKey={chatId}
+          pendingQueueKey={threadKey}
         />
       ) : (
         <ThreadComposer
@@ -752,6 +977,8 @@ export function ThreadShell({
           modelProviderLabel={modelBadge.providerLabel}
           modelNeedsSetup={modelBadge.needsSetup}
           onModelBadgeClick={modelBadge.needsSetup ? onOpenModelSettings : undefined}
+          modelTargets={bootstrapModelTargets}
+          activeModelTarget={currentActiveTarget}
           variant="hero"
           slashCommands={slashCommands}
           cliApps={cliApps}
@@ -782,7 +1009,13 @@ export function ThreadShell({
     </div>
   );
   const sessionInfoAction = historyKey ? (
-    <SessionInfoPopover sessionKey={historyKey} token={token} title={title} />
+    <SessionInfoPopover
+      session={mergedSession ?? session!}
+      token={token}
+      modelTargets={bootstrapModelTargets}
+      onClearActionResult={handleClearActionResult}
+      onClearProactiveSummary={handleClearProactiveSummary}
+    />
   ) : undefined;
   const promptNavigatorAction = historyKey ? (
     <PromptNavigator

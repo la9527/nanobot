@@ -157,7 +157,7 @@ BUILTIN_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
         "Manage local LLM",
         "Show or control local LLM runtime.",
         "bot",
-        "[status|start|stop|restart|smoke|use|confirm] [lfm2|lfm25-8b-a1b|qwen35-base-mlx-4bit|qwen36|qwen3-vl-4b|qwen3-vl-8b|lfm25-vl-1.6b]",
+        "[status|start|stop|restart|smoke|use|confirm] [lfm2|lfm25-8b-a1b|qwen35-base-mlx-4bit|qwen36|qwen3-vl-4b|qwen3-vl-8b|lfm25-vl-1.6b|gemma4-e4b-current]",
     ),
     BuiltinCommandSpec(
         "/usage",

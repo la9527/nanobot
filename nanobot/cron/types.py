@@ -23,6 +23,10 @@ class CronPayload:
     """What to do when the job runs."""
     kind: Literal["system_event", "agent_turn"] = "agent_turn"
     message: str = ""
+    # Require a tool call on the first model request for evidence-driven jobs.
+    require_first_tool: bool = False
+    # Optionally pin the first call to a known evidence-collection tool.
+    first_tool_name: str | None = None
     # Legacy delivery fields used by pre-session-bound cron jobs.
     deliver: bool = False
     channel: str | None = None  # e.g. "whatsapp"

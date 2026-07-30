@@ -144,6 +144,46 @@ def test_add_job_migrates_legacy_delivery_context(tmp_path) -> None:
     assert reloaded.payload.origin_metadata == meta
 
 
+def test_cron_store_round_trips_required_first_tool_flag(tmp_path) -> None:
+    store_path = tmp_path / "cron" / "jobs.json"
+    store_path.parent.mkdir(parents=True)
+    store_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "jobs": [
+                    {
+                        "id": "news",
+                        "name": "News",
+                        "enabled": True,
+                        "schedule": {"kind": "every", "everyMs": 60_000},
+                        "payload": {
+                            "kind": "agent_turn",
+                            "message": "search current news",
+                            "requireFirstTool": True,
+                            "firstToolName": "web_search",
+                            **_bound_chat(),
+                        },
+                        "state": {},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    service = CronService(store_path)
+    job = service.get_job("news")
+
+    assert job is not None
+    assert job.payload.require_first_tool is True
+    assert job.payload.first_tool_name == "web_search"
+    service._save_store()
+    persisted = json.loads(store_path.read_text(encoding="utf-8"))
+    assert persisted["jobs"][0]["payload"]["requireFirstTool"] is True
+    assert persisted["jobs"][0]["payload"]["firstToolName"] == "web_search"
+
+
 def test_load_store_migrates_legacy_delivery_context(tmp_path) -> None:
     store_path = tmp_path / "cron" / "jobs.json"
     store_path.parent.mkdir(parents=True)
