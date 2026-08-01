@@ -259,6 +259,10 @@ class CronService:
                                 or j["payload"].get("origin_metadata")
                                 or {}
                             ),
+                            direct_command=(
+                                j["payload"].get("directCommand")
+                                or j["payload"].get("direct_command")
+                            ),
                         ),
                         state=CronJobState(
                             next_run_at_ms=j.get("state", {}).get("nextRunAtMs"),
@@ -399,6 +403,7 @@ class CronService:
                         "originChannel": j.payload.origin_channel,
                         "originChatId": j.payload.origin_chat_id,
                         "originMetadata": j.payload.origin_metadata,
+                        "directCommand": j.payload.direct_command,
                     },
                     "state": {
                         "nextRunAtMs": j.state.next_run_at_ms,

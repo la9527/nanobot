@@ -48,6 +48,7 @@ from nanobot.cron.session_turns import (
     cron_history_overrides,
     is_cron_turn,
     is_invalid_cron_response,
+    sanitize_news_cron_response,
 )
 from nanobot.providers.base import LLMProvider
 from nanobot.providers.factory import ProviderSnapshot
@@ -482,7 +483,10 @@ class AgentLoop:
         session.metadata.pop(SESSION_MODEL_TARGET_KEY, None)
         self.sessions.save(session)
 
-    def _resolve_execution_runtime(self, session: Session | None) -> tuple[LLMProvider, str, str | None]:
+    def _resolve_execution_runtime(
+        self,
+        session: Session | None,
+    ) -> tuple[LLMProvider, str, str | None, int]:
         """Resolve the provider/model to use for a single turn.
 
         Defers to the loop's globally active preset (``self.provider``/
@@ -493,7 +497,7 @@ class AgentLoop:
         selects another named target (e.g. smart-router).
         """
         if self.runtime_config is None:
-            return self.provider, self.model, None
+            return self.provider, self.model, None, self.context_window_tokens
 
         from nanobot.model_targets import (
             DEFAULT_MODEL_TARGET_NAME,
@@ -503,11 +507,11 @@ class AgentLoop:
 
         target_name = self.get_active_model_target_name(session)
         if target_name == DEFAULT_MODEL_TARGET_NAME:
-            return self.provider, self.model, None
+            return self.provider, self.model, None, self.context_window_tokens
         try:
             target = resolve_model_target(self.runtime_config, target_name)
         except KeyError:
-            return self.provider, self.model, None
+            return self.provider, self.model, None, self.context_window_tokens
 
         from nanobot.agent.model_target_providers import make_target_aware_provider
 
@@ -516,7 +520,7 @@ class AgentLoop:
         model = updated_config.agents.defaults.model
         if target.kind == "smart_router":
             model = target.name
-        return provider, model, target.name
+        return provider, model, target.name, updated_config.agents.defaults.context_window_tokens
 
     def _apply_provider_snapshot(
         self,
@@ -1150,7 +1154,7 @@ class AgentLoop:
         """
         status_model = self.model
         active_target = None
-        _provider, status_model, active_target = self._resolve_execution_runtime(session)
+        _provider, status_model, active_target, context_window_tokens = self._resolve_execution_runtime(session)
         if active_target == "smart-router":
             status_model = "smart-router"
 
@@ -1162,7 +1166,7 @@ class AgentLoop:
             "active_target": active_target or self.get_active_model_target_name(session),
             "usage": usage,
             "context_tokens_estimate": ctx_est,
-            "context_window_tokens": self.context_window_tokens,
+            "context_window_tokens": context_window_tokens,
             "footer_mode": self.get_response_footer_mode(session),
             "smart_router_tier": (
                 session.metadata.get(self._SMART_ROUTER_TIER_KEY)
@@ -1241,6 +1245,7 @@ class AgentLoop:
         tools: ToolRegistry | None = None,
         provider: LLMProvider | None = None,
         model: str | None = None,
+        context_window_tokens: int | None = None,
     ) -> tuple[str | None, list[str], list[dict], str, bool, dict[str, Any]]:
         """Run the agent iteration loop.
 
@@ -1254,6 +1259,7 @@ class AgentLoop:
         self._sync_subagent_runtime_limits()
         active_provider = provider or self.provider
         active_model = model or self.model
+        active_context_window_tokens = context_window_tokens or self.context_window_tokens
         runner = self.runner if active_provider is self.provider else AgentRunner(active_provider)
 
         loop_hook = AgentProgressHook(
@@ -1372,7 +1378,7 @@ class AgentLoop:
                 concurrent_tools=True,
                 workspace=effective_scope.project_path,
                 session_key=session.key if session else None,
-                context_window_tokens=self.context_window_tokens,
+                context_window_tokens=active_context_window_tokens,
                 context_block_limit=self.context_block_limit,
                 provider_retry_mode=self.provider_retry_mode,
                 progress_callback=on_progress,
@@ -1605,6 +1611,8 @@ class AgentLoop:
                         msg, on_stream=on_stream, on_stream_end=on_stream_end,
                         pending_queue=pending,
                     )
+                    if is_cron_turn(msg.metadata) and response is not None:
+                        response.content = sanitize_news_cron_response(response.content)
                     cron_response_error: Exception | None = None
                     if is_cron_turn(msg.metadata) and (
                         response is None or is_invalid_cron_response(response.content)
@@ -2293,7 +2301,7 @@ class AgentLoop:
             "running",
             started_at=ctx.visible_run_started_at,
         )
-        exec_provider, exec_model, active_target = self._resolve_execution_runtime(ctx.session)
+        exec_provider, exec_model, active_target, exec_context_window_tokens = self._resolve_execution_runtime(ctx.session)
         ctx.active_target = active_target
         result = await self._run_agent_loop(
             ctx.initial_messages,
@@ -2314,6 +2322,7 @@ class AgentLoop:
             tools=ctx.tools,
             provider=exec_provider,
             model=exec_model,
+            context_window_tokens=exec_context_window_tokens,
         )
         final_content, tools_used, all_msgs, stop_reason, had_injections, response_metadata = result
         ctx.final_content = final_content

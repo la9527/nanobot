@@ -8,6 +8,7 @@ import importlib.util
 import json
 import os
 import secrets
+import shlex
 import string
 import time
 import uuid
@@ -358,6 +359,11 @@ class OpenAICompatProvider(LLMProvider):
         extra_body: dict[str, Any] | None = None,
         api_type: str = "auto",
         extra_query: dict[str, str] | None = None,
+        prepare_command: str | None = None,
+        prepare_timeout_s: float = 300.0,
+        activity_command: str | None = None,
+        activity_timeout_s: float = 30.0,
+        tool_choice_mode: str = "standard",
     ):
         super().__init__(api_key, api_base)
         self.default_model = default_model
@@ -366,6 +372,12 @@ class OpenAICompatProvider(LLMProvider):
         self._extra_body = extra_body or {}
         self._api_type = api_type if spec and spec.name == "openai" else "auto"
         self._extra_query = extra_query or {}
+        self._prepare_command = prepare_command.strip() if isinstance(prepare_command, str) else ""
+        self._prepare_timeout_s = max(1.0, float(prepare_timeout_s))
+        self._prepare_lock = asyncio.Lock()
+        self._activity_command = activity_command.strip() if isinstance(activity_command, str) else ""
+        self._activity_timeout_s = max(1.0, float(activity_timeout_s))
+        self._tool_choice_mode = tool_choice_mode
 
         if api_key and spec and spec.env_key:
             self._setup_env(api_key, api_base)
@@ -389,6 +401,75 @@ class OpenAICompatProvider(LLMProvider):
         # probe again after _RESPONSES_PROBE_INTERVAL_S seconds.
         self._responses_failures: dict[str, int] = {}
         self._responses_tripped_at: dict[str, float] = {}
+
+    async def _prepare_endpoint(self) -> None:
+        """Run an optional local readiness command before an LLM request.
+
+        This is intended for trusted, local operational scripts such as a
+        Wake-on-LAN plus SSH-tunnel bridge.  The command is deliberately a
+        provider setting rather than an agent tool, so users never need to
+        grant a tool call merely to bring up their configured LLM endpoint.
+        """
+        if not self._prepare_command:
+            return
+        async with self._prepare_lock:
+            argv = shlex.split(self._prepare_command)
+            if not argv:
+                return
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    *argv,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+            except OSError as exc:
+                raise RuntimeError(
+                    f"Unable to start configured provider prepare command: {exc}"
+                ) from exc
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(), timeout=self._prepare_timeout_s
+                )
+            except TimeoutError as exc:
+                process.kill()
+                await process.wait()
+                raise RuntimeError(
+                    "Configured provider prepare command timed out after "
+                    f"{self._prepare_timeout_s:.0f}s"
+                ) from exc
+            if process.returncode != 0:
+                output = (stderr or stdout).decode("utf-8", errors="replace").strip()
+                detail = f": {output[-800:]}" if output else ""
+                raise RuntimeError(
+                    "Configured provider prepare command failed "
+                    f"with exit code {process.returncode}{detail}"
+                )
+
+    async def _record_endpoint_activity(self) -> None:
+        """Run a non-blocking bookkeeping hook after a prepared endpoint call."""
+        if not self._activity_command:
+            return
+        argv = shlex.split(self._activity_command)
+        if not argv:
+            return
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *argv,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await asyncio.wait_for(
+                process.communicate(), timeout=self._activity_timeout_s
+            )
+            if process.returncode != 0:
+                output = (stderr or b"").decode("utf-8", errors="replace").strip()
+                logger.warning(
+                    "Configured provider activity command failed with exit code {}{}",
+                    process.returncode,
+                    f": {output[-400:]}" if output else "",
+                )
+        except (OSError, TimeoutError) as exc:
+            logger.warning("Configured provider activity command failed: {}", exc)
 
     def _build_client(self) -> None:
         """Create the OpenAI client using the current module-level AsyncOpenAI."""
@@ -773,6 +854,10 @@ class OpenAICompatProvider(LLMProvider):
         if tools:
             kwargs["tools"] = tools
             wire_tool_choice = tool_choice
+            if self._tool_choice_mode == "llama_cpp" and isinstance(tool_choice, dict):
+                # llama.cpp accepts only auto/none/required strings. It cannot
+                # pin one named function, so preserve the forced-tool intent.
+                wire_tool_choice = "required"
             if (
                 spec
                 and spec.name == "openai"
@@ -1472,8 +1557,11 @@ class OpenAICompatProvider(LLMProvider):
         reasoning_effort: str | None = None,
         tool_choice: str | dict[str, Any] | None = None,
     ) -> LLMResponse:
-        await self._ensure_client()
+        endpoint_prepared = False
         try:
+            await self._prepare_endpoint()
+            endpoint_prepared = True
+            await self._ensure_client()
             if self._should_use_responses_api(model, reasoning_effort):
                 try:
                     body = self._build_responses_body(
@@ -1502,6 +1590,9 @@ class OpenAICompatProvider(LLMProvider):
             return self._parse(await self._client.chat.completions.create(**kwargs))
         except Exception as e:
             return self._handle_error(e, spec=self._spec, api_base=self.api_base)
+        finally:
+            if endpoint_prepared:
+                await self._record_endpoint_activity()
 
     async def chat_stream(
         self,
@@ -1516,9 +1607,12 @@ class OpenAICompatProvider(LLMProvider):
         on_thinking_delta: Callable[[str], Awaitable[None]] | None = None,
         on_tool_call_delta: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> LLMResponse:
-        await self._ensure_client()
         idle_timeout_s = resolve_stream_idle_timeout_s()
+        endpoint_prepared = False
         try:
+            await self._prepare_endpoint()
+            endpoint_prepared = True
+            await self._ensure_client()
             if self._should_use_responses_api(model, reasoning_effort):
                 try:
                     body = self._build_responses_body(
@@ -1650,6 +1744,9 @@ class OpenAICompatProvider(LLMProvider):
             )
         except Exception as e:
             return self._handle_error(e, spec=self._spec, api_base=self.api_base)
+        finally:
+            if endpoint_prepared:
+                await self._record_endpoint_activity()
 
     def get_default_model(self) -> str:
         return self.default_model

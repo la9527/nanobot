@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -47,6 +48,44 @@ async def test_bound_cron_job_propagates_required_first_tool_flag() -> None:
     assert received[0].metadata[CRON_TRIGGER_META]["require_first_tool"] is True
     assert received[0].metadata[CRON_TRIGGER_META]["first_tool_name"] == "web_search"
     assert received[0].metadata["_wants_stream"] is False
+    assert records[-1][1]["status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_bound_cron_job_direct_command_delivers_without_agent_turn() -> None:
+    records = []
+    outbound = []
+
+    class Bus:
+        async def publish_outbound(self, message):
+            outbound.append(message)
+
+    class Agent:
+        tools = SimpleNamespace(get=lambda _name: None)
+        bus = Bus()
+
+        async def submit_cron_turn(self, _msg):
+            raise AssertionError("direct command must not invoke the agent")
+
+    class Recorder:
+        def write_run_record(self, run_id, record):
+            records.append((run_id, record))
+
+    job = CronJob(
+        id="geeknews",
+        name="GeekNews briefing",
+        payload=CronPayload(
+            direct_command=f'{sys.executable} -c "print(\'briefing\')"',
+            session_key="telegram:42",
+            origin_channel="telegram",
+            origin_chat_id="42",
+        ),
+    )
+
+    result = await run_bound_cron_job(job, agent=Agent(), cron=Recorder())
+
+    assert result == "briefing"
+    assert outbound[0].content == "briefing"
     assert records[-1][1]["status"] == "ok"
 
 

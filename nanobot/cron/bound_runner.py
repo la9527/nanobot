@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import shlex
 import time
 import uuid
 from typing import Any, Protocol
@@ -23,6 +24,7 @@ from nanobot.utils.prompt_templates import render_template
 
 class BoundCronAgent(Protocol):
     tools: Any
+    bus: Any
 
     async def submit_cron_turn(self, msg: InboundMessage) -> OutboundMessage | None:
         ...
@@ -31,6 +33,24 @@ class BoundCronAgent(Protocol):
 class CronRunRecorder(Protocol):
     def write_run_record(self, run_id: str, record: dict[str, Any]) -> None:
         ...
+
+
+async def _run_direct_command(command: str) -> str:
+    """Run a configured collector without invoking a model or a shell."""
+    args = shlex.split(command)
+    if not args:
+        raise ValueError("direct cron command is empty")
+    process = await asyncio.create_subprocess_exec(
+        *args,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await process.communicate()
+    response = stdout.decode("utf-8", errors="replace").strip()
+    if process.returncode:
+        error = stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(error or f"direct cron command exited {process.returncode}")
+    return response
 
 
 def _cron_prompt_ref(prompt: str) -> dict[str, Any]:
@@ -117,6 +137,40 @@ async def run_bound_cron_job(
             "status": "queued",
         },
     )
+
+    if job.payload.direct_command:
+        try:
+            response = await _run_direct_command(job.payload.direct_command)
+            if response.lstrip().startswith("Error:") or is_invalid_cron_response(response):
+                raise RuntimeError(response or "Direct cron command produced no final response")
+            await agent.bus.publish_outbound(
+                OutboundMessage(
+                    channel=channel,
+                    chat_id=chat_id,
+                    content=response,
+                    metadata=metadata,
+                )
+            )
+        except (Exception, asyncio.CancelledError) as exc:
+            error_text = str(exc) or exc.__class__.__name__
+            cron.write_run_record(
+                run_id,
+                {
+                    **run_record_base,
+                    "status": "error",
+                    "error": error_text,
+                },
+            )
+            raise
+        cron.write_run_record(
+            run_id,
+            {
+                **run_record_base,
+                "status": "ok",
+                "response": response,
+            },
+        )
+        return response
 
     cron_tool = agent.tools.get("cron")
     cron_token = None

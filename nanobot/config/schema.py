@@ -99,6 +99,13 @@ class ModelTargetConfig(Base):
     kind: Literal["provider_model", "smart_router"] = "provider_model"
     provider: str | None = None
     model: str | None = None
+    context_window_tokens: int | None = Field(
+        default=None,
+        ge=4096,
+        le=1_000_000,
+        validation_alias=AliasChoices("contextWindowTokens", "context_window_tokens"),
+        serialization_alias="contextWindowTokens",
+    )
     description: str = ""
 
 
@@ -169,6 +176,11 @@ class AgentDefaults(Base):
         validation_alias=AliasChoices("modelSelection", "model_selection"),
         serialization_alias="modelSelection",
     )
+    system_task_target: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("systemTaskTarget", "system_task_target"),
+        serialization_alias="systemTaskTarget",
+    )  # Optional named model target for internal tasks such as Dream.
     session_ttl_minutes: int = Field(
         default=15,
         ge=0,
@@ -327,6 +339,35 @@ class ProviderConfig(Base):
 
     api_key: str | None = Field(default=None, repr=False)
     api_base: str | None = None
+    tool_choice_mode: Literal["standard", "llama_cpp"] = Field(
+        default="standard",
+        validation_alias=AliasChoices("toolChoiceMode", "tool_choice_mode"),
+        serialization_alias="toolChoiceMode",
+    )
+    prepare_command: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("prepareCommand", "prepare_command"),
+        serialization_alias="prepareCommand",
+    )
+    prepare_timeout_s: float = Field(
+        default=300.0,
+        ge=1.0,
+        le=900.0,
+        validation_alias=AliasChoices("prepareTimeoutSeconds", "prepare_timeout_s"),
+        serialization_alias="prepareTimeoutSeconds",
+    )
+    activity_command: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("activityCommand", "activity_command"),
+        serialization_alias="activityCommand",
+    )
+    activity_timeout_s: float = Field(
+        default=30.0,
+        ge=1.0,
+        le=300.0,
+        validation_alias=AliasChoices("activityTimeoutSeconds", "activity_timeout_s"),
+        serialization_alias="activityTimeoutSeconds",
+    )
     api_type: Literal["auto", "chat_completions", "responses"] = "auto"  # Request API surface
     extra_headers: dict[str, str] | None = None  # Custom headers (e.g. APP-Code for AiHubMix)
     extra_body: dict[str, Any] | None = None  # Extra provider request fields; shape depends on provider/API surface

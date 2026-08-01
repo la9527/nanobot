@@ -39,6 +39,31 @@ def test_build_model_targets_includes_named_provider_model_targets() -> None:
     assert get_active_model_target_name(config) == "fast-local"
 
 
+def test_provider_model_target_can_override_context_window() -> None:
+    config = Config.model_validate(
+        {
+            "agents": {
+                "defaults": {
+                    "contextWindowTokens": 200_000,
+                    "modelSelection": {
+                        "targets": {
+                            "short-context": {
+                                "provider": "vllm",
+                                "model": "local/short-model",
+                                "contextWindowTokens": 65_536,
+                            }
+                        }
+                    },
+                }
+            }
+        }
+    )
+
+    target = build_model_targets(config)["short-context"]
+    assert target.context_window_tokens == 65_536
+    assert apply_model_target(config, target).agents.defaults.context_window_tokens == 65_536
+
+
 def test_build_model_targets_includes_smart_router_target_when_configured() -> None:
     config = Config.model_validate(
         {

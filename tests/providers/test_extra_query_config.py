@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import sys
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from nanobot.config.schema import Config, ProviderConfig
 from nanobot.providers.factory import provider_signature
@@ -20,6 +23,26 @@ class TestExtraQuerySchema:
         config = ProviderConfig(extra_query={"api-version": "2024-02-01"})
         assert config.extra_query == {"api-version": "2024-02-01"}
 
+    def test_accepts_provider_prepare_command(self) -> None:
+        config = ProviderConfig(
+            prepareCommand="/usr/local/bin/prepare-llm",
+            prepareTimeoutSeconds=240,
+        )
+        assert config.prepare_command == "/usr/local/bin/prepare-llm"
+        assert config.prepare_timeout_s == 240
+
+    def test_accepts_provider_activity_command(self) -> None:
+        config = ProviderConfig(
+            activityCommand="/usr/local/bin/record-activity",
+            activityTimeoutSeconds=15,
+        )
+        assert config.activity_command == "/usr/local/bin/record-activity"
+        assert config.activity_timeout_s == 15
+
+    def test_accepts_llama_cpp_tool_choice_mode(self) -> None:
+        config = ProviderConfig(toolChoiceMode="llama_cpp")
+        assert config.tool_choice_mode == "llama_cpp"
+
 
 class TestExtraQueryInit:
     """Verify the provider stores extra_query from config."""
@@ -36,6 +59,67 @@ class TestExtraQueryInit:
         query = {"api-version": "v1"}
         provider = OpenAICompatProvider(api_key="test", extra_query=query)
         assert provider._extra_query == query
+
+    def test_llama_cpp_converts_named_tool_to_required(self) -> None:
+        provider = OpenAICompatProvider(api_key="test", tool_choice_mode="llama_cpp")
+        kwargs = provider._build_kwargs(
+            messages=[{"role": "user", "content": "search"}],
+            tools=[{"type": "function", "function": {"name": "web_search"}}],
+            model="qwen",
+            max_tokens=64,
+            temperature=0,
+            reasoning_effort=None,
+            tool_choice={"type": "function", "function": {"name": "web_search"}},
+        )
+        assert kwargs["tool_choice"] == "required"
+
+    def test_standard_mode_preserves_named_tool_shape(self) -> None:
+        provider = OpenAICompatProvider(api_key="test")
+        tool_choice = {"type": "function", "function": {"name": "web_search"}}
+        kwargs = provider._build_kwargs(
+            messages=[{"role": "user", "content": "search"}],
+            tools=[{"type": "function", "function": {"name": "web_search"}}],
+            model="qwen",
+            max_tokens=64,
+            temperature=0,
+            reasoning_effort=None,
+            tool_choice=tool_choice,
+        )
+        assert kwargs["tool_choice"] == tool_choice
+
+
+@pytest.mark.asyncio
+async def test_provider_prepare_command_runs_before_request() -> None:
+    provider = OpenAICompatProvider(
+        api_key="test",
+        prepare_command=f'{sys.executable} -c "import sys; sys.exit(0)"',
+        prepare_timeout_s=5,
+    )
+
+    await provider._prepare_endpoint()
+
+
+@pytest.mark.asyncio
+async def test_provider_prepare_command_surfaces_failure() -> None:
+    provider = OpenAICompatProvider(
+        api_key="test",
+        prepare_command=f'{sys.executable} -c "import sys; sys.exit(7)"',
+        prepare_timeout_s=5,
+    )
+
+    with pytest.raises(RuntimeError, match="exit code 7"):
+        await provider._prepare_endpoint()
+
+
+@pytest.mark.asyncio
+async def test_provider_activity_command_is_best_effort() -> None:
+    provider = OpenAICompatProvider(
+        api_key="test",
+        activity_command=f'{sys.executable} -c "import sys; sys.exit(7)"',
+        activity_timeout_s=5,
+    )
+
+    await provider._record_endpoint_activity()
 
 
 class TestExtraQueryBuildClient:

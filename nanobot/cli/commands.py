@@ -974,6 +974,11 @@ def _run_gateway(
                     return None
                 prompt, last_cursor = result
                 key = dream_session_key()
+                dream_target = config.agents.defaults.system_task_target
+                if dream_target:
+                    agent.set_session_model_target(
+                        agent.sessions.get_or_create(key), dream_target
+                    )
                 resp = await agent.process_direct(
                     prompt,
                     session_key=key,

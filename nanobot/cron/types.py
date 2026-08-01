@@ -36,6 +36,9 @@ class CronPayload:
     origin_channel: str | None = None
     origin_chat_id: str | None = None
     origin_metadata: dict[str, Any] = field(default_factory=dict)
+    # Deterministic local collectors can bypass an LLM turn and send their
+    # already-formatted stdout through the bound channel delivery path.
+    direct_command: str | None = None
 
 
 @dataclass

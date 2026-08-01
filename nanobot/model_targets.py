@@ -101,6 +101,7 @@ class ResolvedModelTarget:
     kind: str
     model: str | None = None
     provider: str | None = None
+    context_window_tokens: int | None = None
     description: str = ""
     display_name: str | None = None
     group: str | None = None
@@ -231,6 +232,7 @@ def build_model_targets(config: Any) -> dict[str, ResolvedModelTarget]:
             kind=target.kind,
             provider=target.provider,
             model=target.model,
+            context_window_tokens=target.context_window_tokens,
             description=target.description or "",
         )
 
@@ -283,6 +285,8 @@ def apply_model_target(config: Any, target: ResolvedModelTarget) -> Any:
         updated.agents.defaults.provider = "auto"
     if target.model:
         updated.agents.defaults.model = target.model
+    if target.context_window_tokens is not None:
+        updated.agents.defaults.context_window_tokens = target.context_window_tokens
     return updated
 
 
